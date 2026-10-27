@@ -211,12 +211,11 @@ class PTMApp(tk.Tk):
         self.tabs_holder = tk.Frame(self.top, bg=WHITE)
         self.tabs_holder.pack(side="left", fill="both", expand=True)
 
-        self.close_canvas = tk.Canvas(self.top, width=38, height=38, bg=WHITE,
+        self.close_canvas = tk.Canvas(self.top, width=30, height=30, bg=WHITE,
                                       highlightthickness=0, bd=0, cursor="hand2")
-        self.close_canvas.pack(side="right", padx=(8, 2))
-        self.close_canvas.create_oval(3, 3, 35, 35, outline=BLACK, width=1.5)
-        self.close_canvas.create_line(13, 13, 25, 25, fill=BLACK, width=1.5)
-        self.close_canvas.create_line(25, 13, 13, 25, fill=BLACK, width=1.5)
+        self.close_canvas.pack(side="right", padx=(8, 4), pady=(2, 0))
+        self.close_canvas.create_line(8, 8, 22, 22, fill=BLACK, width=2)
+        self.close_canvas.create_line(22, 8, 8, 22, fill=BLACK, width=2)
         self.close_canvas.bind("<Button-1>", lambda _e: self.hide_main())
 
         self.separator = tk.Frame(self.outer, bg=WHITE, height=2)
