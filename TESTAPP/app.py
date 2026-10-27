@@ -333,7 +333,7 @@ class PTMApp(tk.Tk):
             radius=15,
             fill=WHITE,
             outline=BLACK,
-            width=2,
+            width=1,
         )
 
         self.search_inner = tk.Frame(self.search_box, bg=WHITE, bd=0)
