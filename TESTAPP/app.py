@@ -1,19 +1,26 @@
 # ARGUMENTOS: ptm launcher lanzador buscador ejecutor py python herramientas scripts pestañas icono flotante
 import ast
+import csv
 import importlib.util
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 import tkinter as tk
+import urllib.request
 import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
 APP_VERSION = "1.0.0"
+
+REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/TESTAPP"
+GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
 
 # Paleta tomada del boceto del usuario.
 TEAL = "#176684"
@@ -167,7 +174,8 @@ class PTMApp(tk.Tk):
         self.configure(bg=WHITE)
         self.base_dir = Path(__file__).resolve().parent
         self.tools_dir = self.base_dir / "tools"
-        self.tools_dir.mkdir(exist_ok=True)  # Vacía: PTM no incluye módulos de ejemplo.
+        self.tools_dir.mkdir(exist_ok=True)
+        self.guide_path = self.base_dir / "guide.csv"
 
         self.query = tk.StringVar()
         self.tools = []
@@ -434,82 +442,118 @@ class PTMApp(tk.Tk):
 
     # ---------- Herramientas ----------
     def reload_tools(self):
+        """Carga exclusivamente el catálogo guide.csv."""
         self.tools = []
-        managed_dirs = set()
+        try:
+            rows = self._load_guide_rows()
+        except Exception as exc:
+            rows = []
+            if hasattr(self, "hint"):
+                self.hint.configure(text=f"No se pudo cargar guide.csv: {exc}")
 
-        # Las herramientas instaladas desde el formulario llevan manifest.json.
-        # En esos casos solo mostramos el archivo principal y no los .py auxiliares.
-        for manifest_path in sorted(self.tools_dir.rglob("manifest.json")):
-            try:
-                data = json.loads(manifest_path.read_text(encoding="utf-8"))
-                main_file = str(data.get("main_file", "")).strip()
-                if not main_file:
-                    continue
-                folder = manifest_path.parent.resolve()
-                main_path = (manifest_path.parent / main_file).resolve()
-                if folder != main_path.parent and folder not in main_path.parents:
-                    continue
-                if main_path.is_file() and main_path.suffix.lower() == ".py":
-                    self.tools.append(self.read_tool_info(main_path, manifest=data))
-                    managed_dirs.add(folder)
-            except Exception:
+        for row in rows:
+            activo = str(row.get("activo", "1")).strip().lower()
+            if activo not in {"1", "true", "si", "sí", "yes", "activo"}:
                 continue
 
-        # Compatibilidad con .py antiguos colocados directamente en tools.
-        for path in sorted(self.tools_dir.rglob("*.py")):
-            if path.name == "__init__.py" or path.name.startswith("_"):
+            repo_path = str(row.get("ruta", "")).strip().replace("\\", "/").lstrip("/")
+            if not repo_path:
                 continue
-            resolved = path.resolve()
-            if any(folder == resolved.parent or folder in resolved.parents for folder in managed_dirs):
-                continue
-            self.tools.append(self.read_tool_info(path))
+
+            local_path = self.base_dir / Path(repo_path)
+            name = str(row.get("titulo", "")).strip() or Path(repo_path).stem.replace("_", " ").title()
+            description = str(row.get("descripcion", "")).strip()
+            keywords = str(row.get("keywords", "")).strip()
+            category = str(row.get("categoria", "")).strip()
+            version = str(row.get("version", "")).strip()
+            mode = str(row.get("modo", "Integrado")).strip() or "Integrado"
+            dependencies = str(row.get("dependencias", "")).strip()
+            slug = str(row.get("slug", "")).strip()
+
+            self.tools.append({
+                "id": str(row.get("id", "")).strip(),
+                "slug": slug,
+                "path": local_path,
+                "repo_path": repo_path,
+                "name": name,
+                "keywords": keywords,
+                "description": description,
+                "category": category,
+                "version": version,
+                "mode": mode,
+                "dependencies": dependencies,
+                "main_file": str(row.get("archivo_principal", "")).strip(),
+                "search": (
+                    f"{slug} {Path(repo_path).stem} {name} {description} "
+                    f"{keywords} {category} {version} {dependencies}"
+                ).lower(),
+            })
 
         if hasattr(self, "results_frame") and self.results_frame.winfo_exists():
             self.refresh_results()
 
-    def read_tool_info(self, path, manifest=None):
-        manifest = manifest or {}
-        keywords = str(manifest.get("keywords", "")).strip()
-        name = str(manifest.get("title", "")).strip() or path.stem.replace("_", " ").title()
-        description = str(manifest.get("description", "")).strip() or "Herramienta Python"
-        category = str(manifest.get("category", "")).strip()
-        version = str(manifest.get("version", "")).strip()
-        mode = str(manifest.get("mode", "")).strip() or "Integrado"
+    def _load_guide_rows(self):
+        """Descarga guide.csv de GitHub y usa la copia local solo como respaldo."""
+        text = None
+        remote_error = None
 
         try:
-            with path.open("r", encoding="utf-8-sig") as f:
-                first_line = f.readline().strip()
-                source = first_line + "\n" + f.read()
-
-            if not keywords and first_line.upper().startswith("# ARGUMENTOS:"):
-                keywords = first_line.split(":", 1)[1].strip()
-
-            tree = ast.parse(source, filename=str(path))
-            for node in tree.body:
-                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                    key = node.targets[0].id
-                    if key in {"TOOL_NAME", "TOOL_DESCRIPTION"}:
-                        try:
-                            value = ast.literal_eval(node.value)
-                        except Exception:
-                            continue
-                        if key == "TOOL_NAME" and isinstance(value, str) and not manifest.get("title"):
-                            name = value
-                        elif key == "TOOL_DESCRIPTION" and isinstance(value, str) and not manifest.get("description"):
-                            description = value
+            request = urllib.request.Request(
+                f"{GUIDE_URL}?v={time.time_ns()}",
+                headers={
+                    "User-Agent": "PTM/1.0",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=12) as response:
+                text = response.read().decode("utf-8-sig")
+            self.guide_path.write_text(text, encoding="utf-8")
         except Exception as exc:
-            description = f"No se pudo leer: {exc}"
+            remote_error = exc
 
-        return {
-            "path": path,
-            "name": name,
-            "keywords": keywords,
-            "description": description,
-            "category": category,
-            "version": version,
-            "mode": mode,
-            "search": f"{path.stem} {name} {keywords} {description} {category} {version}".lower(),
-        }
+        if text is None:
+            if self.guide_path.is_file():
+                text = self.guide_path.read_text(encoding="utf-8-sig")
+            else:
+                raise RuntimeError(f"GitHub no respondió y no existe copia local ({remote_error})")
+
+        reader = csv.DictReader(io.StringIO(text), delimiter=";")
+        if not reader.fieldnames or "ruta" not in reader.fieldnames:
+            raise ValueError("guide.csv no contiene la columna 'ruta'.")
+        return list(reader)
+
+    def _ensure_tool_local(self, tool):
+        """Descarga el .py indicado por guide.csv antes de abrirlo."""
+        repo_path = str(tool.get("repo_path", "")).strip().replace("\\", "/").lstrip("/")
+        if not repo_path:
+            raise ValueError("La herramienta no tiene una ruta válida en guide.csv.")
+
+        local_path = self.base_dir / Path(repo_path)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        remote_url = f"{REPO_RAW_BASE}/{repo_path}?v={time.time_ns()}"
+        request = urllib.request.Request(
+            remote_url,
+            headers={
+                "User-Agent": "PTM/1.0",
+                "Cache-Control": "no-cache",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                data = response.read()
+            # Validar sintaxis antes de reemplazar una copia funcional.
+            source = data.decode("utf-8-sig")
+            compile(source, repo_path, "exec")
+            temp_path = local_path.with_suffix(local_path.suffix + ".tmp")
+            temp_path.write_bytes(data)
+            temp_path.replace(local_path)
+        except Exception:
+            if not local_path.is_file():
+                raise
+
+        return local_path
 
     def filtered_tools(self):
         q = self.query.get().strip().lower()
@@ -537,7 +581,10 @@ class PTMApp(tk.Tk):
             label = tk.Label(row, text=tool["name"], bg=LIGHT, fg=BLACK,
                              font=("Segoe UI", 10, "bold"), anchor="w")
             label.pack(side="left", fill="x", expand=True, padx=8, pady=5)
-            meta = tk.Label(row, text=tool["path"].name, bg=LIGHT, fg=MUTED,
+            meta_text = " · ".join(
+                part for part in (tool.get("category", ""), tool.get("version", "")) if part
+            ) or tool["path"].name
+            meta = tk.Label(row, text=meta_text, bg=LIGHT, fg=MUTED,
                             font=("Segoe UI", 8), anchor="e")
             meta.pack(side="right", padx=8)
             for widget in (row, label, meta):
@@ -817,6 +864,15 @@ class PTMApp(tk.Tk):
             zf.extractall(target_dir)
 
     def open_tool(self, tool):
+        try:
+            tool["path"] = self._ensure_tool_local(tool)
+        except Exception as exc:
+            messagebox.showerror(
+                "PTM",
+                f"No se pudo descargar la herramienta desde el catálogo:\n\n{exc}"
+            )
+            return
+
         key = str(tool["path"].resolve())
         if key in self.open_tabs:
             self.switch_to_tool(key)
