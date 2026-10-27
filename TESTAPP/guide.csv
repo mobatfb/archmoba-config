@@ -1,0 +1,2 @@
+id;slug;titulo;descripcion;keywords;categoria;version;modo;tipo_archivo;ruta;archivo_principal;dependencias;activo;fecha_registro
+1;reproductor_mp3;Reproductor MP3 básico;Abre y reproduce archivos MP3 con controles de reproducir, pausar, detener y volumen.;mp3 audio musica music reproductor player reproducir play pausa pause detener stop volumen volume abrir archivo sonido;Multimedia;1.0.0;Integrado;py;tools/reproductor_mp3.py;reproductor_mp3.py;pygame;1;2026-10-27
