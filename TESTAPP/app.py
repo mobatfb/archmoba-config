@@ -22,15 +22,51 @@ APP_VERSION = "1.0.0"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/TESTAPP"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
 
-# Paleta tomada del boceto del usuario.
+def detect_system_dark_mode():
+    """Detecta si el sistema operativo está usando tema oscuro."""
+    if sys.platform == "win32":
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return int(value) == 0
+        except Exception:
+            return False
+
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            return "dark" in result.stdout.strip().lower()
+        except Exception:
+            return False
+
+    theme = (
+        os.environ.get("GTK_THEME", "")
+        + " "
+        + os.environ.get("COLORFGBG", "")
+    ).lower()
+    return "dark" in theme
+
+
+DARK_MODE = detect_system_dark_mode()
+
+# Paleta PTM adaptada automáticamente al tema del sistema.
 TEAL = "#176684"
 TEAL_DARK = "#0F536E"
 RED = "#FF1616"
-WHITE = "#FFFFFF"
-BLACK = "#101010"
-LIGHT = "#F4F4F4"
-MID = "#D7D7D7"
-MUTED = "#666666"
+ON_ACCENT = "#FFFFFF"
+
+WHITE = "#17191C" if DARK_MODE else "#FFFFFF"
+BLACK = "#F2F4F7" if DARK_MODE else "#101010"
+LIGHT = "#22252A" if DARK_MODE else "#F4F4F4"
+MID = "#3A3F46" if DARK_MODE else "#D7D7D7"
+MUTED = "#A9AFB8" if DARK_MODE else "#666666"
 
 
 class TabButton(tk.Canvas):
@@ -61,7 +97,7 @@ class TabButton(tk.Canvas):
         self.delete("all")
         w, h = self.tab_width, self.tab_height
         fill = WHITE if self.active else TEAL
-        fg = TEAL_DARK if self.active else WHITE
+        fg = (BLACK if DARK_MODE else TEAL_DARK) if self.active else ON_ACCENT
         outline = TEAL_DARK
         self.create_rectangle(1, 1, w - 1, h - 1, fill=fill, outline=outline, width=1)
         self.create_polygon(w - 18, 1, w - 1, 1, w - 1, 18, fill=RED, outline=RED)
@@ -127,8 +163,8 @@ class FloatingPTM(tk.Toplevel):
         self.canvas.create_rectangle(2, 2, w - 2, h - 2, fill=fill, outline=BLACK, width=1)
         self.canvas.create_polygon(w - 18, 2, w - 2, 2, w - 2, 18, fill=RED, outline=RED)
         self.canvas.create_rectangle(2, h - 8, w - 2, h - 2, fill=RED, outline=RED)
-        self.canvas.create_text(w / 2, 17, text="PTM", fill=WHITE, font=("Segoe UI", 17, "bold"))
-        self.canvas.create_text(w / 2, h - 5, text="Buscador y lanzador", fill=WHITE,
+        self.canvas.create_text(w / 2, 17, text="PTM", fill=ON_ACCENT, font=("Segoe UI", 17, "bold"))
+        self.canvas.create_text(w / 2, h - 5, text="Buscador y lanzador", fill=ON_ACCENT,
                                 font=("Segoe UI", 5, "bold"))
 
     def _place_default(self):
@@ -171,6 +207,7 @@ class PTMApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
+        self.dark_mode = DARK_MODE
         self.configure(bg=WHITE)
         self.base_dir = Path(__file__).resolve().parent
         self.tools_dir = self.base_dir / "tools"
@@ -322,9 +359,9 @@ class PTMApp(tk.Tk):
         logo.create_rectangle(2, 2, logo_w - 2, logo_h - 2, fill=TEAL, outline=BLACK, width=1)
         logo.create_polygon(logo_w - 30, 2, logo_w - 2, 2, logo_w - 2, 30, fill=RED, outline=RED)
         logo.create_rectangle(2, logo_h - 20, logo_w - 2, logo_h - 2, fill=RED, outline=RED)
-        logo.create_text(logo_w / 2, 46, text="PTM", fill=WHITE, font=("Segoe UI", 38, "bold"))
+        logo.create_text(logo_w / 2, 46, text="PTM", fill=ON_ACCENT, font=("Segoe UI", 38, "bold"))
         logo.create_text(logo_w / 2, logo_h - 10, text="Buscador y lanzador de herramientas",
-                         fill=WHITE, font=("Segoe UI", 8, "bold"))
+                         fill=ON_ACCENT, font=("Segoe UI", 8, "bold"))
 
         search_wrap = tk.Frame(center, bg=WHITE)
         search_wrap.pack(pady=(16, 0))
@@ -725,8 +762,8 @@ class PTMApp(tk.Tk):
 
         tk.Button(
             container, text="Seleccionar...",
-            command=choose_file, bg=TEAL, fg=WHITE,
-            activebackground=TEAL_DARK, activeforeground=WHITE,
+            command=choose_file, bg=TEAL, fg=ON_ACCENT,
+            activebackground=TEAL_DARK, activeforeground=ON_ACCENT,
             relief="flat", padx=12, pady=5, cursor="hand2"
         ).grid(row=7, column=2, padx=(8, 0), pady=6)
 
@@ -840,8 +877,8 @@ class PTMApp(tk.Tk):
 
         tk.Button(
             buttons, text="Añadir", command=install,
-            bg=TEAL, fg=WHITE,
-            activebackground=TEAL_DARK, activeforeground=WHITE,
+            bg=TEAL, fg=ON_ACCENT,
+            activebackground=TEAL_DARK, activeforeground=ON_ACCENT,
             relief="flat", padx=22, pady=7, cursor="hand2"
         ).pack(side="left")
 
@@ -894,8 +931,8 @@ class PTMApp(tk.Tk):
             tk.Button(
                 info, text="Ejecutar herramienta",
                 command=lambda p=tool["path"]: self.run_external(p),
-                bg=TEAL, fg=WHITE, activebackground=TEAL_DARK,
-                activeforeground=WHITE, relief="flat", padx=18, pady=8
+                bg=TEAL, fg=ON_ACCENT, activebackground=TEAL_DARK,
+                activeforeground=ON_ACCENT, relief="flat", padx=18, pady=8
             ).pack(pady=8)
 
             self.open_tabs[key] = {
@@ -938,7 +975,7 @@ class PTMApp(tk.Tk):
                      bg=WHITE, fg=MUTED, font=("Segoe UI", 10)).pack(pady=5)
             tk.Button(info, text="Ejecutar como programa externo",
                       command=lambda p=tool["path"]: self.run_external(p),
-                      bg=TEAL, fg=WHITE, activebackground=TEAL_DARK,
+                      bg=TEAL, fg=ON_ACCENT, activebackground=TEAL_DARK,
                       relief="flat", padx=16, pady=8).pack(pady=10)
 
         self.open_tabs[key] = {
