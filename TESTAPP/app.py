@@ -19,6 +19,7 @@ from tkinter import filedialog, messagebox
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
 APP_VERSION = "1.0.0"
 APP_UPDATE_DATE = "27/10/2026"
+APP_UPDATE_TIME = "18:30"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/TESTAPP"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
@@ -274,12 +275,12 @@ class PTMApp(tk.Tk):
         self.content = tk.Frame(self.outer, bg=WHITE)
         self.content.pack(fill="both", expand=True, padx=10, pady=(2, 4))
 
-        self.footer = tk.Frame(self.outer, bg=WHITE, height=24)
-        self.footer.pack(fill="x", padx=10, pady=(0, 5))
+        self.footer = tk.Frame(self.outer, bg=WHITE, height=34)
+        self.footer.pack(fill="x", padx=10, pady=(0, 9))
         self.footer.pack_propagate(False)
 
         self.version_box = tk.Frame(self.footer, bg=WHITE)
-        self.version_box.pack(side="right", padx=(0, 4))
+        self.version_box.pack(side="right", padx=(0, 4), pady=(0, 3))
 
         self.version_label = tk.Label(
             self.version_box,
@@ -293,7 +294,7 @@ class PTMApp(tk.Tk):
 
         self.update_date_label = tk.Label(
             self.version_box,
-            text=f"Actualizado: {APP_UPDATE_DATE}",
+            text=f"Actualizado: {APP_UPDATE_DATE}  {APP_UPDATE_TIME}",
             bg=WHITE,
             fg=MUTED,
             font=("Segoe UI", 7),
