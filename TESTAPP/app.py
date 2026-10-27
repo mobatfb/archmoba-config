@@ -702,10 +702,16 @@ class PTMApp(tk.Tk):
         matches = self.filtered_tools()
 
         if not self.query.get().strip():
+            self.results_scroll.pack_forget()
+            self.results_container.configure(height=1)
+            self.results_canvas.configure(height=1)
             self.hint.configure(text=f"{len(self.tools)} herramienta(s) disponibles")
             return
 
         if not matches:
+            self.results_scroll.pack_forget()
+            self.results_container.configure(height=1)
+            self.results_canvas.configure(height=1)
             self.hint.configure(text="Sin coincidencias")
             return
 
