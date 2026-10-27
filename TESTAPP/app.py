@@ -318,26 +318,42 @@ class PTMApp(tk.Tk):
         search_wrap = tk.Frame(center, bg=WHITE)
         search_wrap.pack(pady=(16, 0))
 
-        # Marco de búsqueda parecido al boceto.
-        self.search_box = tk.Frame(search_wrap, bg=WHITE, highlightbackground=BLACK,
-                                   highlightthickness=1, bd=0)
+        # Barra de búsqueda con bordes redondeados como en el boceto.
+        self.search_box = tk.Canvas(
+            search_wrap,
+            width=500,
+            height=46,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+        )
         self.search_box.pack()
+        self._rounded_rect(
+            self.search_box, 1, 1, 499, 45,
+            radius=15,
+            fill=WHITE,
+            outline=BLACK,
+            width=2,
+        )
+
+        self.search_inner = tk.Frame(self.search_box, bg=WHITE, bd=0)
+        self.search_box.create_window(12, 23, window=self.search_inner, anchor="w", width=476, height=34)
 
         self.search_prefix = tk.Label(
-            self.search_box,
+            self.search_inner,
             text="Buscar |",
             bg=WHITE,
-            fg=MUTED,
-            font=("Segoe UI", 9),
+            fg=BLACK,
+            font=("Segoe UI", 11),
             cursor="xterm",
         )
-        self.search_prefix.pack(side="left", padx=(6, 2), pady=7)
+        self.search_prefix.pack(side="left", padx=(5, 2))
         self.search_prefix.bind("<Button-1>", lambda _e: self.search_entry.focus_set())
 
         self.search_entry = tk.Entry(
-            self.search_box,
+            self.search_inner,
             textvariable=self.query,
-            width=36,
+            width=30,
             relief="flat",
             bd=0,
             font=("Segoe UI", 12),
@@ -345,27 +361,67 @@ class PTMApp(tk.Tk):
             bg=WHITE,
             insertbackground=BLACK,
         )
-        self.search_entry.pack(side="left", padx=(0, 5), pady=7)
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         self.search_entry.bind("<KeyRelease>", lambda _e: self.refresh_results())
         self.search_entry.bind("<Return>", lambda _e: self.open_first_result())
 
-        self.search_btn = tk.Canvas(self.search_box, width=28, height=28, bg=WHITE,
-                                    highlightthickness=0, bd=0, cursor="hand2")
-        self.search_btn.pack(side="left", padx=(2, 0))
-        self.search_btn.create_oval(5, 5, 24, 24, fill=RED, outline=BLACK, width=1)
+        self.search_btn = tk.Canvas(
+            self.search_inner,
+            width=32,
+            height=32,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.search_btn.pack(side="left", padx=(2, 2))
+        self.search_btn.create_oval(4, 4, 28, 28, fill=RED, outline=BLACK, width=1)
         self.search_btn.bind("<Button-1>", lambda _e: self.open_first_result())
 
-        self.import_btn = tk.Canvas(self.search_box, width=31, height=28, bg=WHITE,
-                                    highlightthickness=0, bd=0, cursor="hand2")
-        self.import_btn.pack(side="left", padx=(0, 5))
+        self.import_btn = tk.Canvas(
+            self.search_inner,
+            width=34,
+            height=32,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        self.import_btn.pack(side="left", padx=(0, 4))
         self._draw_import_icon(self.import_btn)
         self.import_btn.bind("<Button-1>", lambda _e: self.import_py())
+
+        self.search_box.bind("<Button-1>", lambda _e: self.search_entry.focus_set())
 
         self.results_frame = tk.Frame(center, bg=WHITE)
         self.results_frame.pack(fill="x", pady=(8, 0))
 
         self.hint = tk.Label(center, text="", bg=WHITE, fg=MUTED, font=("Segoe UI", 9))
         self.hint.pack(pady=(5, 0))
+
+    @staticmethod
+    def _rounded_rect(canvas, x1, y1, x2, y2, radius=14, **kwargs):
+        r = radius
+        points = [
+            x1 + r, y1,
+            x2 - r, y1,
+            x2, y1,
+            x2, y1 + r,
+            x2, y2 - r,
+            x2, y2,
+            x2 - r, y2,
+            x1 + r, y2,
+            x1, y2,
+            x1, y2 - r,
+            x1, y1 + r,
+            x1, y1,
+        ]
+        return canvas.create_polygon(
+            points,
+            smooth=True,
+            splinesteps=36,
+            **kwargs,
+        )
 
     @staticmethod
     def _draw_import_icon(canvas):
