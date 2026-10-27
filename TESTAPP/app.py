@@ -17,7 +17,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_UPDATE_DATE = "27/10/2026"
 APP_UPDATE_TIME = "18:30"
 
