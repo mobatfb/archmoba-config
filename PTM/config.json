@@ -1,7 +1,8 @@
 {
   "app": "PTM",
-  "version": "1.0.0",
-  "api_url": "https://api.ejemplo.com/ptm/",
-  "update_url": "https://ejemplo.com/ptm/update.zip",
+  "name": "PTM",
+  "description": "Buscador y lanzador de herramientas Python",
+  "version": "1.0.2",
+  "app_path": "PTM/app.py",
   "maintenance": false
 }
