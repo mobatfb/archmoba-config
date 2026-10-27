@@ -167,6 +167,7 @@ class PTMApp(tk.Tk):
         self.tools_dir.mkdir(exist_ok=True)  # Vacía: PTM no incluye módulos de ejemplo.
 
         self.query = tk.StringVar()
+        self.search_placeholder = "Buscar"
         self.tools = []
         self.open_tabs = {}       # key -> metadata/content
         self.tab_widgets = {}
@@ -295,7 +296,6 @@ class PTMApp(tk.Tk):
             self._build_home(self.home_frame)
         self.home_frame.pack(fill="both", expand=True)
         self._render_tabs()
-        self.after(40, lambda: self.search_entry.focus_set())
 
     def _build_home(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -337,6 +337,9 @@ class PTMApp(tk.Tk):
             insertbackground=BLACK,
         )
         self.search_entry.pack(side="left", padx=(10, 5), pady=7)
+        self._show_search_placeholder()
+        self.search_entry.bind("<FocusIn>", self._search_focus_in)
+        self.search_entry.bind("<FocusOut>", self._search_focus_out)
         self.search_entry.bind("<KeyRelease>", lambda _e: self.refresh_results())
         self.search_entry.bind("<Return>", lambda _e: self.open_first_result())
 
@@ -357,6 +360,27 @@ class PTMApp(tk.Tk):
 
         self.hint = tk.Label(center, text="", bg=WHITE, fg=MUTED, font=("Segoe UI", 9))
         self.hint.pack(pady=(5, 0))
+
+    def _show_search_placeholder(self):
+        if not self.query.get().strip():
+            self.query.set(self.search_placeholder)
+            self.search_entry.configure(fg=MUTED)
+
+    def _search_focus_in(self, _event):
+        if self.query.get() == self.search_placeholder:
+            self.query.set("")
+            self.search_entry.configure(fg=BLACK)
+
+    def _search_focus_out(self, _event):
+        if not self.query.get().strip():
+            self._show_search_placeholder()
+            self.refresh_results()
+
+    def _search_value(self):
+        value = self.query.get().strip()
+        if value == self.search_placeholder:
+            return ""
+        return value
 
     @staticmethod
     def _draw_import_icon(canvas):
@@ -408,7 +432,7 @@ class PTMApp(tk.Tk):
         }
 
     def filtered_tools(self):
-        q = self.query.get().strip().lower()
+        q = self._search_value().lower()
         if not q:
             return []
         tokens = [t for t in q.replace(",", " ").split() if t]
@@ -420,7 +444,7 @@ class PTMApp(tk.Tk):
         for child in self.results_frame.winfo_children():
             child.destroy()
         shown = self.filtered_tools()[:8]
-        if not self.query.get().strip():
+        if not self._search_value():
             self.hint.configure(text=f"{len(self.tools)} herramienta(s) disponibles")
             return
         if not shown:
@@ -444,7 +468,7 @@ class PTMApp(tk.Tk):
         shown = self.filtered_tools()
         if shown:
             self.open_tool(shown[0])
-        elif self.query.get().strip():
+        elif self._search_value():
             messagebox.showinfo("PTM", "No se encontró ninguna herramienta con ese criterio.")
 
     def import_py(self):
