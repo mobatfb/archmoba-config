@@ -822,6 +822,35 @@ class PTMApp(tk.Tk):
             self.switch_to_tool(key)
             return
 
+        if str(tool.get("mode", "")).strip().lower() == "externo":
+            frame = tk.Frame(self.content, bg=WHITE)
+            info = tk.Frame(frame, bg=WHITE)
+            info.pack(expand=True)
+            tk.Label(
+                info, text=tool["name"], bg=WHITE, fg=BLACK,
+                font=("Segoe UI", 20, "bold")
+            ).pack(pady=(0, 8))
+            if tool.get("description"):
+                tk.Label(
+                    info, text=tool["description"], bg=WHITE, fg=MUTED,
+                    font=("Segoe UI", 10), wraplength=520, justify="center"
+                ).pack(pady=(0, 10))
+            tk.Button(
+                info, text="Ejecutar herramienta",
+                command=lambda p=tool["path"]: self.run_external(p),
+                bg=TEAL, fg=WHITE, activebackground=TEAL_DARK,
+                activeforeground=WHITE, relief="flat", padx=18, pady=8
+            ).pack(pady=8)
+
+            self.open_tabs[key] = {
+                "name": tool["name"],
+                "tool": tool,
+                "frame": frame,
+                "module": None,
+            }
+            self.switch_to_tool(key)
+            return
+
         try:
             module_name = f"ptm_tool_{tool['path'].stem}_{abs(hash(key))}"
             spec = importlib.util.spec_from_file_location(module_name, tool["path"])
