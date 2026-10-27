@@ -363,27 +363,61 @@ class PTMApp(tk.Tk):
         parent.grid_rowconfigure(0, weight=0)
         parent.grid_rowconfigure(3, weight=1)
 
-        center = tk.Frame(parent, bg=WHITE)
-        center.grid(row=0, column=0, sticky="n", pady=(72, 0))
+        self.center = tk.Frame(parent, bg=WHITE)
+        self.center.grid(row=0, column=0, sticky="n", pady=(72, 0))
+        self.center.grid_columnconfigure(0, weight=0)
+        self.center.grid_columnconfigure(1, weight=0)
 
-        # Logo PTM dibujado, sin imagen externa.
+        # Logo grande: se usa en el modo normal, antes de pulsar Enter.
         logo_w, logo_h = 230, 104
-        logo = tk.Canvas(center, width=logo_w, height=logo_h, bg=WHITE,
-                         highlightthickness=0, bd=0)
-        logo.pack()
-        logo.create_rectangle(2, 2, logo_w - 2, logo_h - 2, fill=TEAL, outline=BLACK, width=1)
-        logo.create_polygon(logo_w - 30, 2, logo_w - 2, 2, logo_w - 2, 30, fill=RED, outline=RED)
-        logo.create_rectangle(2, logo_h - 20, logo_w - 2, logo_h - 2, fill=RED, outline=RED)
-        logo.create_text(logo_w / 2, 46, text="PTM", fill=ON_ACCENT, font=("Segoe UI", 38, "bold"))
-        logo.create_text(logo_w / 2, logo_h - 10, text="Buscador y lanzador de herramientas",
-                         fill=ON_ACCENT, font=("Segoe UI", 8, "bold"))
+        self.logo = tk.Canvas(
+            self.center, width=logo_w, height=logo_h, bg=WHITE,
+            highlightthickness=0, bd=0
+        )
+        self.logo.create_rectangle(2, 2, logo_w - 2, logo_h - 2, fill=TEAL, outline=BLACK, width=1)
+        self.logo.create_polygon(logo_w - 30, 2, logo_w - 2, 2, logo_w - 2, 30, fill=RED, outline=RED)
+        self.logo.create_rectangle(2, logo_h - 20, logo_w - 2, logo_h - 2, fill=RED, outline=RED)
+        self.logo.create_text(logo_w / 2, 46, text="PTM", fill=ON_ACCENT, font=("Segoe UI", 38, "bold"))
+        self.logo.create_text(
+            logo_w / 2, logo_h - 10,
+            text="Buscador y lanzador de herramientas",
+            fill=ON_ACCENT, font=("Segoe UI", 8, "bold")
+        )
 
-        search_wrap = tk.Frame(center, bg=WHITE)
-        search_wrap.pack(pady=(16, 0))
+        # Logo compacto: al pulsar Enter pasa a la izquierda del buscador,
+        # exactamente para liberar espacio vertical para los resultados.
+        compact_w, compact_h = 110, 50
+        self.logo_compact = tk.Canvas(
+            self.center, width=compact_w, height=compact_h, bg=WHITE,
+            highlightthickness=0, bd=0
+        )
+        self.logo_compact.create_rectangle(
+            2, 2, compact_w - 2, compact_h - 2,
+            fill=TEAL, outline=BLACK, width=1
+        )
+        self.logo_compact.create_polygon(
+            compact_w - 17, 2, compact_w - 2, 2,
+            compact_w - 2, 17, fill=RED, outline=RED
+        )
+        self.logo_compact.create_rectangle(
+            2, compact_h - 10, compact_w - 2, compact_h - 2,
+            fill=RED, outline=RED
+        )
+        self.logo_compact.create_text(
+            compact_w / 2, 22, text="PTM",
+            fill=ON_ACCENT, font=("Segoe UI", 19, "bold")
+        )
+        self.logo_compact.create_text(
+            compact_w / 2, compact_h - 6,
+            text="Buscador y lanzador de herramientas",
+            fill=ON_ACCENT, font=("Segoe UI", 4, "bold")
+        )
+
+        self.search_wrap = tk.Frame(self.center, bg=WHITE)
 
         # Barra de búsqueda con bordes redondeados como en el boceto.
         self.search_box = tk.Canvas(
-            search_wrap,
+            self.search_wrap,
             width=500,
             height=46,
             bg=WHITE,
@@ -458,15 +492,12 @@ class PTMApp(tk.Tk):
 
         # Contador encima de los resultados, alineado a la derecha.
         self.hint = tk.Label(
-            center, text="", bg=WHITE, fg=MUTED,
+            self.center, text="", bg=WHITE, fg=MUTED,
             font=("Segoe UI", 9), anchor="e"
         )
-        self.hint.pack(fill="x", pady=(6, 4))
-
         # Lista desplazable. Sin Enter muestra 5; con Enter muestra hasta
         # 10 filas visibles y permite desplazarse si existen más resultados.
-        self.results_container = tk.Frame(center, bg=WHITE, width=500)
-        self.results_container.pack(fill="x")
+        self.results_container = tk.Frame(self.center, bg=WHITE, width=500)
         self.results_container.pack_propagate(False)
 
         self.results_canvas = tk.Canvas(
@@ -509,6 +540,57 @@ class PTMApp(tk.Tk):
                 int(-1 * (e.delta / 120)), "units"
             ),
         )
+
+        self._apply_search_layout(expanded=False)
+
+    def _apply_search_layout(self, expanded=False):
+        """Cambia la composición del inicio al pulsar Enter."""
+        if not hasattr(self, "center"):
+            return
+
+        self.logo.grid_forget()
+        self.logo_compact.grid_forget()
+        self.search_wrap.grid_forget()
+        self.hint.grid_forget()
+        self.results_container.grid_forget()
+
+        if expanded:
+            # Diseño de resultados: logo pequeño a la izquierda, buscador a la derecha.
+            self.center.grid_configure(pady=(14, 0))
+            self.logo_compact.grid(
+                row=0, column=0, sticky="n",
+                padx=(0, 8), pady=(0, 0)
+            )
+            self.search_wrap.grid(
+                row=0, column=1, sticky="n",
+                pady=(0, 0)
+            )
+            self.hint.grid(
+                row=1, column=1, sticky="ew",
+                pady=(3, 3)
+            )
+            self.results_container.grid(
+                row=2, column=1, sticky="ew"
+            )
+        else:
+            # Diseño inicial: logo centrado encima del buscador.
+            self.center.grid_configure(pady=(72, 0))
+            self.logo.grid(
+                row=0, column=0, columnspan=2,
+                sticky="n", pady=(0, 0)
+            )
+            self.search_wrap.grid(
+                row=1, column=0, columnspan=2,
+                sticky="n", pady=(16, 0)
+            )
+            self.hint.grid(
+                row=2, column=0, columnspan=2,
+                sticky="ew", pady=(6, 4)
+            )
+            self.results_container.grid(
+                row=3, column=0, columnspan=2,
+                sticky="ew"
+            )
 
     @staticmethod
     def _rounded_rect(canvas, x1, y1, x2, y2, radius=14, **kwargs):
@@ -685,10 +767,12 @@ class PTMApp(tk.Tk):
         if getattr(event, "keysym", "") == "Return":
             return
         self.show_all_results = False
+        self._apply_search_layout(expanded=False)
         self.refresh_results()
 
     def _show_all_search_results(self, _event=None):
         self.show_all_results = True
+        self._apply_search_layout(expanded=True)
         self.refresh_results()
         return "break"
 
