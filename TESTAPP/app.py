@@ -1,11 +1,14 @@
 # ARGUMENTOS: ptm launcher lanzador buscador ejecutor py python herramientas scripts pestañas icono flotante
 import ast
 import importlib.util
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tkinter as tk
+import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -432,23 +435,55 @@ class PTMApp(tk.Tk):
     # ---------- Herramientas ----------
     def reload_tools(self):
         self.tools = []
+        managed_dirs = set()
+
+        # Las herramientas instaladas desde el formulario llevan manifest.json.
+        # En esos casos solo mostramos el archivo principal y no los .py auxiliares.
+        for manifest_path in sorted(self.tools_dir.rglob("manifest.json")):
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                main_file = str(data.get("main_file", "")).strip()
+                if not main_file:
+                    continue
+                folder = manifest_path.parent.resolve()
+                main_path = (manifest_path.parent / main_file).resolve()
+                if folder != main_path.parent and folder not in main_path.parents:
+                    continue
+                if main_path.is_file() and main_path.suffix.lower() == ".py":
+                    self.tools.append(self.read_tool_info(main_path, manifest=data))
+                    managed_dirs.add(folder)
+            except Exception:
+                continue
+
+        # Compatibilidad con .py antiguos colocados directamente en tools.
         for path in sorted(self.tools_dir.rglob("*.py")):
             if path.name == "__init__.py" or path.name.startswith("_"):
                 continue
+            resolved = path.resolve()
+            if any(folder == resolved.parent or folder in resolved.parents for folder in managed_dirs):
+                continue
             self.tools.append(self.read_tool_info(path))
+
         if hasattr(self, "results_frame") and self.results_frame.winfo_exists():
             self.refresh_results()
 
-    def read_tool_info(self, path):
-        keywords = ""
-        name = path.stem.replace("_", " ").title()
-        description = "Herramienta Python"
+    def read_tool_info(self, path, manifest=None):
+        manifest = manifest or {}
+        keywords = str(manifest.get("keywords", "")).strip()
+        name = str(manifest.get("title", "")).strip() or path.stem.replace("_", " ").title()
+        description = str(manifest.get("description", "")).strip() or "Herramienta Python"
+        category = str(manifest.get("category", "")).strip()
+        version = str(manifest.get("version", "")).strip()
+        mode = str(manifest.get("mode", "")).strip() or "Integrado"
+
         try:
             with path.open("r", encoding="utf-8-sig") as f:
                 first_line = f.readline().strip()
                 source = first_line + "\n" + f.read()
-            if first_line.upper().startswith("# ARGUMENTOS:"):
+
+            if not keywords and first_line.upper().startswith("# ARGUMENTOS:"):
                 keywords = first_line.split(":", 1)[1].strip()
+
             tree = ast.parse(source, filename=str(path))
             for node in tree.body:
                 if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -458,18 +493,22 @@ class PTMApp(tk.Tk):
                             value = ast.literal_eval(node.value)
                         except Exception:
                             continue
-                        if key == "TOOL_NAME" and isinstance(value, str):
+                        if key == "TOOL_NAME" and isinstance(value, str) and not manifest.get("title"):
                             name = value
-                        elif key == "TOOL_DESCRIPTION" and isinstance(value, str):
+                        elif key == "TOOL_DESCRIPTION" and isinstance(value, str) and not manifest.get("description"):
                             description = value
         except Exception as exc:
             description = f"No se pudo leer: {exc}"
+
         return {
             "path": path,
             "name": name,
             "keywords": keywords,
             "description": description,
-            "search": f"{path.stem} {name} {keywords} {description}".lower(),
+            "category": category,
+            "version": version,
+            "mode": mode,
+            "search": f"{path.stem} {name} {keywords} {description} {category} {version}".lower(),
         }
 
     def filtered_tools(self):
@@ -513,27 +552,269 @@ class PTMApp(tk.Tk):
             messagebox.showinfo("PTM", "No se encontró ninguna herramienta con ese criterio.")
 
     def import_py(self):
-        files = filedialog.askopenfilenames(
-            title="Agregar herramientas Python",
-            filetypes=[("Archivos Python", "*.py")],
+        dialog = tk.Toplevel(self)
+        dialog.title("Añadir herramienta")
+        dialog.configure(bg=WHITE)
+        dialog.geometry("590x620")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        title_var = tk.StringVar()
+        keywords_var = tk.StringVar()
+        category_var = tk.StringVar()
+        version_var = tk.StringVar(value="1.0.0")
+        mode_var = tk.StringVar(value="Integrado")
+        file_var = tk.StringVar()
+        main_var = tk.StringVar()
+
+        container = tk.Frame(dialog, bg=WHITE)
+        container.pack(fill="both", expand=True, padx=26, pady=22)
+        container.grid_columnconfigure(1, weight=1)
+
+        tk.Label(
+            container, text="Añadir herramienta", bg=WHITE, fg=BLACK,
+            font=("Segoe UI", 18, "bold")
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 18))
+
+        def add_label(row, text):
+            tk.Label(
+                container, text=text, bg=WHITE, fg=BLACK,
+                font=("Segoe UI", 10)
+            ).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=6)
+
+        def add_entry(row, variable):
+            entry = tk.Entry(
+                container, textvariable=variable, relief="solid", bd=1,
+                font=("Segoe UI", 10), bg=WHITE, fg=BLACK
+            )
+            entry.grid(row=row, column=1, columnspan=2, sticky="ew", pady=6, ipady=5)
+            return entry
+
+        add_label(1, "Título")
+        title_entry = add_entry(1, title_var)
+
+        add_label(2, "Descripción")
+        description_text = tk.Text(
+            container, height=4, relief="solid", bd=1,
+            font=("Segoe UI", 10), wrap="word", bg=WHITE, fg=BLACK
         )
-        if not files:
-            return
-        copied = 0
-        for filename in files:
-            src = Path(filename)
-            dst = self.tools_dir / src.name
-            if dst.exists():
-                if not messagebox.askyesno("Reemplazar", f"{src.name} ya existe. ¿Deseas reemplazarlo?"):
-                    continue
+        description_text.grid(row=2, column=1, columnspan=2, sticky="ew", pady=6)
+
+        add_label(3, "Keywords")
+        add_entry(3, keywords_var)
+
+        add_label(4, "Categoría")
+        add_entry(4, category_var)
+
+        add_label(5, "Versión")
+        add_entry(5, version_var)
+
+        add_label(6, "Modo")
+        mode_menu = tk.OptionMenu(container, mode_var, "Integrado", "Externo")
+        mode_menu.configure(
+            bg=WHITE, fg=BLACK, activebackground=LIGHT,
+            relief="solid", bd=1, highlightthickness=0,
+            font=("Segoe UI", 10)
+        )
+        mode_menu.grid(row=6, column=1, columnspan=2, sticky="ew", pady=6)
+
+        add_label(7, "Archivo")
+        file_entry = tk.Entry(
+            container, textvariable=file_var, relief="solid", bd=1,
+            font=("Segoe UI", 9), bg=LIGHT, fg=BLACK, state="readonly"
+        )
+        file_entry.grid(row=7, column=1, sticky="ew", pady=6, ipady=5)
+
+        def detect_main_file(path):
+            src = Path(path)
+            if src.suffix.lower() == ".py":
+                main_var.set(src.name)
+                if not title_var.get().strip():
+                    title_var.set(src.stem.replace("_", " ").title())
+                return
+
             try:
-                shutil.copy2(src, dst)
-                copied += 1
-            except OSError as exc:
-                messagebox.showerror("PTM", f"No se pudo agregar {src.name}:\n{exc}")
-        self.reload_tools()
-        if copied:
-            self.hint.configure(text=f"{copied} herramienta(s) agregada(s)")
+                with zipfile.ZipFile(src, "r") as zf:
+                    py_files = [
+                        name for name in zf.namelist()
+                        if name.lower().endswith(".py")
+                        and not name.endswith("/")
+                        and "__pycache__" not in name
+                    ]
+                if not py_files:
+                    main_var.set("")
+                    return
+
+                preferred_names = ("main.py", "app.py", "launcher.py")
+                selected = ""
+                for preferred in preferred_names:
+                    selected = next(
+                        (name for name in py_files if Path(name).name.lower() == preferred),
+                        ""
+                    )
+                    if selected:
+                        break
+                main_var.set(selected or py_files[0])
+
+                if not title_var.get().strip():
+                    title_var.set(src.stem.replace("_", " ").title())
+            except (OSError, zipfile.BadZipFile):
+                main_var.set("")
+
+        def choose_file():
+            filename = filedialog.askopenfilename(
+                parent=dialog,
+                title="Seleccionar herramienta",
+                filetypes=[
+                    ("Herramientas PTM", "*.py *.zip"),
+                    ("Python", "*.py"),
+                    ("ZIP", "*.zip"),
+                ],
+            )
+            if filename:
+                file_var.set(filename)
+                detect_main_file(filename)
+
+        tk.Button(
+            container, text="Seleccionar...",
+            command=choose_file, bg=TEAL, fg=WHITE,
+            activebackground=TEAL_DARK, activeforeground=WHITE,
+            relief="flat", padx=12, pady=5, cursor="hand2"
+        ).grid(row=7, column=2, padx=(8, 0), pady=6)
+
+        add_label(8, "Archivo principal")
+        add_entry(8, main_var)
+
+        tk.Label(
+            container,
+            text="Admite .py o .zip. En ZIP puedes cambiar el archivo principal detectado.",
+            bg=WHITE, fg=MUTED, font=("Segoe UI", 8)
+        ).grid(row=9, column=1, columnspan=2, sticky="w", pady=(0, 10))
+
+        buttons = tk.Frame(container, bg=WHITE)
+        buttons.grid(row=10, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+        def cancel():
+            dialog.grab_release()
+            dialog.destroy()
+
+        def install():
+            source_text = file_var.get().strip()
+            title = title_var.get().strip()
+            description = description_text.get("1.0", "end").strip()
+            keywords = keywords_var.get().strip()
+            category = category_var.get().strip()
+            version = version_var.get().strip() or "1.0.0"
+            mode = mode_var.get().strip() or "Integrado"
+            main_file = main_var.get().strip().replace("\\", "/")
+
+            if not source_text:
+                messagebox.showwarning("PTM", "Selecciona un archivo .py o .zip.", parent=dialog)
+                return
+
+            source = Path(source_text)
+            if source.suffix.lower() not in {".py", ".zip"}:
+                messagebox.showwarning("PTM", "Solo se permiten archivos .py o .zip.", parent=dialog)
+                return
+
+            if not title:
+                messagebox.showwarning("PTM", "Escribe un título para la herramienta.", parent=dialog)
+                return
+
+            if not main_file:
+                messagebox.showwarning("PTM", "Indica el archivo principal .py.", parent=dialog)
+                return
+
+            slug = self._tool_slug(title)
+            target_dir = self.tools_dir / slug
+
+            if target_dir.exists():
+                if not messagebox.askyesno(
+                    "Reemplazar herramienta",
+                    f"Ya existe una herramienta llamada '{title}'. ¿Deseas reemplazarla?",
+                    parent=dialog,
+                ):
+                    return
+                try:
+                    shutil.rmtree(target_dir)
+                except OSError as exc:
+                    messagebox.showerror("PTM", f"No se pudo reemplazar la herramienta:\n{exc}", parent=dialog)
+                    return
+
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+
+                if source.suffix.lower() == ".py":
+                    if Path(main_file).name != source.name:
+                        main_file = source.name
+                        main_var.set(main_file)
+                    shutil.copy2(source, target_dir / source.name)
+                else:
+                    self._safe_extract_zip(source, target_dir)
+
+                main_path = (target_dir / main_file).resolve()
+                root = target_dir.resolve()
+                if root != main_path.parent and root not in main_path.parents:
+                    raise ValueError("El archivo principal está fuera de la carpeta de la herramienta.")
+                if not main_path.is_file() or main_path.suffix.lower() != ".py":
+                    raise FileNotFoundError(f"No se encontró el archivo principal: {main_file}")
+
+                manifest = {
+                    "title": title,
+                    "description": description,
+                    "keywords": keywords,
+                    "category": category,
+                    "version": version,
+                    "mode": mode,
+                    "main_file": main_file,
+                    "source_type": source.suffix.lower().lstrip("."),
+                }
+                (target_dir / "manifest.json").write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+            except Exception as exc:
+                shutil.rmtree(target_dir, ignore_errors=True)
+                messagebox.showerror("PTM", f"No se pudo añadir la herramienta:\n\n{exc}", parent=dialog)
+                return
+
+            self.reload_tools()
+            self.hint.configure(text=f"Herramienta añadida: {title}")
+            cancel()
+            messagebox.showinfo("PTM", f"'{title}' se añadió correctamente.")
+
+        tk.Button(
+            buttons, text="Cancelar", command=cancel,
+            bg=LIGHT, fg=BLACK, relief="flat",
+            padx=18, pady=7, cursor="hand2"
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            buttons, text="Añadir", command=install,
+            bg=TEAL, fg=WHITE,
+            activebackground=TEAL_DARK, activeforeground=WHITE,
+            relief="flat", padx=22, pady=7, cursor="hand2"
+        ).pack(side="left")
+
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        title_entry.focus_set()
+
+    @staticmethod
+    def _tool_slug(text):
+        value = re.sub(r"[^A-Za-z0-9_-]+", "_", text.strip()).strip("_").lower()
+        return value or "herramienta"
+
+    @staticmethod
+    def _safe_extract_zip(source, target_dir):
+        root = target_dir.resolve()
+        with zipfile.ZipFile(source, "r") as zf:
+            for member in zf.infolist():
+                member_path = (target_dir / member.filename).resolve()
+                if root != member_path and root not in member_path.parents:
+                    raise ValueError("El ZIP contiene una ruta no permitida.")
+            zf.extractall(target_dir)
 
     def open_tool(self, tool):
         key = str(tool["path"].resolve())
