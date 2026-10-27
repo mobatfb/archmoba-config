@@ -1,0 +1,7 @@
+{
+  "app": "PTM",
+  "version": "1.0.0",
+  "api_url": "https://api.ejemplo.com/ptm/",
+  "update_url": "https://ejemplo.com/ptm/update.zip",
+  "maintenance": false
+}
