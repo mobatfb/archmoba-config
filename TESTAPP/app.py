@@ -801,14 +801,19 @@ class PTMApp(tk.Tk):
 
         shown = matches if self.show_all_results else matches[:5]
 
-        # Ajustar la zona visible sin alterar el tamaño general del launcher.
-        visible_rows = min(len(shown), 10 if self.show_all_results else 5)
-        list_height = max(38, visible_rows * 39)
+        # En modo Enter cada resultado es más alto porque muestra detalles.
+        if self.show_all_results:
+            visible_rows = min(len(shown), 6)
+            list_height = max(76, visible_rows * 78)
+        else:
+            visible_rows = min(len(shown), 5)
+            list_height = max(38, visible_rows * 39)
+
         self.results_container.configure(height=list_height)
         self.results_canvas.configure(height=list_height)
         self.results_canvas.yview_moveto(0)
 
-        if self.show_all_results and len(matches) > 10:
+        if self.show_all_results and len(matches) > 6:
             if not self.results_scroll.winfo_manager():
                 self.results_scroll.pack(side="right", fill="y")
         else:
@@ -824,20 +829,101 @@ class PTMApp(tk.Tk):
             self.hint.configure(text=f"{len(matches)} coincidencia(s)")
 
         for tool in shown:
-            row = tk.Frame(self.results_frame, bg=LIGHT, highlightbackground=MID, highlightthickness=1)
+            row = tk.Frame(
+                self.results_frame,
+                bg=LIGHT,
+                highlightbackground=MID,
+                highlightthickness=1,
+            )
             row.pack(fill="x", pady=2)
-            label = tk.Label(row, text=tool["name"], bg=LIGHT, fg=BLACK,
-                             font=("Segoe UI", 10, "bold"), anchor="w")
-            label.pack(side="left", fill="x", expand=True, padx=8, pady=5)
-            meta_parts = [
-                part for part in (tool.get("category", ""), tool.get("version", "")) if part
-            ]
-            meta_parts.append(f"{int(tool.get('visits', 0))} visitas")
-            meta_text = " · ".join(meta_parts) or tool["path"].name
-            meta = tk.Label(row, text=meta_text, bg=LIGHT, fg=MUTED,
-                            font=("Segoe UI", 8), anchor="e")
-            meta.pack(side="right", padx=8)
-            for widget in (row, label, meta):
+
+            if self.show_all_results:
+                # Resultado detallado después de pulsar Enter.
+                left = tk.Frame(row, bg=LIGHT)
+                left.pack(side="left", fill="both", expand=True, padx=(9, 8), pady=7)
+
+                label = tk.Label(
+                    left,
+                    text=tool["name"],
+                    bg=LIGHT,
+                    fg=BLACK,
+                    font=("Segoe UI", 10, "bold"),
+                    anchor="w",
+                )
+                label.pack(fill="x")
+
+                description = tool.get("description", "").strip() or "Sin descripción."
+                desc = tk.Label(
+                    left,
+                    text=description,
+                    bg=LIGHT,
+                    fg=MUTED,
+                    font=("Segoe UI", 8),
+                    anchor="w",
+                    justify="left",
+                    wraplength=300,
+                )
+                desc.pack(fill="x", pady=(3, 0))
+
+                right = tk.Frame(row, bg=LIGHT)
+                right.pack(side="right", padx=(4, 9), pady=7)
+
+                category = tool.get("category", "").strip() or "Sin categoría"
+                version = tool.get("version", "").strip() or "-"
+                meta = tk.Label(
+                    right,
+                    text=f"{category} · v{version} · {int(tool.get('visits', 0))} visitas",
+                    bg=LIGHT,
+                    fg=MUTED,
+                    font=("Segoe UI", 8),
+                    anchor="e",
+                    justify="right",
+                )
+                meta.pack(anchor="e")
+
+                mode = tool.get("mode", "").strip() or "Integrado"
+                dependencies = tool.get("dependencies", "").strip() or "Sin dependencias"
+                extra = tk.Label(
+                    right,
+                    text=f"{mode} · {dependencies}",
+                    bg=LIGHT,
+                    fg=MUTED,
+                    font=("Segoe UI", 8),
+                    anchor="e",
+                    justify="right",
+                )
+                extra.pack(anchor="e", pady=(4, 0))
+
+                clickable = (row, left, right, label, desc, meta, extra)
+            else:
+                # Resultado compacto durante la escritura.
+                label = tk.Label(
+                    row,
+                    text=tool["name"],
+                    bg=LIGHT,
+                    fg=BLACK,
+                    font=("Segoe UI", 10, "bold"),
+                    anchor="w",
+                )
+                label.pack(side="left", fill="x", expand=True, padx=8, pady=5)
+
+                meta_parts = [
+                    part for part in (tool.get("category", ""), tool.get("version", "")) if part
+                ]
+                meta_parts.append(f"{int(tool.get('visits', 0))} visitas")
+                meta_text = " · ".join(meta_parts) or tool["path"].name
+                meta = tk.Label(
+                    row,
+                    text=meta_text,
+                    bg=LIGHT,
+                    fg=MUTED,
+                    font=("Segoe UI", 8),
+                    anchor="e",
+                )
+                meta.pack(side="right", padx=8)
+                clickable = (row, label, meta)
+
+            for widget in clickable:
                 widget.bind("<Double-Button-1>", lambda _e, t=tool: self.open_tool(t))
                 widget.bind("<Button-1>", lambda _e, t=tool: self.open_tool(t))
 
