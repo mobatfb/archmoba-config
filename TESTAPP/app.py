@@ -456,11 +456,59 @@ class PTMApp(tk.Tk):
 
         self.search_box.bind("<Button-1>", lambda _e: self.search_entry.focus_set())
 
-        self.results_frame = tk.Frame(center, bg=WHITE)
-        self.results_frame.pack(fill="x", pady=(8, 0))
+        # Contador encima de los resultados, alineado a la derecha.
+        self.hint = tk.Label(
+            center, text="", bg=WHITE, fg=MUTED,
+            font=("Segoe UI", 9), anchor="e"
+        )
+        self.hint.pack(fill="x", pady=(6, 4))
 
-        self.hint = tk.Label(center, text="", bg=WHITE, fg=MUTED, font=("Segoe UI", 9))
-        self.hint.pack(pady=(5, 0))
+        # Lista desplazable. Sin Enter muestra 5; con Enter muestra hasta
+        # 10 filas visibles y permite desplazarse si existen más resultados.
+        self.results_container = tk.Frame(center, bg=WHITE, width=500)
+        self.results_container.pack(fill="x")
+        self.results_container.pack_propagate(False)
+
+        self.results_canvas = tk.Canvas(
+            self.results_container,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+            width=480,
+            height=195,
+        )
+        self.results_canvas.pack(side="left", fill="both", expand=True)
+
+        self.results_scroll = tk.Scrollbar(
+            self.results_container,
+            orient="vertical",
+            command=self.results_canvas.yview,
+        )
+        self.results_canvas.configure(yscrollcommand=self.results_scroll.set)
+
+        self.results_frame = tk.Frame(self.results_canvas, bg=WHITE)
+        self.results_window = self.results_canvas.create_window(
+            (0, 0), window=self.results_frame, anchor="nw"
+        )
+
+        self.results_frame.bind(
+            "<Configure>",
+            lambda _e: self.results_canvas.configure(
+                scrollregion=self.results_canvas.bbox("all")
+            ),
+        )
+        self.results_canvas.bind(
+            "<Configure>",
+            lambda e: self.results_canvas.itemconfigure(
+                self.results_window, width=e.width
+            ),
+        )
+        self.results_canvas.bind(
+            "<MouseWheel>",
+            lambda e: self.results_canvas.yview_scroll(
+                int(-1 * (e.delta / 120)), "units"
+            ),
+        )
 
     @staticmethod
     def _rounded_rect(canvas, x1, y1, x2, y2, radius=14, **kwargs):
@@ -662,11 +710,25 @@ class PTMApp(tk.Tk):
             return
 
         shown = matches if self.show_all_results else matches[:5]
+
+        # Ajustar la zona visible sin alterar el tamaño general del launcher.
+        visible_rows = min(len(shown), 10 if self.show_all_results else 5)
+        list_height = max(38, visible_rows * 39)
+        self.results_container.configure(height=list_height)
+        self.results_canvas.configure(height=list_height)
+        self.results_canvas.yview_moveto(0)
+
+        if self.show_all_results and len(matches) > 10:
+            if not self.results_scroll.winfo_manager():
+                self.results_scroll.pack(side="right", fill="y")
+        else:
+            self.results_scroll.pack_forget()
+
         if self.show_all_results:
-            self.hint.configure(text=f"{len(matches)} coincidencia(s) · mostrando todas")
+            self.hint.configure(text=f"{len(matches)} coincidencia(s)")
         elif len(matches) > 5:
             self.hint.configure(
-                text=f"{len(matches)} coincidencia(s) · mostrando las 5 más visitadas · Enter para ver todas"
+                text=f"{len(matches)} coincidencia(s) · mostrando 5 · Enter para ver más"
             )
         else:
             self.hint.configure(text=f"{len(matches)} coincidencia(s)")
