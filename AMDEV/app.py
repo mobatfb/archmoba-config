@@ -11,9 +11,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "18:38"
+APP_UPDATE_TIME = "18:48"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main"
 APPS_URL = f"{REPO_RAW_BASE}/apps.json"
@@ -109,7 +109,7 @@ class FloatingAMDEV(tk.Toplevel):
 
     def _up(self, _event):
         if not self._dragging:
-            self.app.toggle_main()
+            self.app.toggle_app_menu()
 
     def _menu(self, _event):
         menu = tk.Menu(self, tearoff=0)
@@ -141,8 +141,10 @@ class AMDEVApp(tk.Tk):
         self._build_ui()
         self.load_apps()
 
+        self.app_menu = None
         self.floating = FloatingAMDEV(self)
-        self.bind("<Escape>", lambda _e: self.hide_main())
+        self.withdraw()
+        self.bind("<Escape>", lambda _e: self.hide_app_menu())
 
     def _default_geometry(self):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -349,6 +351,163 @@ class AMDEVApp(tk.Tk):
             messagebox.showerror(APP_SHORT, f"No se pudo iniciar la aplicación:\n\n{exc}")
             self.status.configure(text=f"Error: {exc}")
 
+    def toggle_app_menu(self):
+        if self.app_menu is not None and self.app_menu.winfo_exists() and self.app_menu.state() != "withdrawn":
+            self.hide_app_menu()
+        else:
+            self.show_app_menu()
+
+    def show_app_menu(self):
+        # Actualiza apps.json antes de mostrar el menú.
+        self.load_apps()
+
+        if self.app_menu is None or not self.app_menu.winfo_exists():
+            self.app_menu = tk.Toplevel(self)
+            self.app_menu.overrideredirect(True)
+            self.app_menu.attributes("-topmost", True)
+            self.app_menu.configure(bg=BG)
+
+        for child in self.app_menu.winfo_children():
+            child.destroy()
+
+        outer = tk.Frame(
+            self.app_menu,
+            bg=BG,
+            highlightbackground=BORDER,
+            highlightthickness=1,
+        )
+        outer.pack(fill="both", expand=True)
+
+        head = tk.Frame(outer, bg=BG)
+        head.pack(fill="x", padx=10, pady=(8, 5))
+
+        tk.Label(
+            head,
+            text=APP_NAME,
+            bg=BG,
+            fg=FG,
+            font=("Segoe UI", 10, "bold"),
+        ).pack(side="left")
+
+        tk.Label(
+            head,
+            text=f"v{APP_VERSION}",
+            bg=BG,
+            fg=MUTED_FG,
+            font=("Segoe UI", 7),
+        ).pack(side="right")
+
+        if not self.apps:
+            tk.Label(
+                outer,
+                text="No hay aplicaciones disponibles",
+                bg=BG,
+                fg=MUTED_FG,
+                font=("Segoe UI", 9),
+            ).pack(fill="x", padx=10, pady=12)
+        else:
+            for item in self.apps[:8]:
+                row = tk.Frame(
+                    outer,
+                    bg=CARD,
+                    highlightbackground=BORDER,
+                    highlightthickness=1,
+                    cursor="hand2",
+                )
+                row.pack(fill="x", padx=8, pady=3)
+
+                left = tk.Frame(row, bg=CARD, cursor="hand2")
+                left.pack(side="left", fill="both", expand=True, padx=9, pady=7)
+
+                name = tk.Label(
+                    left,
+                    text=item.get("name", item.get("id", "App")),
+                    bg=CARD,
+                    fg=FG,
+                    font=("Segoe UI", 9, "bold"),
+                    anchor="w",
+                    cursor="hand2",
+                )
+                name.pack(fill="x")
+
+                desc_text = item.get("description", "").strip()
+                desc = tk.Label(
+                    left,
+                    text=desc_text,
+                    bg=CARD,
+                    fg=MUTED_FG,
+                    font=("Segoe UI", 7),
+                    anchor="w",
+                    justify="left",
+                    wraplength=210,
+                    cursor="hand2",
+                )
+                if desc_text:
+                    desc.pack(fill="x", pady=(2, 0))
+
+                arrow = tk.Label(
+                    row,
+                    text="›",
+                    bg=CARD,
+                    fg=RED,
+                    font=("Segoe UI", 18, "bold"),
+                    cursor="hand2",
+                )
+                arrow.pack(side="right", padx=9)
+
+                def run_app(_e=None, app_item=item):
+                    self.hide_app_menu()
+                    self.launch_app(app_item)
+
+                for widget in (row, left, name, desc, arrow):
+                    widget.bind("<Button-1>", run_app)
+
+        footer = tk.Frame(outer, bg=BG)
+        footer.pack(fill="x", padx=8, pady=(4, 7))
+
+        open_full = tk.Label(
+            footer,
+            text="Abrir AMDEV",
+            bg=BG,
+            fg=MUTED_FG,
+            font=("Segoe UI", 7),
+            cursor="hand2",
+        )
+        open_full.pack(side="left")
+        open_full.bind(
+            "<Button-1>",
+            lambda _e: (self.hide_app_menu(), self.show_main()),
+        )
+
+        self.app_menu.update_idletasks()
+        menu_w = max(280, self.app_menu.winfo_reqwidth())
+        menu_h = self.app_menu.winfo_reqheight()
+
+        fx = self.floating.winfo_x()
+        fy = self.floating.winfo_y()
+        fw = self.floating.winfo_width()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+
+        # Preferir abrir a la izquierda del flotante; si no cabe, abrir arriba.
+        x = fx - menu_w - 8
+        y = fy + self.floating.winfo_height() - menu_h
+
+        if x < 8:
+            x = min(sw - menu_w - 8, fx + fw + 8)
+        if y < 8:
+            y = max(8, fy - menu_h - 8)
+        if y + menu_h > sh - 8:
+            y = sh - menu_h - 8
+
+        self.app_menu.geometry(f"{menu_w}x{menu_h}+{max(8, x)}+{max(8, y)}")
+        self.app_menu.deiconify()
+        self.app_menu.lift()
+
+    def hide_app_menu(self):
+        if self.app_menu is not None and self.app_menu.winfo_exists():
+            self.app_menu.withdraw()
+
     def toggle_main(self):
         if self.state() == "withdrawn":
             self.show_main()
@@ -356,6 +515,7 @@ class AMDEVApp(tk.Tk):
             self.hide_main()
 
     def show_main(self):
+        self.hide_app_menu()
         self.deiconify()
         self.lift()
         self.attributes("-topmost", True)
@@ -366,6 +526,11 @@ class AMDEVApp(tk.Tk):
         self.withdraw()
 
     def exit_app(self):
+        try:
+            if self.app_menu is not None and self.app_menu.winfo_exists():
+                self.app_menu.destroy()
+        except Exception:
+            pass
         try:
             self.floating.destroy()
         except Exception:
