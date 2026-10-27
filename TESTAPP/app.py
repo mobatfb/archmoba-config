@@ -215,6 +215,7 @@ class PTMApp(tk.Tk):
         self.guide_path = self.base_dir / "guide.csv"
 
         self.query = tk.StringVar()
+        self.show_all_results = False
         self.tools = []
         self.open_tabs = {}       # key -> metadata/content
         self.tab_widgets = {}
@@ -424,8 +425,8 @@ class PTMApp(tk.Tk):
             insertbackground=BLACK,
         )
         self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        self.search_entry.bind("<KeyRelease>", lambda _e: self.refresh_results())
-        self.search_entry.bind("<Return>", lambda _e: self.open_first_result())
+        self.search_entry.bind("<KeyRelease>", self._on_search_key_release)
+        self.search_entry.bind("<Return>", self._show_all_search_results)
 
         self.search_btn = tk.Canvas(
             self.search_inner,
@@ -520,6 +521,10 @@ class PTMApp(tk.Tk):
             mode = str(row.get("modo", "Integrado")).strip() or "Integrado"
             dependencies = str(row.get("dependencias", "")).strip()
             slug = str(row.get("slug", "")).strip()
+            try:
+                visits = int(str(row.get("visitas", "0")).strip() or "0")
+            except ValueError:
+                visits = 0
 
             self.tools.append({
                 "id": str(row.get("id", "")).strip(),
@@ -533,6 +538,7 @@ class PTMApp(tk.Tk):
                 "version": version,
                 "mode": mode,
                 "dependencies": dependencies,
+                "visits": visits,
                 "main_file": str(row.get("archivo_principal", "")).strip(),
                 "search": (
                     f"{slug} {Path(repo_path).stem} {name} {description} "
@@ -610,31 +616,72 @@ class PTMApp(tk.Tk):
         q = self.query.get().strip().lower()
         if not q:
             return []
+
         tokens = [t for t in q.replace(",", " ").split() if t]
-        return [tool for tool in self.tools if all(t in tool["search"] for t in tokens)]
+        matches = [tool for tool in self.tools if all(t in tool["search"] for t in tokens)]
+
+        # Evitar duplicados por id/slug/ruta y priorizar las más visitadas.
+        unique = {}
+        for tool in matches:
+            key = tool.get("id") or tool.get("slug") or tool.get("repo_path") or str(tool["path"])
+            current = unique.get(key)
+            if current is None or int(tool.get("visits", 0)) > int(current.get("visits", 0)):
+                unique[key] = tool
+
+        return sorted(
+            unique.values(),
+            key=lambda tool: (-int(tool.get("visits", 0)), tool["name"].lower()),
+        )
+
+    def _on_search_key_release(self, event):
+        if getattr(event, "keysym", "") == "Return":
+            return
+        self.show_all_results = False
+        self.refresh_results()
+
+    def _show_all_search_results(self, _event=None):
+        self.show_all_results = True
+        self.refresh_results()
+        return "break"
 
     def refresh_results(self):
         if not hasattr(self, "results_frame"):
             return
+
         for child in self.results_frame.winfo_children():
             child.destroy()
-        shown = self.filtered_tools()[:8]
+
+        matches = self.filtered_tools()
+
         if not self.query.get().strip():
             self.hint.configure(text=f"{len(self.tools)} herramienta(s) disponibles")
             return
-        if not shown:
+
+        if not matches:
             self.hint.configure(text="Sin coincidencias")
             return
-        self.hint.configure(text=f"{len(self.filtered_tools())} coincidencia(s)")
+
+        shown = matches if self.show_all_results else matches[:5]
+        if self.show_all_results:
+            self.hint.configure(text=f"{len(matches)} coincidencia(s) · mostrando todas")
+        elif len(matches) > 5:
+            self.hint.configure(
+                text=f"{len(matches)} coincidencia(s) · mostrando las 5 más visitadas · Enter para ver todas"
+            )
+        else:
+            self.hint.configure(text=f"{len(matches)} coincidencia(s)")
+
         for tool in shown:
             row = tk.Frame(self.results_frame, bg=LIGHT, highlightbackground=MID, highlightthickness=1)
             row.pack(fill="x", pady=2)
             label = tk.Label(row, text=tool["name"], bg=LIGHT, fg=BLACK,
                              font=("Segoe UI", 10, "bold"), anchor="w")
             label.pack(side="left", fill="x", expand=True, padx=8, pady=5)
-            meta_text = " · ".join(
+            meta_parts = [
                 part for part in (tool.get("category", ""), tool.get("version", "")) if part
-            ) or tool["path"].name
+            ]
+            meta_parts.append(f"{int(tool.get('visits', 0))} visitas")
+            meta_text = " · ".join(meta_parts) or tool["path"].name
             meta = tk.Label(row, text=meta_text, bg=LIGHT, fg=MUTED,
                             font=("Segoe UI", 8), anchor="e")
             meta.pack(side="right", padx=8)
