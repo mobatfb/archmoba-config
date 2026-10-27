@@ -650,6 +650,7 @@ class PTMApp(tk.Tk):
             version = str(row.get("version", "")).strip()
             mode = str(row.get("modo", "Integrado")).strip() or "Integrado"
             dependencies = str(row.get("dependencias", "")).strip()
+            author = str(row.get("autor", "")).strip()
             slug = str(row.get("slug", "")).strip()
             try:
                 visits = int(str(row.get("visitas", "0")).strip() or "0")
@@ -668,11 +669,12 @@ class PTMApp(tk.Tk):
                 "version": version,
                 "mode": mode,
                 "dependencies": dependencies,
+                "author": author,
                 "visits": visits,
                 "main_file": str(row.get("archivo_principal", "")).strip(),
                 "search": (
                     f"{slug} {Path(repo_path).stem} {name} {description} "
-                    f"{keywords} {category} {version} {dependencies}"
+                    f"{keywords} {category} {version} {dependencies} {author}"
                 ).lower(),
             })
 
@@ -883,9 +885,10 @@ class PTMApp(tk.Tk):
 
                 mode = tool.get("mode", "").strip() or "Integrado"
                 dependencies = tool.get("dependencies", "").strip() or "Sin dependencias"
+                author = tool.get("author", "").strip() or "Sin autor"
                 extra = tk.Label(
                     right,
-                    text=f"{mode} · {dependencies}",
+                    text=f"{author} · {mode} · {dependencies}",
                     bg=LIGHT,
                     fg=MUTED,
                     font=("Segoe UI", 8),
@@ -946,6 +949,7 @@ class PTMApp(tk.Tk):
         title_var = tk.StringVar()
         keywords_var = tk.StringVar()
         category_var = tk.StringVar()
+        author_var = tk.StringVar(value="ARCHMOBA")
         version_var = tk.StringVar(value="1.0.0")
         mode_var = tk.StringVar(value="Integrado")
         file_var = tk.StringVar()
@@ -990,24 +994,27 @@ class PTMApp(tk.Tk):
         add_label(4, "Categoría")
         add_entry(4, category_var)
 
-        add_label(5, "Versión")
-        add_entry(5, version_var)
+        add_label(5, "Autor")
+        add_entry(5, author_var)
 
-        add_label(6, "Modo")
+        add_label(6, "Versión")
+        add_entry(6, version_var)
+
+        add_label(7, "Modo")
         mode_menu = tk.OptionMenu(container, mode_var, "Integrado", "Externo")
         mode_menu.configure(
             bg=WHITE, fg=BLACK, activebackground=LIGHT,
             relief="solid", bd=1, highlightthickness=0,
             font=("Segoe UI", 10)
         )
-        mode_menu.grid(row=6, column=1, columnspan=2, sticky="ew", pady=6)
+        mode_menu.grid(row=7, column=1, columnspan=2, sticky="ew", pady=6)
 
-        add_label(7, "Archivo")
+        add_label(8, "Archivo")
         file_entry = tk.Entry(
             container, textvariable=file_var, relief="solid", bd=1,
             font=("Segoe UI", 9), bg=LIGHT, fg=BLACK, state="readonly"
         )
-        file_entry.grid(row=7, column=1, sticky="ew", pady=6, ipady=5)
+        file_entry.grid(row=8, column=1, sticky="ew", pady=6, ipady=5)
 
         def detect_main_file(path):
             src = Path(path)
@@ -1064,19 +1071,19 @@ class PTMApp(tk.Tk):
             command=choose_file, bg=TEAL, fg=ON_ACCENT,
             activebackground=TEAL_DARK, activeforeground=ON_ACCENT,
             relief="flat", padx=12, pady=5, cursor="hand2"
-        ).grid(row=7, column=2, padx=(8, 0), pady=6)
+        ).grid(row=8, column=2, padx=(8, 0), pady=6)
 
-        add_label(8, "Archivo principal")
-        add_entry(8, main_var)
+        add_label(9, "Archivo principal")
+        add_entry(9, main_var)
 
         tk.Label(
             container,
             text="Admite .py o .zip. En ZIP puedes cambiar el archivo principal detectado.",
             bg=WHITE, fg=MUTED, font=("Segoe UI", 8)
-        ).grid(row=9, column=1, columnspan=2, sticky="w", pady=(0, 10))
+        ).grid(row=10, column=1, columnspan=2, sticky="w", pady=(0, 10))
 
         buttons = tk.Frame(container, bg=WHITE)
-        buttons.grid(row=10, column=0, columnspan=3, sticky="e", pady=(14, 0))
+        buttons.grid(row=11, column=0, columnspan=3, sticky="e", pady=(14, 0))
 
         def cancel():
             dialog.grab_release()
@@ -1088,6 +1095,7 @@ class PTMApp(tk.Tk):
             description = description_text.get("1.0", "end").strip()
             keywords = keywords_var.get().strip()
             category = category_var.get().strip()
+            author = author_var.get().strip()
             version = version_var.get().strip() or "1.0.0"
             mode = mode_var.get().strip() or "Integrado"
             main_file = main_var.get().strip().replace("\\", "/")
@@ -1148,6 +1156,7 @@ class PTMApp(tk.Tk):
                     "description": description,
                     "keywords": keywords,
                     "category": category,
+                    "author": author,
                     "version": version,
                     "mode": mode,
                     "main_file": main_file,
