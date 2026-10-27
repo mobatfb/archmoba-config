@@ -237,7 +237,7 @@ class PTMApp(tk.Tk):
     def _apply_responsive_geometry(self):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         # El boceto ocupa aprox. 75-80% del ancho y 68-72% del alto.
-        width = min(1180, max(820, int(sw * 0.78)))
+        width = min(980, max(760, int(sw * 0.68)))
         height = min(760, max(520, int(sh * 0.70)))
         # Nunca exceder la pantalla útil visualmente.
         width = min(width, sw - 80)
