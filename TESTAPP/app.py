@@ -270,7 +270,21 @@ class PTMApp(tk.Tk):
         self.separator.pack(fill="x")
 
         self.content = tk.Frame(self.outer, bg=WHITE)
-        self.content.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+        self.content.pack(fill="both", expand=True, padx=10, pady=(2, 4))
+
+        self.footer = tk.Frame(self.outer, bg=WHITE, height=24)
+        self.footer.pack(fill="x", padx=10, pady=(0, 5))
+        self.footer.pack_propagate(False)
+
+        self.version_label = tk.Label(
+            self.footer,
+            text=f"PTM v{APP_VERSION}",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            anchor="e",
+        )
+        self.version_label.pack(side="right", padx=(0, 4))
 
         # Permitir mover la ventana arrastrando zonas libres de la franja superior.
         self.top.bind("<Button-1>", self._start_move)
