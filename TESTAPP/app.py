@@ -18,6 +18,7 @@ from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
 APP_VERSION = "1.0.0"
+APP_UPDATE_DATE = "27/10/2026"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/TESTAPP"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
@@ -277,15 +278,28 @@ class PTMApp(tk.Tk):
         self.footer.pack(fill="x", padx=10, pady=(0, 5))
         self.footer.pack_propagate(False)
 
+        self.version_box = tk.Frame(self.footer, bg=WHITE)
+        self.version_box.pack(side="right", padx=(0, 4))
+
         self.version_label = tk.Label(
-            self.footer,
+            self.version_box,
             text=f"PTM v{APP_VERSION}",
             bg=WHITE,
             fg=MUTED,
             font=("Segoe UI", 8),
             anchor="e",
         )
-        self.version_label.pack(side="right", padx=(0, 4))
+        self.version_label.pack(anchor="e")
+
+        self.update_date_label = tk.Label(
+            self.version_box,
+            text=f"Actualizado: {APP_UPDATE_DATE}",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 7),
+            anchor="e",
+        )
+        self.update_date_label.pack(anchor="e")
 
         # Permitir mover la ventana arrastrando zonas libres de la franja superior.
         self.top.bind("<Button-1>", self._start_move)
