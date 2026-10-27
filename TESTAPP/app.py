@@ -298,11 +298,11 @@ class PTMApp(tk.Tk):
 
     def _build_home(self, parent):
         parent.grid_columnconfigure(0, weight=1)
-        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=0)
         parent.grid_rowconfigure(3, weight=1)
 
         center = tk.Frame(parent, bg=WHITE)
-        center.grid(row=1, column=0, sticky="n", pady=(55, 0))
+        center.grid(row=0, column=0, sticky="n", pady=(72, 0))
 
         # Logo PTM dibujado, sin imagen externa.
         logo_w, logo_h = 230, 104
