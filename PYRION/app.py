@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -158,6 +158,7 @@ class PyrionApp(tk.Tk):
         self.configure(bg="#101218")
 
         self._force_fullscreen()
+        self.after(150, self._keep_in_background)
 
         tk.Label(
             self,
@@ -184,7 +185,7 @@ class PyrionApp(tk.Tk):
         self.geometry(f"{screen_width}x{screen_height}+0+0")
 
         try:
-            self.attributes("-topmost", True)
+            self.attributes("-topmost", False)
         except tk.TclError:
             pass
 
@@ -194,8 +195,7 @@ class PyrionApp(tk.Tk):
             pass
 
         self.update_idletasks()
-        self.lift()
-        self.focus_force()
+        self.lower()
 
         # Reaplica la geometría después de que Xorg mapee la ventana.
         self.after(
@@ -204,6 +204,23 @@ class PyrionApp(tk.Tk):
                 f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0"
             ),
         )
+
+    def _keep_in_background(self):
+        """Mantiene PYRION como capa base por debajo de todas las demás ventanas."""
+        try:
+            self.attributes("-topmost", False)
+        except tk.TclError:
+            pass
+
+        try:
+            self.lower()
+        except tk.TclError:
+            pass
+
+        try:
+            self.after(500, self._keep_in_background)
+        except tk.TclError:
+            pass
 
 
 if __name__ == "__main__":
