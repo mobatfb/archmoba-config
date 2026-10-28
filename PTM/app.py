@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.30"
+APP_VERSION = "1.0.31"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:31"
+APP_UPDATE_TIME = "21:52"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -468,6 +468,9 @@ class PTMApp(tk.Tk):
         self._catalog_events = queue.Queue()
         self._catalog_meta_check_running = False
         self._catalog_meta_check_pending = False
+        self._catalog_sync_lock = threading.Lock()
+        self._catalog_search_request_id = 0
+        self._catalog_search_inflight = 0
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
@@ -915,7 +918,7 @@ class PTMApp(tk.Tk):
         canvas.create_line(7, 16, 7, 23, 24, 23, 24, 16, fill=BLACK, width=2)
 
     # ---------- Herramientas ----------
-    def reload_tools(self, local_only=False):
+    def reload_tools(self, local_only=False, refresh=True):
         """Carga exclusivamente el catálogo guide.csv."""
         self.tools = []
         try:
@@ -970,7 +973,11 @@ class PTMApp(tk.Tk):
                 ).lower(),
             })
 
-        if hasattr(self, "results_frame") and self.results_frame.winfo_exists():
+        if (
+            refresh
+            and hasattr(self, "results_frame")
+            and self.results_frame.winfo_exists()
+        ):
             self.refresh_results()
 
     def _read_local_guide_meta(self):
@@ -1090,7 +1097,7 @@ class PTMApp(tk.Tk):
         return True
 
     def _check_guide_on_search_async(self):
-        """Cada búsqueda consulta metadata; guide.csv solo baja si cambió."""
+        """Mientras se escribe, comprueba el catálogo sin bloquear la interfaz."""
         if self._catalog_meta_check_running:
             self._catalog_meta_check_pending = True
             return
@@ -1100,28 +1107,106 @@ class PTMApp(tk.Tk):
 
         def worker():
             try:
-                changed = self._sync_guide_if_needed()
+                with self._catalog_sync_lock:
+                    changed = self._sync_guide_if_needed()
                 self._catalog_events.put(("done", changed, None))
             except Exception as exc:
                 self._catalog_events.put(("done", False, exc))
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _show_catalog_refreshing_state(self):
+        """Oculta resultados viejos mientras Enter verifica el catálogo remoto."""
+        if not hasattr(self, "results_frame"):
+            return
+        for child in self.results_frame.winfo_children():
+            child.destroy()
+        self.results_scroll.pack_forget()
+        self.results_container.configure(height=1)
+        self.results_canvas.configure(height=1)
+        self.hint.configure(text="Actualizando catálogo...")
+
+    def _sync_guide_before_expanded_search_async(self):
+        """Enter/botón rojo: verificar remoto y recién después buscar."""
+        self._catalog_search_request_id += 1
+        request_id = self._catalog_search_request_id
+        query_snapshot = self.query.get()
+        self._catalog_search_inflight += 1
+
+        self.show_all_results = True
+        self._apply_search_layout(expanded=True)
+        self._show_catalog_refreshing_state()
+
+        def worker():
+            try:
+                # El lock evita que una comprobación por tecleo escriba el guide
+                # al mismo tiempo. Esta petición SIEMPRE hace su propia consulta
+                # remota después de obtener el turno.
+                with self._catalog_sync_lock:
+                    changed = self._sync_guide_if_needed()
+                self._catalog_events.put(
+                    ("search_done", changed, None, request_id, query_snapshot)
+                )
+            except Exception as exc:
+                self._catalog_events.put(
+                    ("search_done", False, exc, request_id, query_snapshot)
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _poll_catalog_events(self):
         try:
             while True:
-                _kind, changed, error = self._catalog_events.get_nowait()
-                self._catalog_meta_check_running = False
+                event = self._catalog_events.get_nowait()
+                kind = event[0]
 
-                if changed:
-                    self.reload_tools(local_only=True)
-                elif error is not None and hasattr(self, "hint"):
-                    # El buscador sigue usando la copia local si la consulta falla.
-                    pass
+                if kind == "done":
+                    _kind, changed, error = event
+                    self._catalog_meta_check_running = False
 
-                if self._catalog_meta_check_pending:
-                    self._catalog_meta_check_pending = False
-                    self._check_guide_on_search_async()
+                    if changed:
+                        self.reload_tools(
+                            local_only=True,
+                            refresh=(self._catalog_search_inflight == 0),
+                        )
+                    elif error is not None and hasattr(self, "hint"):
+                        # Mientras se escribe se conserva la copia local.
+                        pass
+
+                    if self._catalog_meta_check_pending:
+                        self._catalog_meta_check_pending = False
+                        self._check_guide_on_search_async()
+
+                elif kind == "search_done":
+                    _kind, changed, error, request_id, query_snapshot = event
+                    self._catalog_search_inflight = max(
+                        0, self._catalog_search_inflight - 1
+                    )
+
+                    if changed:
+                        # Actualizar self.tools sin dibujar todavía. La búsqueda
+                        # debe calcularse únicamente después de cargar el guide nuevo.
+                        self.reload_tools(local_only=True, refresh=False)
+
+                    # Solo la petición más reciente decide qué se muestra.
+                    if request_id != self._catalog_search_request_id:
+                        continue
+
+                    if error is not None:
+                        self._show_catalog_refreshing_state()
+                        self.hint.configure(
+                            text=(
+                                "No se pudo verificar el catálogo remoto. "
+                                "Vuelve a pulsar Enter."
+                            )
+                        )
+                        continue
+
+                    # Si el texto cambió mientras se consultaba, usar el texto
+                    # actual pero siempre contra el catálogo ya verificado.
+                    self.show_all_results = True
+                    self._apply_search_layout(expanded=True)
+                    self.refresh_results()
         except queue.Empty:
             pass
 
@@ -1214,10 +1299,9 @@ class PTMApp(tk.Tk):
         self.refresh_results()
 
     def _show_all_search_results(self, _event=None):
-        self._check_guide_on_search_async()
-        self.show_all_results = True
-        self._apply_search_layout(expanded=True)
-        self.refresh_results()
+        # Enter y el botón rojo nunca muestran resultados de una copia vieja:
+        # primero verifican guide_meta/guide y luego calculan coincidencias.
+        self._sync_guide_before_expanded_search_async()
         return "break"
 
     def refresh_results(self):
