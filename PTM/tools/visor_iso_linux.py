@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.5"
+TOOL_VERSION = "1.0.6"
 
 
 def human_size(n):
@@ -41,6 +41,28 @@ def search_terms(text):
 def matches_search(path, terms):
     name = str(path).casefold()
     return all(word in name for word in terms)
+
+
+def add_floating_version_badge(search_bar):
+    """Muestra la versión del visor en la esquina superior derecha.
+
+    Se superpone al área reservada del buscador, sin crear otra ventana
+    ni mover los botones de las herramientas.
+    """
+    badge = tk.Label(
+        search_bar,
+        text=f"v{TOOL_VERSION}",
+        bg="#075D79",
+        fg="#FFFFFF",
+        font=("Segoe UI", 9, "bold"),
+        padx=9,
+        pady=3,
+        bd=0,
+        relief="flat",
+    )
+    badge.place(relx=1.0, x=-8, y=0, anchor="ne")
+    badge.lift()
+    return badge
 
 
 def which(name):
@@ -287,8 +309,10 @@ class InitrdEditor(ttk.Frame):
         ttk.Button(bar, text="Guardar INITRD", command=self.save).pack(side="left", padx=12)
         self.info = ttk.Label(bar, text=""); self.info.pack(side="right")
 
-        search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
+        # Espacio a la derecha para la insignia flotante de versión.
+        search_bar = ttk.Frame(self, padding=(8, 0, 105, 6))
         search_bar.pack(fill="x")
+        self.version_badge = add_floating_version_badge(search_bar)
         ttk.Label(search_bar, text="Buscar en INITRD:").pack(side="left", padx=(0, 8))
         search_entry = ttk.Entry(search_bar, textvariable=self.search_var)
         search_entry.pack(side="left", fill="x", expand=True)
@@ -419,8 +443,10 @@ class FatEditor(ttk.Frame):
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
         self.path_var = tk.StringVar(value="/")
         ttk.Label(bar, textvariable=self.path_var).pack(side="left", padx=12)
-        search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
+        # Espacio a la derecha para la insignia flotante de versión.
+        search_bar = ttk.Frame(self, padding=(8, 0, 105, 6))
         search_bar.pack(fill="x")
+        self.version_badge = add_floating_version_badge(search_bar)
         ttk.Label(search_bar, text="Buscar en FAT:").pack(side="left", padx=(0, 8))
         search_entry = ttk.Entry(search_bar, textvariable=self.search_var)
         search_entry.pack(side="left", fill="x", expand=True)
@@ -633,8 +659,10 @@ class ISOEditor(ttk.Frame):
         ttk.Button(top, text="Abrir contenedor", command=self.open_container).pack(side="left", padx=3)
         ttk.Button(top, text="Guardar copia ISO", command=self.save_iso_copy).pack(side="left", padx=14)
 
-        search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
+        # Espacio a la derecha para la insignia flotante de versión.
+        search_bar = ttk.Frame(self, padding=(8, 0, 105, 6))
         search_bar.pack(fill="x")
+        self.version_badge = add_floating_version_badge(search_bar)
         ttk.Label(search_bar, text="Buscar en ISO:").pack(side="left", padx=(0, 8))
         search_entry = ttk.Entry(search_bar, textvariable=self.search_var)
         search_entry.pack(side="left", fill="x", expand=True)
