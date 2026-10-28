@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.22"
+APP_VERSION = "1.0.23"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:42"
+APP_UPDATE_TIME = "20:44"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -504,11 +504,26 @@ class PTMApp(tk.Tk):
         home.pack(side="left", padx=(0, 6))
         self.tab_widgets["home"] = home
 
+        processing_states = {"loading", "preparing"}
+        spinner_frames = ("◐", "◓", "◑", "◒")
+        spinner_index = int(getattr(self, "_tab_spinner_index", 0))
+        has_processing_tabs = False
+
         for key in self.open_tabs:
             meta = self.open_tabs[key]
+            is_processing = meta.get("state") in processing_states
+            if is_processing:
+                has_processing_tabs = True
+                tab_title = (
+                    f"{spinner_frames[spinner_index % len(spinner_frames)]} "
+                    f"{meta['name']}"
+                )
+            else:
+                tab_title = meta["name"]
+
             tab = TabButton(
                 self.tabs_holder,
-                meta["name"],
+                tab_title,
                 on_open=lambda k=key: self.switch_to_tool(k),
                 on_close=lambda k=key: self.close_tool_tab(k),
                 active=(self.current_key == key),
@@ -516,6 +531,26 @@ class PTMApp(tk.Tk):
             )
             tab.pack(side="left", padx=(0, 6))
             self.tab_widgets[key] = tab
+
+        # El spinner de la pestaña solo existe mientras haya trabajo activo.
+        if has_processing_tabs:
+            if not getattr(self, "_tab_spinner_scheduled", False):
+                self._tab_spinner_scheduled = True
+                self.after(140, self._animate_processing_tabs)
+
+    def _animate_processing_tabs(self):
+        self._tab_spinner_scheduled = False
+        processing_states = {"loading", "preparing"}
+        if not any(
+            meta.get("state") in processing_states
+            for meta in self.open_tabs.values()
+        ):
+            return
+
+        self._tab_spinner_index = (
+            int(getattr(self, "_tab_spinner_index", 0)) + 1
+        ) % 4
+        self._render_tabs()
 
     def _clear_content(self):
         if self.current_tool_widget is not None:
