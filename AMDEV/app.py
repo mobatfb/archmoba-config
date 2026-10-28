@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 import urllib.request
@@ -14,9 +15,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.11"
+APP_VERSION = "1.0.12"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "04:32"
+APP_UPDATE_TIME = "04:39"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -769,6 +770,171 @@ class AMDEVApp(tk.Tk):
             messagebox.showerror(APP_SHORT, f"No se pudo iniciar la aplicación:\n\n{exc}")
             self.status.configure(text=f"Error: {exc}")
 
+    # ---------- Actualizacion manual ----------
+    def update_amdev_now(self):
+        """Busca e instala una nueva version de AMDEV sin bloquear la interfaz."""
+        self.status.configure(text="Buscando actualización de AMDEV...")
+
+        def finish_info(message):
+            try:
+                self.status.configure(text=message)
+                messagebox.showinfo(
+                    APP_SHORT,
+                    message,
+                    parent=self,
+                )
+            except Exception:
+                pass
+
+        def finish_error(message):
+            try:
+                self.status.configure(text=message)
+                messagebox.showerror(
+                    APP_SHORT,
+                    message,
+                    parent=self,
+                )
+            except Exception:
+                pass
+
+        def worker():
+            try:
+                request = urllib.request.Request(
+                    SELF_CONFIG_API_URL,
+                    headers={
+                        "User-Agent": f"AMDEV/{APP_VERSION}",
+                        "Accept": "application/vnd.github+json",
+                        "Cache-Control": "no-cache",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=8) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+
+                encoded = str(payload.get("content", "")).replace("\n", "")
+                config = json.loads(
+                    base64.b64decode(encoded).decode("utf-8-sig")
+                )
+
+                remote_version = str(
+                    config.get("version", "")
+                ).strip()
+
+                if not remote_version:
+                    self.after(
+                        0,
+                        lambda: finish_error(
+                            "No se pudo determinar la versión publicada."
+                        ),
+                    )
+                    return
+
+                if (
+                    _version_tuple(remote_version)
+                    <= _version_tuple(APP_VERSION)
+                ):
+                    self.after(
+                        0,
+                        lambda: finish_info(
+                            f"AMDEV ya está actualizado · v{APP_VERSION}"
+                        ),
+                    )
+                    return
+
+                release_commit = str(
+                    config.get("release_commit", "")
+                ).strip()
+                app_path = str(
+                    config.get("app_path", "AMDEV/app.py")
+                ).strip().replace("\\", "/").lstrip("/")
+
+                if not re.fullmatch(
+                    r"[0-9a-fA-F]{40}",
+                    release_commit,
+                ):
+                    self.after(
+                        0,
+                        lambda: finish_error(
+                            "La actualización publicada no tiene "
+                            "un release_commit válido."
+                        ),
+                    )
+                    return
+
+                self.after(
+                    0,
+                    lambda: self.status.configure(
+                        text=(
+                            f"Descargando AMDEV v{remote_version}..."
+                        )
+                    ),
+                )
+
+                url = (
+                    f"{REPO_RAW_ROOT}/{release_commit}/"
+                    f"{app_path}?v={time.time_ns()}"
+                )
+                source_request = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": f"AMDEV/{APP_VERSION}",
+                        "Cache-Control": "no-cache",
+                    },
+                )
+                with urllib.request.urlopen(
+                    source_request,
+                    timeout=15,
+                ) as response:
+                    source = response.read().decode("utf-8-sig")
+
+                match = re.search(
+                    r'''APP_VERSION\s*=\s*["']([^"']+)["']''',
+                    source,
+                )
+                if (
+                    not match
+                    or match.group(1).strip() != remote_version
+                ):
+                    self.after(
+                        0,
+                        lambda: finish_error(
+                            "La versión descargada no coincide con "
+                            "la versión publicada."
+                        ),
+                    )
+                    return
+
+                compile(source, "AMDEV/app.py", "exec")
+
+                current = Path(__file__).resolve()
+                temp = current.with_suffix(
+                    current.suffix + ".update"
+                )
+                temp.write_text(source, encoding="utf-8")
+                os.replace(temp, current)
+
+                subprocess.Popen(
+                    [
+                        _windowless_python(),
+                        str(current),
+                        *sys.argv[1:],
+                    ],
+                    cwd=str(current.parent),
+                )
+
+                self.after(0, self.exit_app)
+
+            except Exception as exc:
+                message = f"No se pudo actualizar AMDEV:\n\n{exc}"
+                self.after(
+                    0,
+                    lambda m=message: finish_error(m),
+                )
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+        ).start()
+
     # ---------- Consola opcional ----------
     def _console_hwnd(self):
         if os.name != "nt":
@@ -949,6 +1115,7 @@ class AMDEVApp(tk.Tk):
 
         menu.add_separator()
         menu.add_command(label="Recargar aplicaciones", command=self.load_apps)
+        menu.add_command(label="Actualizar AMDEV", command=self.update_amdev_now)
         menu.add_command(label="Abrir AMDEV", command=self.show_main)
 
         console_label = (
