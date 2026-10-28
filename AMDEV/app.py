@@ -11,9 +11,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:05"
+APP_UPDATE_TIME = "19:09"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main"
 APPS_URL = f"{REPO_RAW_BASE}/apps.json"
@@ -126,7 +126,7 @@ class FloatingAMDEV(tk.Toplevel):
         if self._loading:
             return
         self._loading = True
-        self._loading_step = -32
+        self._loading_step = -56
         self._animate_loading_sweep()
 
     def _animate_loading_sweep(self):
@@ -136,27 +136,45 @@ class FloatingAMDEV(tk.Toplevel):
         self._draw()
 
         x = self._loading_step
-        band_w = 34
 
-        # Barrido luminoso diagonal de izquierda a derecha.
+        # Halo exterior: ancho y muy visible.
         self.canvas.create_polygon(
-            x, 2,
-            x + band_w, 2,
-            x + band_w - 12, self.h - 2,
-            x - 12, self.h - 2,
-            fill="#6FC9E8",
-            outline="",
-        )
-        self.canvas.create_polygon(
-            x + 8, 2,
-            x + band_w - 7, 2,
-            x + band_w - 19, self.h - 2,
-            x - 4, self.h - 2,
-            fill="#DDF7FF",
+            x - 28, 2,
+            x + 42, 2,
+            x + 18, self.h - 2,
+            x - 52, self.h - 2,
+            fill="#2E9FC8",
             outline="",
         )
 
-        # Redibujar texto encima del brillo.
+        # Segundo halo más claro.
+        self.canvas.create_polygon(
+            x - 14, 2,
+            x + 30, 2,
+            x + 8, self.h - 2,
+            x - 36, self.h - 2,
+            fill="#79D9F5",
+            outline="",
+        )
+
+        # Núcleo blanco de la luz.
+        self.canvas.create_polygon(
+            x - 3, 2,
+            x + 14, 2,
+            x - 6, self.h - 2,
+            x - 23, self.h - 2,
+            fill="#F4FDFF",
+            outline="",
+        )
+
+        # Borde de carga para reforzar visualmente el efecto.
+        self.canvas.create_rectangle(
+            2, 2, self.w - 2, self.h - 2,
+            outline="#8DE8FF",
+            width=2,
+        )
+
+        # Redibujar identidad por encima del barrido.
         self.canvas.create_text(
             self.w / 2, 20,
             text=APP_SHORT,
@@ -172,13 +190,18 @@ class FloatingAMDEV(tk.Toplevel):
             font=("Segoe UI", 6, "bold"),
         )
 
-        self._loading_step += 14
-        if self._loading_step <= self.w + 32:
-            self.after(28, self._animate_loading_sweep)
+        # Forzar el refresco para que cada cuadro sea visible.
+        self.canvas.update_idletasks()
+        self.update_idletasks()
+
+        self._loading_step += 7
+        if self._loading_step <= self.w + 56:
+            self.after(38, self._animate_loading_sweep)
         else:
             self._loading = False
             self._draw()
-            self.after(40, self.app.run_selected_app)
+            self.canvas.update_idletasks()
+            self.after(90, self.app.run_selected_app)
 
     def _menu(self, _event):
         self.app.show_app_menu(self.winfo_pointerx(), self.winfo_pointery())
