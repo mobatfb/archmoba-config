@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.7"
+TOOL_VERSION = "2.0.8"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -347,6 +347,7 @@ class WebViewerTool(ttk.Frame):
         self._input_threads_attached = False
         self._ptm_input_tid = 0
         self._web_input_tid = 0
+        self._web_keyboard_mode = False
 
         self._token = secrets.token_hex(8)
         self._child_title = "PTM_WEBVIEW_" + self._token
@@ -358,6 +359,7 @@ class WebViewerTool(ttk.Frame):
 
         self._build_ui()
         self.after(80, self._poll_ipc)
+        self.after(120, self._poll_keyboard_target)
         self.after(180, self._start_browser_process)
 
     # ---------- Estado ----------
@@ -1112,7 +1114,6 @@ class WebViewerTool(ttk.Frame):
                 }
             )
             self.after(160, self._refresh_webview_focus_hwnd)
-            self.after(220, self._attach_input_threads)
 
         except Exception as exc:
             self._show_browser_error(
@@ -1267,12 +1268,15 @@ class WebViewerTool(ttk.Frame):
             self._web_input_tid = 0
 
     def _refresh_input_threads(self):
-        """Reenlaza el input si Chromium recreó su HWND al navegar."""
+        """Reenlaza el input si Chromium recreó su HWND mientras usa teclado web."""
         if not self._embedded:
             return
 
         old_tid = int(self._web_input_tid or 0)
         self._refresh_webview_focus_hwnd()
+
+        if not self._web_keyboard_mode:
+            return
 
         try:
             user32, _get_long, _set_long = self._win_api()
@@ -1297,6 +1301,103 @@ class WebViewerTool(ttk.Frame):
         ):
             self._detach_input_threads()
             self._attach_input_threads()
+
+    def _poll_keyboard_target(self):
+        """
+        Clic dentro del WebView: enlaza el teclado al proceso web.
+        Clic fuera del WebView: lo libera y devuelve el foco a Tkinter.
+        """
+        if not self._alive:
+            return
+
+        try:
+            if os.name == "nt":
+                user32 = ctypes.windll.user32
+                down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)
+
+                if down and not self._last_left_button_down:
+                    class POINT(ctypes.Structure):
+                        _fields_ = [
+                            ("x", ctypes.c_long),
+                            ("y", ctypes.c_long),
+                        ]
+
+                    point = POINT()
+                    if user32.GetCursorPos(ctypes.byref(point)):
+                        inside_web = False
+
+                        if self._embedded:
+                            try:
+                                x0 = int(self.browser_host.winfo_rootx())
+                                y0 = int(self.browser_host.winfo_rooty())
+                                x1 = x0 + int(self.browser_host.winfo_width())
+                                y1 = y0 + int(self.browser_host.winfo_height())
+                                inside_web = (
+                                    x0 <= point.x < x1
+                                    and y0 <= point.y < y1
+                                )
+                            except tk.TclError:
+                                inside_web = False
+
+                        if inside_web:
+                            self._web_keyboard_mode = True
+                            self._refresh_input_threads()
+                            # Refuerzo únicamente tras un clic real en la web.
+                            self._send({"cmd": "focus"})
+                        else:
+                            if (
+                                self._web_keyboard_mode
+                                or self._input_threads_attached
+                            ):
+                                self._web_keyboard_mode = False
+                                self._detach_input_threads()
+
+                            # Si el clic fue sobre un input Tkinter, devolverle
+                            # explícitamente el foco después de liberar WebView2.
+                            self._restore_tk_input_focus(point.x, point.y)
+
+                self._last_left_button_down = down
+        except Exception:
+            pass
+
+        try:
+            self.after(30, self._poll_keyboard_target)
+        except tk.TclError:
+            pass
+
+    def _restore_tk_input_focus(self, root_x, root_y):
+        try:
+            top = self.winfo_toplevel()
+            widget = top.winfo_containing(int(root_x), int(root_y))
+        except Exception:
+            widget = None
+
+        if widget is None:
+            return
+
+        input_types = (
+            tk.Entry,
+            tk.Text,
+            tk.Spinbox,
+            ttk.Entry,
+            ttk.Combobox,
+            ttk.Spinbox,
+        )
+
+        if not isinstance(widget, input_types):
+            return
+
+        def apply_focus(w=widget):
+            try:
+                if w.winfo_exists():
+                    w.focus_set()
+            except Exception:
+                pass
+
+        try:
+            self.after_idle(apply_focus)
+        except tk.TclError:
+            pass
 
     # ---------- Navegación ----------
     def _normalize_address(self, raw):
@@ -1550,17 +1651,21 @@ class WebViewerTool(ttk.Frame):
 
     # ---------- Ciclo PTM ----------
     def on_show(self):
+        self._web_keyboard_mode = False
+        self._detach_input_threads()
         self._set_embedded_visible(True)
         self.after(25, lambda: self._resize_embedded(force=True))
-        self.after(100, self._refresh_input_threads)
+        self.after(100, self._refresh_webview_focus_hwnd)
 
     def on_hide(self):
+        self._web_keyboard_mode = False
         self._detach_input_threads()
         self._set_embedded_visible(False)
         self._save_state()
 
     def on_close(self):
         self._alive = False
+        self._web_keyboard_mode = False
         self._detach_input_threads()
         self._save_state()
         self._stop_browser()
