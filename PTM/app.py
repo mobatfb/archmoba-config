@@ -23,15 +23,18 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.16"
+APP_VERSION = "1.0.17"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:05"
+APP_UPDATE_TIME = "20:10"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
 REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
+GUIDE_API_URL = (
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/guide.csv?ref=main"
+)
 SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
 SELF_CONFIG_API_URL = (
     f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/config.json?ref=main"
@@ -377,6 +380,7 @@ class PTMApp(tk.Tk):
         self.current_tool_module = None
         self._tool_download_events = queue.Queue()
         self._failed_download_keys = set()
+        self._last_catalog_refresh = 0.0
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
@@ -389,6 +393,7 @@ class PTMApp(tk.Tk):
         self.floating = FloatingPTM(self)
         self.bind("<Escape>", lambda _e: self.hide_main())
         self.after(100, self._poll_tool_download_events)
+        self.after(8000, self._auto_refresh_catalog)
 
     # ---------- Ventana / proporción ----------
     def _apply_responsive_geometry(self):
@@ -872,33 +877,76 @@ class PTMApp(tk.Tk):
                 ).lower(),
             })
 
+        self._last_catalog_refresh = time.monotonic()
+
         if hasattr(self, "results_frame") and self.results_frame.winfo_exists():
             self.refresh_results()
 
+    def _auto_refresh_catalog(self):
+        """Refresca el catálogo periódicamente para detectar nuevas herramientas."""
+        try:
+            self.reload_tools()
+        except Exception:
+            pass
+        finally:
+            try:
+                self.after(8000, self._auto_refresh_catalog)
+            except tk.TclError:
+                pass
+
     def _load_guide_rows(self):
-        """Descarga guide.csv de GitHub y usa la copia local solo como respaldo."""
+        """Obtiene guide.csv desde el HEAD actual de main; RAW/local son respaldo."""
         text = None
         remote_error = None
 
+        # 1) API de GitHub: refleja el HEAD de main más rápido que RAW/CDN.
         try:
             request = urllib.request.Request(
-                f"{GUIDE_URL}?v={time.time_ns()}",
+                GUIDE_API_URL,
                 headers={
-                    "User-Agent": "PTM/1.0",
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Accept": "application/vnd.github+json",
                     "Cache-Control": "no-cache",
                 },
             )
-            with urllib.request.urlopen(request, timeout=12) as response:
-                text = response.read().decode("utf-8-sig")
-            self.guide_path.write_text(text, encoding="utf-8")
+            with urllib.request.urlopen(request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+
+            encoded = str(payload.get("content", "")).replace("\n", "")
+            if encoded:
+                text = base64.b64decode(encoded).decode("utf-8-sig")
         except Exception as exc:
             remote_error = exc
 
+        # 2) Respaldo RAW.
+        if text is None:
+            try:
+                request = urllib.request.Request(
+                    f"{GUIDE_URL}?v={time.time_ns()}",
+                    headers={
+                        "User-Agent": f"PTM/{APP_VERSION}",
+                        "Cache-Control": "no-cache",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=8) as response:
+                    text = response.read().decode("utf-8-sig")
+            except Exception as exc:
+                remote_error = exc
+
+        if text is not None:
+            try:
+                self.guide_path.write_text(text, encoding="utf-8")
+            except Exception:
+                pass
+
+        # 3) Último respaldo: copia local.
         if text is None:
             if self.guide_path.is_file():
                 text = self.guide_path.read_text(encoding="utf-8-sig")
             else:
-                raise RuntimeError(f"GitHub no respondió y no existe copia local ({remote_error})")
+                raise RuntimeError(
+                    f"GitHub no respondió y no existe copia local ({remote_error})"
+                )
 
         reader = csv.DictReader(io.StringIO(text), delimiter=";")
         if not reader.fieldnames or "ruta" not in reader.fieldnames:
