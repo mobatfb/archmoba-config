@@ -3735,7 +3735,7 @@ class EnterGame:
         self.root.destroy()
 
 
-def create_tool(parent, app):
+def App(parent, app):
     """Monta ENTER dentro de una pestaña de PTM."""
     enable_windows_dpi_awareness()
     configure_display(parent)
