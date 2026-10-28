@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.19"
+APP_VERSION = "1.0.20"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:21"
+APP_UPDATE_TIME = "20:34"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1774,15 +1774,74 @@ class PTMApp(tk.Tk):
                         "--prefer-binary",
                         install_package,
                     ]
-                    result = subprocess.run(
+                    process = subprocess.Popen(
                         cmd,
-                        capture_output=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
                         text=True,
-                        timeout=300,
+                        bufsize=1,
+                        universal_newlines=True,
+                        creationflags=(
+                            subprocess.CREATE_NO_WINDOW
+                            if os.name == "nt"
+                            else 0
+                        ),
                     )
 
-                    if result.returncode != 0:
-                        detail = (result.stderr or result.stdout or "").strip()
+                    started_at = time.monotonic()
+                    output_tail = []
+
+                    while True:
+                        line = process.stdout.readline() if process.stdout else ""
+                        if line:
+                            clean = line.strip()
+                            if clean:
+                                output_tail.append(clean)
+                                if len(output_tail) > 40:
+                                    output_tail = output_tail[-40:]
+
+                                elapsed = int(time.monotonic() - started_at)
+                                compact = clean
+                                if len(compact) > 105:
+                                    compact = compact[:102] + "..."
+
+                                self._dependency_events.put(
+                                    (
+                                        "status",
+                                        key,
+                                        tool,
+                                        f"Instalando {install_package}... "
+                                        f"{elapsed}s\n{compact}",
+                                        None,
+                                    )
+                                )
+
+                        if process.poll() is not None:
+                            if process.stdout:
+                                remainder = process.stdout.read()
+                                if remainder:
+                                    for extra in remainder.splitlines():
+                                        extra = extra.strip()
+                                        if extra:
+                                            output_tail.append(extra)
+                                output_tail = output_tail[-40:]
+                            break
+
+                        # Un paquete pesado puede tardar bastante, pero no debe
+                        # quedarse indefinidamente. Se permite hasta 15 minutos.
+                        if time.monotonic() - started_at > 900:
+                            process.kill()
+                            try:
+                                process.wait(timeout=5)
+                            except Exception:
+                                pass
+                            raise TimeoutError(
+                                f"La instalación de {install_package} superó "
+                                "los 15 minutos."
+                            )
+
+                    if process.returncode != 0:
+                        detail = "\n".join(output_tail).strip()
                         if len(detail) > 1800:
                             detail = detail[-1800:]
 
