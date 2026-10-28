@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import urllib.error
 import urllib.request
 import unicodedata
@@ -25,9 +26,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.37"
+APP_VERSION = "1.0.38"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:20"
+APP_UPDATE_TIME = "22:24"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -661,16 +662,27 @@ class PTMApp(tk.Tk):
             child.destroy()
         self.tab_widgets.clear()
 
-        keys = ["home"] + list(self.open_tabs.keys())
         available = max(520, self.winfo_width() - 70)
-        tab_width = max(90, min(130, available // max(1, len(keys))))
+
+        # La pestaña inicial se ajusta al contenido "PTM" en lugar de ocupar
+        # el mismo ancho que las herramientas.
+        home_font = tkfont.Font(family="Segoe UI", size=9, weight="bold")
+        home_width = max(58, home_font.measure("PTM") + 34)
+
+        tool_count = len(self.open_tabs)
+        tools_available = max(90, available - home_width - 6)
+        tab_width = (
+            max(90, min(130, tools_available // tool_count))
+            if tool_count
+            else 90
+        )
 
         home = TabButton(
             self.tabs_holder,
             "PTM",
             on_open=self.show_home,
             active=(self.current_key == "home"),
-            width=tab_width,
+            width=home_width,
         )
         home.pack(side="left", padx=(0, 6))
         self.tab_widgets["home"] = home
