@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 APP_NAME = "PYRION"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -155,8 +155,10 @@ class PyrionApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("640x360")
         self.configure(bg="#101218")
+
+        # PYRION ocupa toda la pantalla desde el arranque.
+        self.attributes("-fullscreen", True)
 
         tk.Label(
             self,
