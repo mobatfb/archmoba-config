@@ -2687,6 +2687,16 @@ class PTMApp(tk.Tk):
         if lower == "pygame" and sys.version_info >= (3, 14):
             return "pygame-ce"
 
+        # pywebview necesita que Linux elija backend. Qt puede instalarse
+        # completamente por pip y es el backend preferido para MiniLinux.
+        if lower == "pywebview" and os.name != "nt":
+            match = re.match(
+                r"(?i)^pywebview(.*)$",
+                raw,
+            )
+            suffix = match.group(1) if match else ""
+            return f"pywebview[qt]{suffix}"
+
         return raw
 
     def _dependency_satisfied(self, package_spec):
