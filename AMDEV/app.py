@@ -16,9 +16,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.15"
+APP_VERSION = "1.0.16"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "05:08"
+APP_UPDATE_TIME = "05:35"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -88,20 +88,41 @@ def _version_tuple(value):
 
 
 def _fetch_self_release():
-    """Devuelve (config, source) de la version publicada y valida el release."""
-    request = urllib.request.Request(
-        SELF_CONFIG_API_URL,
-        headers={
-            "User-Agent": f"AMDEV/{APP_VERSION}",
-            "Accept": "application/vnd.github+json",
-            "Cache-Control": "no-cache",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=8) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    """Lee config y app.py evitando depender del rate limit de GitHub API."""
+    config = None
 
-    encoded = str(payload.get("content", "")).replace("\n", "")
-    config = json.loads(base64.b64decode(encoded).decode("utf-8-sig"))
+    # RAW primero: las consultas publicas de AMDEV no necesitan consumir
+    # el limite de 60 peticiones/hora de la API sin autenticar.
+    try:
+        request = urllib.request.Request(
+            f"{REPO_RAW_BASE}/config.json?v={time.time_ns()}",
+            headers={
+                "User-Agent": f"AMDEV/{APP_VERSION}",
+                "Cache-Control": "no-cache",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            config = json.loads(response.read().decode("utf-8-sig"))
+    except Exception:
+        config = None
+
+    # API solo como respaldo.
+    if config is None:
+        request = urllib.request.Request(
+            SELF_CONFIG_API_URL,
+            headers={
+                "User-Agent": f"AMDEV/{APP_VERSION}",
+                "Accept": "application/vnd.github+json",
+                "Cache-Control": "no-cache",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        encoded = str(payload.get("content", "")).replace("\n", "")
+        config = json.loads(
+            base64.b64decode(encoded).decode("utf-8-sig")
+        )
 
     remote_version = str(config.get("version", "")).strip()
     release_commit = str(config.get("release_commit", "")).strip()
@@ -585,27 +606,34 @@ class AMDEVApp(tk.Tk):
             return response.read().decode("utf-8-sig")
 
     def _request_repo_file_main(self, repo_path, timeout=12):
-        """Lee un archivo del HEAD de main vía GitHub API; RAW queda como respaldo."""
+        """Lee HEAD de main: RAW primero y API como respaldo."""
         clean = str(repo_path).strip().replace("\\", "/").lstrip("/")
+
+        try:
+            return self._request_text(
+                f"{REPO_RAW_BASE}/{clean}",
+                timeout=timeout,
+            )
+        except Exception:
+            pass
+
         api_url = (
             f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
             f"{clean}?ref=main"
         )
-        try:
-            request = urllib.request.Request(
-                api_url,
-                headers={
-                    "User-Agent": f"AMDEV/{APP_VERSION}",
-                    "Accept": "application/vnd.github+json",
-                    "Cache-Control": "no-cache",
-                },
-            )
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            encoded = str(payload.get("content", "")).replace("\n", "")
-            return base64.b64decode(encoded).decode("utf-8-sig")
-        except Exception:
-            return self._request_text(f"{REPO_RAW_BASE}/{clean}", timeout=timeout)
+        request = urllib.request.Request(
+            api_url,
+            headers={
+                "User-Agent": f"AMDEV/{APP_VERSION}",
+                "Accept": "application/vnd.github+json",
+                "Cache-Control": "no-cache",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        encoded = str(payload.get("content", "")).replace("\n", "")
+        return base64.b64decode(encoded).decode("utf-8-sig")
 
     def load_apps(self):
         for child in self.list_frame.winfo_children():
@@ -724,8 +752,107 @@ class AMDEVApp(tk.Tk):
         except Exception:
             return False
 
+    def _find_linux_script_pids(self, script_path):
+        """Busca procesos Python que ejecuten exactamente este app.py."""
+        if os.name == "nt":
+            return []
+
+        try:
+            target = str(Path(script_path).resolve())
+        except Exception:
+            target = str(script_path)
+
+        found = []
+        proc_root = Path("/proc")
+        if not proc_root.is_dir():
+            return found
+
+        current_pid = os.getpid()
+
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+
+            try:
+                pid = int(entry.name)
+            except ValueError:
+                continue
+
+            if pid <= 1 or pid == current_pid:
+                continue
+
+            try:
+                raw = (entry / "cmdline").read_bytes()
+                if not raw:
+                    continue
+
+                args = [
+                    part.decode("utf-8", errors="replace")
+                    for part in raw.split(b"\0")
+                    if part
+                ]
+            except Exception:
+                continue
+
+            matched = False
+            for arg in args[1:]:
+                try:
+                    candidate = str(Path(arg).resolve())
+                except Exception:
+                    candidate = arg
+
+                if candidate == target:
+                    matched = True
+                    break
+
+            if matched:
+                found.append(pid)
+
+        return found
+
+    def _stop_linux_script_instances(self, local_app):
+        """Cierra instancias ocultas que un process.pid antiguo no puede localizar."""
+        if os.name == "nt":
+            return
+
+        pids = self._find_linux_script_pids(local_app)
+        if not pids:
+            return
+
+        for pid in pids:
+            try:
+                os.kill(pid, 15)
+            except OSError:
+                pass
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            alive = [
+                pid for pid in pids
+                if self._pid_is_alive(pid)
+            ]
+            if not alive:
+                return
+            time.sleep(0.08)
+
+        for pid in pids:
+            if self._pid_is_alive(pid):
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
+
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if not any(self._pid_is_alive(pid) for pid in pids):
+                break
+            time.sleep(0.05)
+
     def _stop_cached_app_processes(self, app_id, local_app):
         """Cierra la instancia anterior y espera a que libere recursos."""
+
+        if os.name != "nt":
+            self._stop_linux_script_instances(local_app)
 
         previous = self.running_processes.get(app_id)
         if previous is not None and previous.poll() is None:
