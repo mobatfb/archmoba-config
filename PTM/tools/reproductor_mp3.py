@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.2"
+TOOL_VERSION = "2.0.3"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -34,9 +34,6 @@ class Mp3PlayerTool(ttk.Frame):
         self.finished_guard = False
         self.cover_photo = None
         self._save_job = None
-        self._resize_job = None
-        self._current_cover_size = 180
-        self._cover_source = None
 
         self.title_var = tk.StringVar(value="Sin reproduccion")
         self.artist_var = tk.StringVar(value="Selecciona o agrega canciones")
@@ -49,8 +46,6 @@ class Mp3PlayerTool(ttk.Frame):
 
         self.state_path = self._state_file()
         self._build_ui()
-        self.bind("<Configure>", self._on_resize)
-        self.after(100, self._apply_responsive_layout)
         self._init_drag_drop()
         self._init_backends()
         self._load_state()
@@ -139,13 +134,11 @@ class Mp3PlayerTool(ttk.Frame):
             row=0, column=1, sticky="e"
         )
 
-        self.body = ttk.Panedwindow(self, orient="horizontal")
-        self.body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 4))
-        body = self.body
+        body = ttk.Panedwindow(self, orient="horizontal")
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 6))
 
         # Biblioteca / playlist
-        self.left_panel = ttk.Frame(body, padding=6)
-        left = self.left_panel
+        left = ttk.Frame(body, padding=6)
         body.add(left, weight=2)
         left.columnconfigure(0, weight=1)
         left.rowconfigure(4, weight=1)
@@ -154,27 +147,16 @@ class Mp3PlayerTool(ttk.Frame):
             left, text="Lista de reproduccion", font=("Segoe UI", 11, "bold")
         ).grid(row=0, column=0, sticky="w")
 
-        self.actions = ttk.Frame(left)
-        self.actions.grid(row=1, column=0, sticky="ew", pady=(6, 5))
-        for col in range(4):
-            self.actions.columnconfigure(col, weight=1, uniform="actions")
-        self.add_files_btn = ttk.Button(
-            self.actions, text="+ Archivos", command=self.add_files
+        actions = ttk.Frame(left)
+        actions.grid(row=1, column=0, sticky="ew", pady=(6, 5))
+        ttk.Button(actions, text="+ Archivos", command=self.add_files).pack(side="left")
+        ttk.Button(actions, text="+ Carpeta", command=self.add_folder).pack(
+            side="left", padx=5
         )
-        self.add_folder_btn = ttk.Button(
-            self.actions, text="+ Carpeta", command=self.add_folder
+        ttk.Button(actions, text="Quitar", command=self.remove_selected).pack(side="left")
+        ttk.Button(actions, text="Limpiar", command=self.clear_playlist).pack(
+            side="left", padx=5
         )
-        self.remove_btn = ttk.Button(
-            self.actions, text="Quitar", command=self.remove_selected
-        )
-        self.clear_btn = ttk.Button(
-            self.actions, text="Limpiar", command=self.clear_playlist
-        )
-        for col, btn in enumerate((
-            self.add_files_btn, self.add_folder_btn,
-            self.remove_btn, self.clear_btn
-        )):
-            btn.grid(row=0, column=col, sticky="ew", padx=2)
 
         self.drop_hint = ttk.Label(
             left,
@@ -208,8 +190,7 @@ class Mp3PlayerTool(ttk.Frame):
         self.listbox.bind("<Return>", self._open_selected)
 
         # Reproductor compacto y responsivo para la altura real de una pestaña PTM.
-        self.right_panel = ttk.Frame(body, padding=(10, 2))
-        right = self.right_panel
+        right = ttk.Frame(body, padding=(14, 4))
         body.add(right, weight=3)
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
@@ -218,11 +199,11 @@ class Mp3PlayerTool(ttk.Frame):
         player.grid(row=0, column=0, sticky="nsew")
         player.columnconfigure(0, weight=1)
 
-        self.cover_shell = ttk.Frame(player, width=180, height=180)
-        self.cover_shell.grid(row=0, column=0, pady=(0, 8))
-        self.cover_shell.grid_propagate(False)
+        cover_shell = ttk.Frame(player, width=180, height=180)
+        cover_shell.grid(row=0, column=0, pady=(0, 8))
+        cover_shell.grid_propagate(False)
         self.cover_label = tk.Label(
-            self.cover_shell,
+            cover_shell,
             text="♫",
             font=("Segoe UI Symbol", 48),
             bg="#20252B",
@@ -231,25 +212,22 @@ class Mp3PlayerTool(ttk.Frame):
         )
         self.cover_label.place(relx=0, rely=0, relwidth=1, relheight=1)
 
-        self.track_title_label = ttk.Label(
+        ttk.Label(
             player,
             textvariable=self.title_var,
             style="TrackTitle.TLabel",
             anchor="center",
             wraplength=430,
-        )
-        self.track_title_label.grid(row=1, column=0, sticky="ew")
-        self.artist_label = ttk.Label(
+        ).grid(row=1, column=0, sticky="ew")
+        ttk.Label(
             player, textvariable=self.artist_var, anchor="center"
-        )
-        self.artist_label.grid(row=2, column=0, sticky="ew", pady=(2, 0))
-        self.album_label = ttk.Label(
+        ).grid(row=2, column=0, sticky="ew", pady=(2, 0))
+        ttk.Label(
             player,
             textvariable=self.album_var,
             style="Muted.TLabel",
             anchor="center",
-        )
-        self.album_label.grid(row=3, column=0, sticky="ew", pady=(1, 6))
+        ).grid(row=3, column=0, sticky="ew", pady=(1, 6))
 
         progress_row = ttk.Frame(player)
         progress_row.grid(row=4, column=0, sticky="ew")
@@ -268,30 +246,21 @@ class Mp3PlayerTool(ttk.Frame):
             progress_row, textvariable=self.time_var, width=12, anchor="e"
         ).grid(row=0, column=1, padx=(8, 0))
 
-        self.controls = ttk.Frame(player)
-        self.controls.grid(row=5, column=0, sticky="ew", pady=(6, 5))
-        for col in range(4):
-            self.controls.columnconfigure(col, weight=1, uniform="transport")
-        self.prev_btn = ttk.Button(
-            self.controls, text="⏮", style="Transport.TButton",
-            command=self.previous_track
-        )
+        controls = ttk.Frame(player)
+        controls.grid(row=5, column=0, pady=(6, 5))
+        ttk.Button(
+            controls, text="⏮", style="Transport.TButton", command=self.previous_track
+        ).grid(row=0, column=0, padx=3)
         self.play_btn = ttk.Button(
-            self.controls, text="▶", style="Transport.TButton",
-            command=self.play_pause
+            controls, text="▶", style="Transport.TButton", command=self.play_pause
         )
-        self.stop_btn = ttk.Button(
-            self.controls, text="⏹", style="Transport.TButton",
-            command=self.stop
-        )
-        self.next_btn = ttk.Button(
-            self.controls, text="⏭", style="Transport.TButton",
-            command=self.next_track
-        )
-        for col, btn in enumerate((
-            self.prev_btn, self.play_btn, self.stop_btn, self.next_btn
-        )):
-            btn.grid(row=0, column=col, sticky="ew", padx=2)
+        self.play_btn.grid(row=0, column=1, padx=3)
+        ttk.Button(
+            controls, text="⏹", style="Transport.TButton", command=self.stop
+        ).grid(row=0, column=2, padx=3)
+        ttk.Button(
+            controls, text="⏭", style="Transport.TButton", command=self.next_track
+        ).grid(row=0, column=3, padx=3)
 
         volume_row = ttk.Frame(player)
         volume_row.grid(row=6, column=0, sticky="ew", pady=(0, 2))
@@ -309,134 +278,13 @@ class Mp3PlayerTool(ttk.Frame):
         )
         self.volume_label.grid(row=0, column=2, padx=(7, 0))
 
-        self.status_label = ttk.Label(
+        ttk.Label(
             player,
             textvariable=self.status_var,
             style="Muted.TLabel",
             anchor="center",
             wraplength=480,
-        )
-        self.status_label.grid(row=7, column=0, sticky="ew", pady=(3, 0))
-
-    def _on_resize(self, _event=None):
-        if self._resize_job is not None:
-            try:
-                self.after_cancel(self._resize_job)
-            except Exception:
-                pass
-        self._resize_job = self.after(60, self._apply_responsive_layout)
-
-    def _apply_responsive_layout(self):
-        """Escala y reorganiza la interfaz segun el espacio real disponible."""
-        try:
-            width = max(1, self.winfo_width())
-            height = max(1, self.winfo_height())
-            left_width = max(1, self.left_panel.winfo_width())
-
-            if width < 720 or height < 430:
-                mode = "compact"
-                cover = max(85, min(115, int(height * 0.25)))
-                title_size = 10
-                player_title_size = 14
-                transport_pad = (4, 1)
-            elif width < 920 or height < 560:
-                mode = "medium"
-                cover = max(110, min(150, int(height * 0.30)))
-                title_size = 12
-                player_title_size = 16
-                transport_pad = (6, 2)
-            else:
-                mode = "normal"
-                cover = max(150, min(190, int(height * 0.33)))
-                title_size = 14
-                player_title_size = 17
-                transport_pad = (9, 4)
-
-            style = ttk.Style(self)
-            style.configure(
-                "PlayerTitle.TLabel",
-                font=("Segoe UI", player_title_size, "bold"),
-            )
-            style.configure(
-                "TrackTitle.TLabel",
-                font=("Segoe UI", title_size, "bold"),
-            )
-            style.configure(
-                "Transport.TButton",
-                font=("Segoe UI Symbol", 10 if mode == "compact" else 11),
-                padding=transport_pad,
-            )
-
-            # Portada proporcional a la altura.
-            self._current_cover_size = cover
-            self.cover_shell.configure(width=cover, height=cover)
-            self.cover_label.configure(
-                font=("Segoe UI Symbol", max(24, int(cover * 0.27)))
-            )
-
-            # Reparto real del PanedWindow para evitar recortes horizontales.
-            try:
-                total = max(1, self.body.winfo_width())
-                ratio = 0.34 if mode == "compact" else 0.36
-                self.body.sashpos(0, max(155, int(total * ratio)))
-            except Exception:
-                pass
-
-            # Los botones de biblioteca pasan a 2 filas si la columna izquierda
-            # queda angosta; en ancho suficiente vuelven a una sola fila.
-            buttons = (
-                self.add_files_btn, self.add_folder_btn,
-                self.remove_btn, self.clear_btn
-            )
-            for btn in buttons:
-                btn.grid_forget()
-
-            left_width = max(1, self.left_panel.winfo_width())
-            if left_width < 285:
-                for col in range(2):
-                    self.actions.columnconfigure(col, weight=1, uniform="actions")
-                self.add_files_btn.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
-                self.add_folder_btn.grid(row=0, column=1, sticky="ew", padx=2, pady=2)
-                self.remove_btn.grid(row=1, column=0, sticky="ew", padx=2, pady=2)
-                self.clear_btn.grid(row=1, column=1, sticky="ew", padx=2, pady=2)
-            else:
-                for col, btn in enumerate(buttons):
-                    self.actions.columnconfigure(col, weight=1, uniform="actions")
-                    btn.grid(row=0, column=col, sticky="ew", padx=2)
-
-            right_width = max(1, self.right_panel.winfo_width())
-            wrap = max(150, right_width - 24)
-            self.track_title_label.configure(wraplength=wrap)
-            self.artist_label.configure(wraplength=wrap)
-            self.album_label.configure(wraplength=wrap)
-            self.status_label.configure(wraplength=wrap)
-
-            # Redibuja la portada con la nueva escala.
-            if self._cover_source:
-                source = self._cover_source
-                self._render_cover(source)
-
-            self._resize_job = None
-        except tk.TclError:
-            return
-
-    def _render_cover(self, data):
-        self.cover_photo = None
-        if data and self._image_cls is not None and self._imagetk is not None:
-            try:
-                size = max(70, int(self._current_cover_size))
-                image = self._image_cls.open(io.BytesIO(data)).convert("RGB")
-                image.thumbnail((size, size))
-                canvas = self._image_cls.new("RGB", (size, size), (32, 37, 43))
-                x = (size - image.width) // 2
-                y = (size - image.height) // 2
-                canvas.paste(image, (x, y))
-                self.cover_photo = self._imagetk.PhotoImage(canvas)
-                self.cover_label.configure(image=self.cover_photo, text="")
-                return
-            except Exception:
-                pass
-        self.cover_label.configure(image="", text="♫")
+        ).grid(row=7, column=0, sticky="ew", pady=(3, 0))
 
     def _init_drag_drop(self):
         """Activa arrastrar y soltar archivos/carpetas sobre la playlist."""
@@ -660,8 +508,21 @@ class Mp3PlayerTool(ttk.Frame):
         return str(title), str(artist), str(album), duration, cover
 
     def _set_cover(self, data):
-        self._cover_source = data
-        self._render_cover(data)
+        self.cover_photo = None
+        if data and self._image_cls is not None and self._imagetk is not None:
+            try:
+                image = self._image_cls.open(io.BytesIO(data)).convert("RGB")
+                image.thumbnail((180, 180))
+                canvas = self._image_cls.new("RGB", (180, 180), (32, 37, 43))
+                x = (180 - image.width) // 2
+                y = (180 - image.height) // 2
+                canvas.paste(image, (x, y))
+                self.cover_photo = self._imagetk.PhotoImage(canvas)
+                self.cover_label.configure(image=self.cover_photo, text="")
+                return
+            except Exception:
+                pass
+        self.cover_label.configure(image="", text="♫")
 
     # ---------- Reproduccion ----------
     def _load_track(self, index, autoplay=False, start_position=None):
