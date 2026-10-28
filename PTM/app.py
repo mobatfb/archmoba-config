@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.20"
+APP_VERSION = "1.0.21"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:34"
+APP_UPDATE_TIME = "20:41"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1790,46 +1790,62 @@ class PTMApp(tk.Tk):
 
                     started_at = time.monotonic()
                     output_tail = []
+                    pip_lines = queue.Queue()
+                    reader_finished = threading.Event()
 
-                    while True:
-                        line = process.stdout.readline() if process.stdout else ""
-                        if line:
-                            clean = line.strip()
-                            if clean:
-                                output_tail.append(clean)
-                                if len(output_tail) > 40:
-                                    output_tail = output_tail[-40:]
-
-                                elapsed = int(time.monotonic() - started_at)
-                                compact = clean
-                                if len(compact) > 105:
-                                    compact = compact[:102] + "..."
-
-                                self._dependency_events.put(
-                                    (
-                                        "status",
-                                        key,
-                                        tool,
-                                        f"Instalando {install_package}... "
-                                        f"{elapsed}s\n{compact}",
-                                        None,
-                                    )
-                                )
-
-                        if process.poll() is not None:
+                    def read_pip_output():
+                        try:
                             if process.stdout:
-                                remainder = process.stdout.read()
-                                if remainder:
-                                    for extra in remainder.splitlines():
-                                        extra = extra.strip()
-                                        if extra:
-                                            output_tail.append(extra)
-                                output_tail = output_tail[-40:]
-                            break
+                                # iter/readline puede esperar por un salto de línea,
+                                # pero solo bloquea este lector secundario.
+                                for raw_line in iter(process.stdout.readline, ""):
+                                    if raw_line:
+                                        pip_lines.put(raw_line)
+                        finally:
+                            reader_finished.set()
 
-                        # Un paquete pesado puede tardar bastante, pero no debe
-                        # quedarse indefinidamente. Se permite hasta 15 minutos.
-                        if time.monotonic() - started_at > 900:
+                    threading.Thread(
+                        target=read_pip_output,
+                        daemon=True,
+                    ).start()
+
+                    last_detail = "Esperando respuesta de pip..."
+                    last_heartbeat = -1
+
+                    while process.poll() is None:
+                        while True:
+                            try:
+                                raw_line = pip_lines.get_nowait()
+                            except queue.Empty:
+                                break
+
+                            clean = raw_line.strip()
+                            if not clean:
+                                continue
+
+                            output_tail.append(clean)
+                            if len(output_tail) > 40:
+                                output_tail = output_tail[-40:]
+
+                            last_detail = clean
+                            if len(last_detail) > 105:
+                                last_detail = last_detail[:102] + "..."
+
+                        elapsed = int(time.monotonic() - started_at)
+                        if elapsed != last_heartbeat:
+                            last_heartbeat = elapsed
+                            self._dependency_events.put(
+                                (
+                                    "status",
+                                    key,
+                                    tool,
+                                    f"Instalando {install_package}... "
+                                    f"{elapsed}s\n{last_detail}",
+                                    None,
+                                )
+                            )
+
+                        if elapsed > 900:
                             process.kill()
                             try:
                                 process.wait(timeout=5)
@@ -1839,6 +1855,20 @@ class PTMApp(tk.Tk):
                                 f"La instalación de {install_package} superó "
                                 "los 15 minutos."
                             )
+
+                        time.sleep(0.20)
+
+                    # Vacía cualquier salida que haya llegado justo al finalizar.
+                    reader_finished.wait(timeout=2)
+                    while True:
+                        try:
+                            raw_line = pip_lines.get_nowait()
+                        except queue.Empty:
+                            break
+                        clean = raw_line.strip()
+                        if clean:
+                            output_tail.append(clean)
+                    output_tail = output_tail[-40:]
 
                     if process.returncode != 0:
                         detail = "\n".join(output_tail).strip()
