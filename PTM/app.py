@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.55"
+APP_VERSION = "1.0.56"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "01:48"
+APP_UPDATE_TIME = "01:55"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -4030,8 +4030,78 @@ class PTMApp(tk.Tk):
         suffix = " Auto" if mode == "fit" else ""
         self.zoom_label.configure(text=f"{int(round(factor * 100))}%{suffix}")
 
+    def _tool_real_overflow(self, key, available_w, available_h):
+        """Detecta desborde real despues de comprimir el layout al viewport."""
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return False, False
+
+        host = meta.get("tool_host")
+        root = meta.get("tool_widget")
+        if host is None or root is None:
+            return False, False
+
+        protected = (
+            tk.Canvas, tk.Text, tk.Listbox, tk.Scrollbar,
+            ttk.Scrollbar, tk.Scale, ttk.Scale,
+        )
+        horizontal = False
+        vertical = False
+
+        try:
+            host.update_idletasks()
+            hx = host.winfo_rootx()
+            hy = host.winfo_rooty()
+        except Exception:
+            return False, False
+
+        leaf_controls = (
+            tk.Button, ttk.Button,
+            tk.Entry, ttk.Entry,
+            tk.Checkbutton, ttk.Checkbutton,
+            tk.Radiobutton, ttk.Radiobutton,
+            ttk.Combobox,
+        )
+
+        for widget in self._iter_viewport_widgets(root):
+            if isinstance(widget, protected):
+                continue
+
+            try:
+                if not widget.winfo_ismapped():
+                    continue
+
+                x = widget.winfo_rootx() - hx
+                y = widget.winfo_rooty() - hy
+                w = max(1, widget.winfo_width())
+                h = max(1, widget.winfo_height())
+
+                # Detecta especialmente place() y otros elementos que pueden
+                # quedar fisicamente fuera del viewport.
+                if x + w > available_w + 4:
+                    horizontal = True
+                if y + h > available_h + 4:
+                    vertical = True
+
+                # Un control interactivo hoja no debe quedar aplastado hasta
+                # perder su contenido. Labels se excluyen porque pueden hacer wrap.
+                if isinstance(widget, leaf_controls):
+                    req_w = max(1, widget.winfo_reqwidth())
+                    req_h = max(1, widget.winfo_reqheight())
+                    if req_w > w + 10:
+                        horizontal = True
+                    if req_h > h + 8:
+                        vertical = True
+            except Exception:
+                continue
+
+            if horizontal and vertical:
+                break
+
+        return horizontal, vertical
+
     def _refresh_tool_viewport(self, key, allow_grow=False):
-        """Ajusta la herramienta con zoom; scroll solo queda como respaldo."""
+        """Aplica zoom y comprime el layout al viewport; scroll solo ante desborde real."""
         meta = self.open_tabs.get(key)
         if not meta or meta.get("state") not in {"ready", "processing"}:
             return
@@ -4053,11 +4123,16 @@ class PTMApp(tk.Tk):
             if not canvas.winfo_exists() or not host.winfo_exists():
                 return
 
-            # Empezar sin barras para aprovechar todo el panel al calcular zoom.
+            # Calcular siempre con el viewport completo, sin barras.
             hbar.grid_remove()
             vbar.grid_remove()
-            canvas.update_idletasks()
+            try:
+                canvas.xview_moveto(0)
+                canvas.yview_moveto(0)
+            except Exception:
+                pass
 
+            canvas.update_idletasks()
             available_w = max(1, canvas.winfo_width() - 4)
             available_h = max(1, canvas.winfo_height() - 4)
 
@@ -4071,8 +4146,6 @@ class PTMApp(tk.Tk):
                     available_w / natural_w,
                     available_h / natural_h,
                 )
-                # Un pequeño margen evita que bordes ttk hagan aparecer scroll
-                # por uno o dos pixeles.
                 if factor < 0.995:
                     factor *= 0.97
                 factor = max(0.50, min(1.0, factor))
@@ -4082,51 +4155,82 @@ class PTMApp(tk.Tk):
                     min(1.25, float(meta.get("zoom", 1.0) or 1.0)),
                 )
 
-            self._apply_tool_zoom(key, factor)
-            host.update_idletasks()
+            # Ajustar y despues FORZAR el host al area visible. Esto es lo que
+            # permite que PanedWindow/grid/pack redistribuyan el contenido ya
+            # reducido, en lugar de conservar un lienzo natural mas ancho.
+            attempts = 0
+            need_h = need_v = False
 
-            requested_w = max(1, host.winfo_reqwidth())
-            requested_h = max(1, host.winfo_reqheight())
+            while True:
+                self._apply_tool_zoom(key, factor)
 
-            need_h = requested_w > available_w + 3
-            need_v = requested_h > available_h + 3
-
-            # Si el zoom minimo aun no alcanza, solo entonces aparece scroll.
-            if need_h:
-                hbar.grid()
-            else:
-                try:
-                    canvas.xview_moveto(0)
-                except Exception:
-                    pass
-
-            if need_v:
-                vbar.grid()
-            else:
-                try:
-                    canvas.yview_moveto(0)
-                except Exception:
-                    pass
-
-            canvas.update_idletasks()
-            available_w = max(1, canvas.winfo_width())
-            available_h = max(1, canvas.winfo_height())
-
-            target_w = requested_w if need_h else available_w
-            target_h = requested_h if need_v else available_h
-
-            canvas.itemconfigure(
-                window_id,
-                width=max(1, target_w),
-                height=max(1, target_h),
-            )
-            canvas.configure(
-                scrollregion=(
-                    0, 0,
-                    max(target_w, requested_w),
-                    max(target_h, requested_h),
+                canvas.itemconfigure(
+                    window_id,
+                    width=max(1, available_w),
+                    height=max(1, available_h),
                 )
-            )
+                canvas.configure(
+                    scrollregion=(0, 0, available_w, available_h)
+                )
+                host.update_idletasks()
+
+                need_h, need_v = self._tool_real_overflow(
+                    key, available_w, available_h
+                )
+
+                # En Ajustar, si aun existe desborde real, bajar un poco mas
+                # antes de recurrir al scroll.
+                if (
+                    mode == "fit"
+                    and (need_h or need_v)
+                    and factor > 0.50
+                    and attempts < 6
+                ):
+                    new_factor = max(0.50, factor * 0.94)
+                    if abs(new_factor - factor) < 0.003:
+                        break
+                    factor = new_factor
+                    attempts += 1
+                    continue
+
+                break
+
+            # Solo al limite minimo, o en zoom manual que el usuario haya
+            # elegido demasiado grande, usar scroll como respaldo.
+            if need_h or need_v:
+                host.update_idletasks()
+                requested_w = max(available_w, host.winfo_reqwidth())
+                requested_h = max(available_h, host.winfo_reqheight())
+
+                if need_h:
+                    hbar.grid()
+                if need_v:
+                    vbar.grid()
+
+                canvas.update_idletasks()
+                final_w = max(1, canvas.winfo_width())
+                final_h = max(1, canvas.winfo_height())
+
+                target_w = max(final_w, requested_w) if need_h else final_w
+                target_h = max(final_h, requested_h) if need_v else final_h
+
+                canvas.itemconfigure(
+                    window_id,
+                    width=target_w,
+                    height=target_h,
+                )
+                canvas.configure(
+                    scrollregion=(0, 0, target_w, target_h)
+                )
+            else:
+                canvas.itemconfigure(
+                    window_id,
+                    width=max(1, available_w),
+                    height=max(1, available_h),
+                )
+                canvas.configure(
+                    scrollregion=(0, 0, available_w, available_h)
+                )
 
             meta["viewport_need_h"] = bool(need_h)
             meta["viewport_need_v"] = bool(need_v)
