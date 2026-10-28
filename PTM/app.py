@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.45"
-APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "23:56"
+APP_VERSION = "1.0.46"
+APP_UPDATE_DATE = "28/10/2026"
+APP_UPDATE_TIME = "00:11"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -3208,6 +3208,8 @@ class PTMApp(tk.Tk):
         real_mainloop = tk.mainloop
 
         class EmbeddedRoot(tk.Frame):
+            """Sustituto embebido de Tk que tambien puede usarse como clase base."""
+
             def __init__(self, *args, **kwargs):
                 bg = kwargs.pop("bg", kwargs.pop("background", None))
                 super().__init__(parent, bg=bg or parent.cget("bg"))
@@ -3218,22 +3220,34 @@ class PTMApp(tk.Tk):
             def title(self, *args, **kwargs):
                 return None
 
+            wm_title = title
+
             def geometry(self, *args, **kwargs):
                 return ""
+
+            wm_geometry = geometry
 
             def minsize(self, *args, **kwargs):
                 return None
 
+            wm_minsize = minsize
+
             def maxsize(self, *args, **kwargs):
                 return None
 
+            wm_maxsize = maxsize
+
             def resizable(self, *args, **kwargs):
                 return None
+
+            wm_resizable = resizable
 
             def protocol(self, name=None, func=None):
                 if name and func:
                     self._ptm_protocols[name] = func
                 return self._ptm_protocols.get(name)
+
+            wm_protocol = protocol
 
             def attributes(self, *args, **kwargs):
                 return None
@@ -3243,20 +3257,42 @@ class PTMApp(tk.Tk):
             def iconbitmap(self, *args, **kwargs):
                 return None
 
+            wm_iconbitmap = iconbitmap
+
             def iconphoto(self, *args, **kwargs):
                 return None
+
+            wm_iconphoto = iconphoto
 
             def state(self, *args, **kwargs):
                 return "normal"
 
+            wm_state = state
+
             def withdraw(self):
                 return None
+
+            wm_withdraw = withdraw
 
             def deiconify(self):
                 return None
 
+            wm_deiconify = deiconify
+
             def iconify(self):
                 return None
+
+            wm_iconify = iconify
+
+            def overrideredirect(self, *args, **kwargs):
+                return None
+
+            wm_overrideredirect = overrideredirect
+
+            def transient(self, *args, **kwargs):
+                return None
+
+            wm_transient = transient
 
             def mainloop(self, *args, **kwargs):
                 return None
@@ -3264,13 +3300,8 @@ class PTMApp(tk.Tk):
             def quit(self):
                 return None
 
-        def make_root(*args, **kwargs):
-            return EmbeddedRoot(*args, **kwargs)
-
-        def make_toplevel(*args, **kwargs):
-            # PTM no permite ventanas externas. Un Toplevel se convierte en
-            # otro contenedor dentro de la misma pestaña.
-            return EmbeddedRoot(*args, **kwargs)
+        class EmbeddedToplevel(EmbeddedRoot):
+            """Toplevel integrado: permanece dentro de la misma pestaña PTM."""
 
         def no_mainloop(*args, **kwargs):
             return None
@@ -3278,16 +3309,18 @@ class PTMApp(tk.Tk):
         class TkProxy:
             def __getattr__(self, name):
                 if name == "Tk":
-                    return make_root
+                    return EmbeddedRoot
                 if name == "Toplevel":
-                    return make_toplevel
+                    return EmbeddedToplevel
                 if name == "mainloop":
                     return no_mainloop
                 return getattr(tk, name)
 
         try:
-            tk.Tk = make_root
-            tk.Toplevel = make_toplevel
+            # Se usan clases, no funciones, para soportar tambien:
+            # class MiVentana(tk.Tk): ...
+            tk.Tk = EmbeddedRoot
+            tk.Toplevel = EmbeddedToplevel
             tk.mainloop = no_mainloop
             callback()
         finally:
