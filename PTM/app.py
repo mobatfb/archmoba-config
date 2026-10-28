@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.25"
+APP_VERSION = "1.0.26"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:07"
+APP_UPDATE_TIME = "21:13"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -2541,16 +2541,25 @@ class PTMApp(tk.Tk):
             except tk.TclError:
                 pass
 
-        overlay = tk.Frame(host, bg="#D9DEE2")
-        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        # Tkinter no ofrece transparencia alfa por widget. Para conservar la
+        # herramienta visible, el modal ya no cubre el contenido con un gris sólido.
+        # Se dibuja una sombra suave alrededor de la tarjeta, dejando el fondo intacto.
+        overlay = tk.Frame(host, bg=WHITE, bd=0, highlightthickness=0)
+        overlay.place(relx=0.5, rely=0.46, anchor="center", width=426, height=218)
         overlay.lift()
         self._inline_dialog = overlay
 
+        # Glow/sombra escalonada alrededor de la tarjeta.
+        shadow_outer = tk.Frame(overlay, bg="#D7DDE1", bd=0)
+        shadow_outer.place(x=0, y=0, width=426, height=218)
+        shadow_mid = tk.Frame(shadow_outer, bg="#C5CDD2", bd=0)
+        shadow_mid.place(x=8, y=8, width=410, height=202)
+
         card = tk.Frame(
-            overlay, bg=WHITE, highlightbackground="#B7BEC5",
+            shadow_mid, bg=WHITE, highlightbackground="#AEB7BD",
             highlightthickness=1, bd=0
         )
-        card.place(relx=0.5, rely=0.46, anchor="center", width=390)
+        card.place(x=8, y=8, width=394, height=186)
 
         header = tk.Frame(card, bg=WHITE)
         header.pack(fill="x", padx=18, pady=(16, 6))
