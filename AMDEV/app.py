@@ -16,7 +16,7 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.16"
+APP_VERSION = "1.0.17"
 APP_UPDATE_DATE = "28/10/2026"
 APP_UPDATE_TIME = "05:35"
 
@@ -482,6 +482,7 @@ class AMDEVApp(tk.Tk):
         self.title(f"{APP_NAME} - {APP_SHORT}")
         self.configure(bg=BG)
         self.overrideredirect(True)
+        self.attributes("-topmost", True)
 
         self.base_dir = Path(
             os.environ.get("LOCALAPPDATA", str(Path.home()))
@@ -510,6 +511,27 @@ class AMDEVApp(tk.Tk):
         self.floating = FloatingAMDEV(self)
         self.withdraw()
         self.bind("<Escape>", lambda _e: self.hide_app_menu())
+        self.after(250, self._keep_amdev_on_top)
+
+    def _keep_amdev_on_top(self):
+        """Mantiene AMDEV y su control flotante por encima de las demás ventanas."""
+        try:
+            self.attributes("-topmost", True)
+            if self.state() != "withdrawn":
+                self.lift()
+        except tk.TclError:
+            pass
+
+        try:
+            self.floating.attributes("-topmost", True)
+            self.floating.lift()
+        except (tk.TclError, AttributeError):
+            pass
+
+        try:
+            self.after(500, self._keep_amdev_on_top)
+        except tk.TclError:
+            pass
 
     def _default_geometry(self):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -1466,9 +1488,13 @@ class AMDEVApp(tk.Tk):
     def show_main(self):
         self.hide_app_menu()
         self.deiconify()
-        self.lift()
         self.attributes("-topmost", True)
-        self.after(120, lambda: self.attributes("-topmost", False))
+        self.lift()
+        try:
+            self.floating.attributes("-topmost", True)
+            self.floating.lift()
+        except tk.TclError:
+            pass
         self.load_apps()
 
     def hide_main(self):
