@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.44"
+APP_VERSION = "1.0.45"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "23:23"
+APP_UPDATE_TIME = "23:56"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -3200,6 +3200,103 @@ class PTMApp(tk.Tk):
             )
         return widget
 
+    def _run_with_embedded_tk(self, parent, callback):
+        """Ejecuta Tkinter comun dentro de una pestaña, sin crear ventanas externas."""
+        roots = []
+        real_tk = tk.Tk
+        real_toplevel = tk.Toplevel
+        real_mainloop = tk.mainloop
+
+        class EmbeddedRoot(tk.Frame):
+            def __init__(self, *args, **kwargs):
+                bg = kwargs.pop("bg", kwargs.pop("background", None))
+                super().__init__(parent, bg=bg or parent.cget("bg"))
+                self.pack(fill="both", expand=True)
+                self._ptm_protocols = {}
+                roots.append(self)
+
+            def title(self, *args, **kwargs):
+                return None
+
+            def geometry(self, *args, **kwargs):
+                return ""
+
+            def minsize(self, *args, **kwargs):
+                return None
+
+            def maxsize(self, *args, **kwargs):
+                return None
+
+            def resizable(self, *args, **kwargs):
+                return None
+
+            def protocol(self, name=None, func=None):
+                if name and func:
+                    self._ptm_protocols[name] = func
+                return self._ptm_protocols.get(name)
+
+            def attributes(self, *args, **kwargs):
+                return None
+
+            wm_attributes = attributes
+
+            def iconbitmap(self, *args, **kwargs):
+                return None
+
+            def iconphoto(self, *args, **kwargs):
+                return None
+
+            def state(self, *args, **kwargs):
+                return "normal"
+
+            def withdraw(self):
+                return None
+
+            def deiconify(self):
+                return None
+
+            def iconify(self):
+                return None
+
+            def mainloop(self, *args, **kwargs):
+                return None
+
+            def quit(self):
+                return None
+
+        def make_root(*args, **kwargs):
+            return EmbeddedRoot(*args, **kwargs)
+
+        def make_toplevel(*args, **kwargs):
+            # PTM no permite ventanas externas. Un Toplevel se convierte en
+            # otro contenedor dentro de la misma pestaña.
+            return EmbeddedRoot(*args, **kwargs)
+
+        def no_mainloop(*args, **kwargs):
+            return None
+
+        class TkProxy:
+            def __getattr__(self, name):
+                if name == "Tk":
+                    return make_root
+                if name == "Toplevel":
+                    return make_toplevel
+                if name == "mainloop":
+                    return no_mainloop
+                return getattr(tk, name)
+
+        try:
+            tk.Tk = make_root
+            tk.Toplevel = make_toplevel
+            tk.mainloop = no_mainloop
+            callback()
+        finally:
+            tk.Tk = real_tk
+            tk.Toplevel = real_toplevel
+            tk.mainloop = real_mainloop
+
+        return roots, TkProxy()
+
     def _load_tool_into_tab(self, tool, key):
         meta = self.open_tabs.get(key)
         if not meta:
@@ -3224,29 +3321,60 @@ class PTMApp(tk.Tk):
             if spec is None or spec.loader is None:
                 raise RuntimeError("No se pudo preparar el módulo.")
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+
+            embedded_roots, tk_proxy = self._run_with_embedded_tk(
+                frame,
+                lambda: spec.loader.exec_module(module),
+            )
+
+            # Si el script hizo "import tkinter as tk", mantener un proxy
+            # para que futuros callbacks tampoco puedan abrir ventanas.
+            if getattr(module, "tk", None) is tk:
+                module.tk = tk_proxy
+
         except Exception as exc:
             self._show_tool_unavailable(tool, key, exc)
             return
 
-        entry = self._resolve_integrated_entry(module)
-        if callable(entry):
-            try:
-                widget = self._instantiate_integrated_entry(entry, frame)
-                widget.pack(fill="both", expand=True)
-            except Exception as exc:
-                self._show_tool_unavailable(tool, key, exc)
-                return
-        else:
+        widget = embedded_roots[0] if embedded_roots else None
+
+        if widget is None:
+            entry = self._resolve_integrated_entry(module)
+            if callable(entry):
+                try:
+                    widget = self._instantiate_integrated_entry(entry, frame)
+                except Exception as exc:
+                    self._show_tool_unavailable(tool, key, exc)
+                    return
+
+        # Un principiante puede haber puesto todo dentro de main().
+        if widget is None:
+            main_func = getattr(module, "main", None)
+            if callable(main_func):
+                try:
+                    embedded_roots, tk_proxy = self._run_with_embedded_tk(
+                        frame,
+                        main_func,
+                    )
+                    if getattr(module, "tk", None) is tk:
+                        module.tk = tk_proxy
+                    widget = embedded_roots[0] if embedded_roots else None
+                except Exception as exc:
+                    self._show_tool_unavailable(tool, key, exc)
+                    return
+
+        if widget is None:
             self._show_tool_unavailable(
                 tool,
                 key,
                 RuntimeError(
-                    "No se encontró una entrada integrada compatible. "
-                    "Define una clase App/Application basada en Tkinter."
+                    "No se pudo detectar una interfaz Tkinter para integrar."
                 ),
             )
             return
+
+        if not widget.winfo_manager():
+            widget.pack(fill="both", expand=True)
 
         meta["module"] = module
         meta["state"] = "ready"
