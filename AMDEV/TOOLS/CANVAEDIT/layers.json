@@ -3,14 +3,14 @@
   "version": 1,
   "layers": [
     {
-      "id": "background001",
-      "name": "Fondo PYRION",
+      "id": "bg",
+      "name": "BG",
       "type": "background",
       "visible": true,
       "locked": true,
       "opacity": 1.0,
       "z_index": 0,
-      "asset": "assets/pyrion_background.png",
+      "asset": "assets/pyrion_background.jpg",
       "x": 0,
       "y": 0,
       "width": 0,
