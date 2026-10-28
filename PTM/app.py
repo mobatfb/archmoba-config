@@ -26,9 +26,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.41"
+APP_VERSION = "1.0.42"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:35"
+APP_UPDATE_TIME = "22:40"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -628,7 +628,8 @@ class PTMApp(tk.Tk):
         self.close_canvas = tk.Canvas(self.top, width=30, height=30, bg=WHITE,
                                       highlightthickness=0, bd=0, cursor="hand2")
         self.close_canvas.pack(side="right", padx=(8, 4), pady=(2, 0))
-        self.close_canvas.create_line(7, 19, 23, 19, fill=BLACK, width=2)
+        self.close_canvas.create_line(8, 8, 22, 22, fill=BLACK, width=2)
+        self.close_canvas.create_line(22, 8, 8, 22, fill=BLACK, width=2)
         self.close_canvas.bind("<Button-1>", lambda _e: self.hide_main())
 
         self.separator = tk.Frame(self.outer, bg=WHITE, height=2)
