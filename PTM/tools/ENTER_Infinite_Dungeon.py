@@ -3601,17 +3601,24 @@ class EnterGame:
             self.set_fullscreen(True)
 
     def set_fullscreen(self, enabled):
-        """Pantalla completa sin barra de tareas y con Esc/F11 para salir.
-
-        Windows: ventana sin bordes con prioridad topmost y dimensiones exactas
-        del monitor. La barra de tareas queda detras del juego. Al salir se
-        restauran los marcos y se quita la prioridad topmost.
-        Otros sistemas: modo fullscreen nativo de Tk.
-        """
+        """F11 usa pantalla completa sin separar el juego de PTM."""
         enabled = bool(enabled)
         if enabled == self._fullscreen_active:
             return
         self._fullscreen_touched = True
+
+        if self.embedded:
+            window = self.app or self.root.winfo_toplevel()
+            self._fullscreen_active = enabled
+            try:
+                window.attributes('-fullscreen', enabled)
+                window.lift()
+                window.focus_force()
+                self.root.after(80, self.focus_game)
+            except tk.TclError:
+                self._fullscreen_active = False
+            return
+
         root = self.root
         if enabled:
             self._windowed_geometry = root.geometry()
@@ -3627,8 +3634,6 @@ class EnterGame:
                 root.after(120, self._reinforce_windows_fullscreen)
             else:
                 root.attributes('-fullscreen', True)
-                # Tambien cubrir el area completa si no hay gestor de ventanas
-                # (por ejemplo, maquinas Linux/Xvfb en pruebas).
                 root.geometry(f'{root.winfo_screenwidth()}x{root.winfo_screenheight()}+0+0')
             root.lift()
             root.focus_force()
@@ -3644,6 +3649,8 @@ class EnterGame:
             root.focus_force()
 
     def _reinforce_windows_fullscreen(self):
+        if self.embedded:
+            return
         if not self._fullscreen_active or sys.platform != 'win32':
             return
         try:
