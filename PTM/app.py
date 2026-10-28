@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.26"
+APP_VERSION = "1.0.27"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:13"
+APP_UPDATE_TIME = "21:18"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -2530,16 +2530,24 @@ class PTMApp(tk.Tk):
 
     def show_dialog(self, title, message, kind="info", button_text="Aceptar", on_close=None):
         """Muestra un diálogo modal dentro del área de PTM, sin crear otra ventana."""
-        host = self.content
+        # El diálogo pertenece a la pestaña activa, nunca al contenedor global.
+        dialog_key = self.current_key
+        if not dialog_key or dialog_key == "home":
+            return None
+        meta = self.open_tabs.get(dialog_key)
+        if not meta:
+            return None
+        host = meta["frame"]
         if not host.winfo_exists():
             return None
 
-        old = getattr(self, "_inline_dialog", None)
+        old = meta.get("inline_dialog")
         if old is not None:
             try:
                 old.destroy()
             except tk.TclError:
                 pass
+            meta["inline_dialog"] = None
 
         # Tkinter no ofrece transparencia alfa por widget. Para conservar la
         # herramienta visible, el modal ya no cubre el contenido con un gris sólido.
@@ -2547,7 +2555,7 @@ class PTMApp(tk.Tk):
         overlay = tk.Frame(host, bg=WHITE, bd=0, highlightthickness=0)
         overlay.place(relx=0.5, rely=0.46, anchor="center", width=426, height=218)
         overlay.lift()
-        self._inline_dialog = overlay
+        meta["inline_dialog"] = overlay
 
         # Glow/sombra escalonada alrededor de la tarjeta.
         shadow_outer = tk.Frame(overlay, bg="#D7DDE1", bd=0)
@@ -2588,8 +2596,8 @@ class PTMApp(tk.Tk):
         ).pack(side="left", fill="x", expand=True)
 
         def close_dialog(event=None):
-            if getattr(self, "_inline_dialog", None) is overlay:
-                self._inline_dialog = None
+            if meta.get("inline_dialog") is overlay:
+                meta["inline_dialog"] = None
             try:
                 overlay.destroy()
             except tk.TclError:
