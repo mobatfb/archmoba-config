@@ -13,15 +13,16 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:57"
+APP_UPDATE_TIME = "20:17"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
 REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main"
-APPS_URL = f"{REPO_RAW_BASE}/apps.json"
+APPS_REPO_PATH = "AMDEV/apps.json"
+APPS_URL = f"{REPO_RAW_BASE}/{APPS_REPO_PATH}"
 SELF_CONFIG_API_URL = (
     f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/AMDEV/config.json?ref=main"
 )
@@ -419,7 +420,7 @@ class AMDEVApp(tk.Tk):
 
         text = None
         try:
-            text = self._request_repo_file_main("apps.json")
+            text = self._request_repo_file_main(APPS_REPO_PATH)
             self.apps_cache.write_text(text, encoding="utf-8")
             self.status.configure(text="Catálogo actualizado desde GitHub.")
         except Exception as exc:
