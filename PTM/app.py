@@ -24,9 +24,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.34"
+APP_VERSION = "1.0.35"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:11"
+APP_UPDATE_TIME = "22:16"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -56,8 +56,9 @@ def _version_tuple(value):
     return tuple(parts)
 
 
-def check_self_update():
-    """Busca una versión nueva de PTM, reemplaza app.py y reinicia el proceso."""
+def check_self_update(restart=True):
+    """Busca una versión nueva de PTM y reemplaza app.py."""
+
     try:
         remote_config = None
 
@@ -150,10 +151,11 @@ def check_self_update():
         temp_file.write_text(source, encoding="utf-8")
         os.replace(temp_file, current_file)
 
-        subprocess.Popen(
-            [sys.executable, str(current_file), *sys.argv[1:]],
-            cwd=str(current_file.parent),
-        )
+        if restart:
+            subprocess.Popen(
+                [sys.executable, str(current_file), *sys.argv[1:]],
+                cwd=str(current_file.parent),
+            )
         return True
     except Exception:
         # Una falla de actualización nunca debe impedir abrir la versión instalada.
@@ -181,6 +183,17 @@ def acquire_single_instance_lock():
         except Exception:
             pass
         return False
+
+
+def release_single_instance_lock():
+    """Libera el bloqueo antes de reiniciar PTM por actualización."""
+    global INSTANCE_LOCK_SOCKET
+    if INSTANCE_LOCK_SOCKET is not None:
+        try:
+            INSTANCE_LOCK_SOCKET.close()
+        except Exception:
+            pass
+        INSTANCE_LOCK_SOCKET = None
 
 
 def detect_system_dark_mode():
@@ -492,6 +505,8 @@ class PTMApp(tk.Tk):
         self._catalog_sync_lock = threading.Lock()
         self._catalog_search_request_id = 0
         self._catalog_search_inflight = 0
+        self._self_update_events = queue.Queue()
+        self._self_update_check_running = False
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
@@ -506,6 +521,57 @@ class PTMApp(tk.Tk):
         self.after(100, self._poll_tool_download_events)
         self.after(100, self._poll_dependency_events)
         self.after(100, self._poll_catalog_events)
+        self.after(30000, self._check_self_update_async)
+        self.after(500, self._poll_self_update_events)
+
+    # ---------- Actualización en ejecución ----------
+    def _check_self_update_async(self):
+        if self._self_update_check_running:
+            return
+        self._self_update_check_running = True
+
+        def worker():
+            try:
+                updated = check_self_update(restart=False)
+                self._self_update_events.put(("done", updated))
+            except Exception:
+                self._self_update_events.put(("done", False))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_self_update_events(self):
+        try:
+            while True:
+                _kind, updated = self._self_update_events.get_nowait()
+                self._self_update_check_running = False
+                if updated:
+                    current_file = Path(__file__).resolve()
+                    release_single_instance_lock()
+                    try:
+                        if hasattr(self, "floating"):
+                            self.floating.destroy()
+                    except Exception:
+                        pass
+                    subprocess.Popen(
+                        [sys.executable, str(current_file), *sys.argv[1:]],
+                        cwd=str(current_file.parent),
+                    )
+                    self.destroy()
+                    return
+        except queue.Empty:
+            pass
+
+        try:
+            self.after(500, self._poll_self_update_events)
+        except tk.TclError:
+            return
+
+        # Comprobar periódicamente mientras PTM permanece abierto.
+        if not self._self_update_check_running:
+            try:
+                self.after(60000, self._check_self_update_async)
+            except tk.TclError:
+                pass
 
     # ---------- Ventana / proporción ----------
     def _apply_responsive_geometry(self):
@@ -3155,6 +3221,7 @@ class PTMApp(tk.Tk):
             self.floating.destroy()
         except Exception:
             pass
+        release_single_instance_lock()
         self.destroy()
 
 
