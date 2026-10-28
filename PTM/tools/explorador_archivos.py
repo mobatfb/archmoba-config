@@ -19,7 +19,7 @@ TOOL_DESCRIPTION = (
     "copiar/cortar/pegar, navegacion y panel lateral de HDD, SSD, USB, CD/DVD "
     "y unidades de red."
 )
-TOOL_VERSION = "1.0.2"
+TOOL_VERSION = "1.0.3"
 
 
 class ExplorerTab(ttk.Frame):
@@ -876,7 +876,6 @@ class FileExplorerTool(ttk.Frame):
         self.context_menu.add_command(label="Abrir en nueva pestaña", command=self.open_selected_new_tab)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Copiar", command=lambda: self.copy_selected(False))
-        self.context_menu.add_command(label="Cortar", command=lambda: self.copy_selected(True))
         self.context_menu.add_command(label="Pegar", command=self.paste_files)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Cambiar nombre", command=self.rename_selected)
