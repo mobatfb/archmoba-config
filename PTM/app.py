@@ -2,6 +2,7 @@
 import ast
 import csv
 import importlib.util
+import importlib.metadata
 import io
 import json
 import os
@@ -17,9 +18,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:20"
+APP_UPDATE_TIME = "19:24"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
@@ -1331,6 +1332,247 @@ class PTMApp(tk.Tk):
                     raise ValueError("El ZIP contiene una ruta no permitida.")
             zf.extractall(target_dir)
 
+    @staticmethod
+    def _normalize_distribution_name(value):
+        value = str(value or "").strip()
+        if not value:
+            return ""
+        value = re.split(r"[<>=!~\[]", value, maxsplit=1)[0].strip()
+        return value
+
+    @staticmethod
+    def _import_to_package(module_name):
+        """Mapea nombres de importación comunes a sus paquetes de pip."""
+        mapping = {
+            "PIL": "Pillow",
+            "cv2": "opencv-python",
+            "sklearn": "scikit-learn",
+            "yaml": "PyYAML",
+            "bs4": "beautifulsoup4",
+            "docx": "python-docx",
+            "pptx": "python-pptx",
+            "fitz": "PyMuPDF",
+            "win32api": "pywin32",
+            "win32com": "pywin32",
+            "pythoncom": "pywin32",
+            "serial": "pyserial",
+            "dateutil": "python-dateutil",
+            "dotenv": "python-dotenv",
+            "Crypto": "pycryptodome",
+        }
+        return mapping.get(module_name, module_name)
+
+    def _is_local_module(self, module_name, tool_path):
+        base = tool_path.parent
+        return (
+            (base / f"{module_name}.py").is_file()
+            or (base / module_name / "__init__.py").is_file()
+            or (base / module_name).is_dir()
+        )
+
+    def _extract_imports(self, tool_path):
+        """Obtiene imports de primer nivel sin ejecutar el archivo."""
+        try:
+            source = tool_path.read_text(encoding="utf-8-sig")
+            tree = ast.parse(source, filename=str(tool_path))
+        except Exception:
+            return set()
+
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name:
+                        found.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    continue
+                if node.module:
+                    found.add(node.module.split(".")[0])
+        return found
+
+    def _distribution_installed(self, package_spec):
+        name = self._normalize_distribution_name(package_spec)
+        if not name:
+            return True
+        try:
+            importlib.metadata.distribution(name)
+            return True
+        except importlib.metadata.PackageNotFoundError:
+            return False
+        except Exception:
+            return False
+
+    def _module_available(self, module_name):
+        try:
+            return importlib.util.find_spec(module_name) is not None
+        except Exception:
+            return False
+
+    def _collect_missing_dependencies(self, tool):
+        path = Path(tool["path"])
+        declared = str(tool.get("dependencies", "") or "").strip()
+
+        packages = []
+        seen = set()
+
+        # 1) Dependencias declaradas en guide.csv.
+        if declared:
+            for spec in re.split(r"[;,\n]+", declared):
+                spec = spec.strip()
+                if not spec:
+                    continue
+                key = spec.lower()
+                if key not in seen and not self._distribution_installed(spec):
+                    packages.append(spec)
+                    seen.add(key)
+
+        # 2) Dependencias inferidas directamente de import / from.
+        stdlib = set(getattr(sys, "stdlib_module_names", ()))
+        stdlib.update({
+            "tkinter", "pathlib", "os", "sys", "re", "json", "csv", "io",
+            "time", "subprocess", "shutil", "zipfile", "ast", "threading",
+            "queue", "math", "datetime", "collections", "functools",
+            "itertools", "typing", "urllib", "http", "email", "sqlite3",
+            "logging", "tempfile", "glob", "random", "statistics",
+        })
+
+        for module_name in sorted(self._extract_imports(path)):
+            if module_name in stdlib:
+                continue
+            if self._is_local_module(module_name, path):
+                continue
+            if self._module_available(module_name):
+                continue
+
+            package = self._import_to_package(module_name)
+            key = package.lower()
+            if key not in seen:
+                packages.append(package)
+                seen.add(key)
+
+        return packages
+
+    def _install_dependencies(self, tool):
+        missing = self._collect_missing_dependencies(tool)
+        if not missing:
+            return True
+
+        tool_name = tool.get("name", Path(tool["path"]).stem)
+        self.update_idletasks()
+
+        progress = tk.Toplevel(self)
+        progress.title("PTM - Dependencias")
+        progress.configure(bg=WHITE)
+        progress.resizable(False, False)
+        progress.transient(self)
+        progress.grab_set()
+
+        tk.Label(
+            progress,
+            text=f"Preparando {tool_name}",
+            bg=WHITE,
+            fg=BLACK,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(padx=24, pady=(18, 6))
+
+        status = tk.Label(
+            progress,
+            text="Verificando dependencias...",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+            wraplength=390,
+            justify="center",
+        )
+        status.pack(padx=24, pady=(0, 18))
+
+        progress.update_idletasks()
+        w, h = 440, 120
+        x = self.winfo_x() + max(0, (self.winfo_width() - w) // 2)
+        y = self.winfo_y() + max(0, (self.winfo_height() - h) // 2)
+        progress.geometry(f"{w}x{h}+{x}+{y}")
+        progress.update()
+
+        try:
+            for package in missing:
+                status.configure(text=f"Instalando {package}...")
+                progress.update()
+
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    package,
+                ]
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+
+                if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "").strip()
+                    if len(detail) > 1800:
+                        detail = detail[-1800:]
+                    raise RuntimeError(
+                        f"No se pudo instalar {package}.\n\n{detail or 'pip devolvió un error.'}"
+                    )
+
+            importlib.invalidate_caches()
+
+            still_missing = []
+            for package in missing:
+                # Si era una dependencia inferida con alias, comprobar por import.
+                candidates = [
+                    key for key, value in {
+                        "PIL": "Pillow",
+                        "cv2": "opencv-python",
+                        "sklearn": "scikit-learn",
+                        "yaml": "PyYAML",
+                        "bs4": "beautifulsoup4",
+                        "docx": "python-docx",
+                        "pptx": "python-pptx",
+                        "fitz": "PyMuPDF",
+                        "serial": "pyserial",
+                        "dateutil": "python-dateutil",
+                        "dotenv": "python-dotenv",
+                        "Crypto": "pycryptodome",
+                    }.items()
+                    if value.lower() == self._normalize_distribution_name(package).lower()
+                ]
+                if candidates:
+                    if not any(self._module_available(name) for name in candidates):
+                        still_missing.append(package)
+                elif not self._distribution_installed(package) and not self._module_available(
+                    self._normalize_distribution_name(package).replace("-", "_")
+                ):
+                    still_missing.append(package)
+
+            if still_missing:
+                raise RuntimeError(
+                    "Las siguientes dependencias siguen sin estar disponibles: "
+                    + ", ".join(still_missing)
+                )
+
+            return True
+        except Exception as exc:
+            messagebox.showerror(
+                "PTM - Dependencias",
+                f"No se pudo preparar la herramienta:\n\n{exc}",
+                parent=progress,
+            )
+            return False
+        finally:
+            try:
+                progress.grab_release()
+            except Exception:
+                pass
+            progress.destroy()
+
     def open_tool(self, tool):
         try:
             tool["path"] = self._ensure_tool_local(tool)
@@ -1339,6 +1581,9 @@ class PTMApp(tk.Tk):
                 "PTM",
                 f"No se pudo descargar la herramienta desde el catálogo:\n\n{exc}"
             )
+            return
+
+        if not self._install_dependencies(tool):
             return
 
         key = str(tool["path"].resolve())
