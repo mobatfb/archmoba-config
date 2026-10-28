@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.8"
+TOOL_VERSION = "1.0.9"
 
 
 def human_size(n):
@@ -626,12 +626,21 @@ class ISOEditor(ttk.Frame):
     def _build_ui(self):
         self.pack(fill="both", expand=True)
         top = ttk.Frame(self, padding=8); top.pack(fill="x")
-        # Versión fija en la misma fila, inmediatamente antes de Abrir ISO.
-        ttk.Label(
-            top, text=f"v{TOOL_VERSION}",
-            font=("Segoe UI", 9, "bold"),
-            foreground="#075D79",
-        ).pack(side="left", padx=(3, 12))
+        # Versión EN LÍNEA, inmediatamente antes de Abrir ISO.
+        # Usar tk.Label con colores propios evita que un tema ttk oscuro
+        # o de Linux vuelva el texto ilegible o lo confunda con el fondo.
+        self.version_label = tk.Label(
+            top,
+            text=f"v{TOOL_VERSION}",
+            bg="#075D79",
+            fg="#FFFFFF",
+            font=("DejaVu Sans", 9, "bold"),
+            padx=10,
+            pady=4,
+            bd=0,
+            relief="flat",
+        )
+        self.version_label.pack(side="left", padx=(3, 8), pady=2)
         ttk.Button(top, text="Abrir ISO", command=self.open_iso).pack(side="left", padx=3)
         ttk.Button(top, text="Reemplazar", command=self.replace_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Eliminar", command=self.delete_selected).pack(side="left", padx=3)
