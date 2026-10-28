@@ -7,7 +7,7 @@ from tkinter import filedialog
 from pdf2docx import Converter
 
 
-def create_tool(parent, app):
+def App(parent, app):
     frame = tk.Frame(parent, bg="#FFFFFF")
     frame.columnconfigure(0, weight=1)
 
