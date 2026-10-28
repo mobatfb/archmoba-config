@@ -2,8 +2,8 @@
   "app": "AMDEV",
   "name": "ArchMomaDEV",
   "description": "Lanzador maestro de aplicaciones de desarrollo ARCHMOBA",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "app_path": "AMDEV/app.py",
-  "release_commit": "621e7b1dc2eecbd2a8597b1166132c6cc0d48ea8",
+  "release_commit": "9dd1a8250a97500b628c662ca28a55dddb029956",
   "maintenance": false
 }
