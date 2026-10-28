@@ -27,10 +27,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.59"
+APP_VERSION = "1.0.60"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "02:25"
-SEARCH_MAX_LENGTH = 60
+APP_UPDATE_TIME = "02:31"
+SEARCH_MAX_LENGTH = 30
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -928,38 +928,64 @@ class PTMApp(tk.Tk):
         self.search_prefix.bind("<Button-1>", lambda _e: self.search_entry.focus_set())
 
         validate_search = (self.register(self._validate_search_input), "%P")
-        self.search_entry = tk.Entry(
+
+        self.search_text_area = tk.Frame(
             self.search_inner,
+            bg=WHITE,
+            height=30,
+            cursor="xterm",
+        )
+        self.search_text_area.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(0, 3),
+        )
+        self.search_text_area.pack_propagate(False)
+
+        self.search_entry_font = tkfont.Font(
+            family="Segoe UI",
+            size=12,
+        )
+        self.search_entry = tk.Entry(
+            self.search_text_area,
             textvariable=self.query,
-            width=30,
             relief="flat",
             bd=0,
-            font=("Segoe UI", 12),
+            font=self.search_entry_font,
             fg=BLACK,
             bg=WHITE,
             insertbackground=BLACK,
             validate="key",
             validatecommand=validate_search,
         )
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 0))
+        self.search_entry.place(x=0, y=1, width=18, height=28)
         self.search_entry.bind("<KeyRelease>", self._on_search_key_release)
         self.search_entry.bind("<Return>", self._show_all_search_results)
 
-        # X integrada al extremo derecho del input. El espacio se conserva
-        # aunque no haya texto para que la barra no cambie de tamaño.
         self.search_clear = tk.Canvas(
-            self.search_inner,
-            width=24,
-            height=30,
+            self.search_text_area,
+            width=18,
+            height=28,
             bg=WHITE,
             highlightthickness=0,
             bd=0,
             cursor="hand2",
         )
-        self.search_clear.pack(side="left", padx=(0, 3))
         self.search_clear.bind("<Button-1>", self._clear_search)
+        self.search_text_area.bind(
+            "<Button-1>",
+            lambda _e: self.search_entry.focus_set(),
+        )
+
         self.query.trace_add("write", self._on_query_text_changed)
+        self.search_text_area.bind(
+            "<Configure>",
+            lambda _e: self._position_search_clear(),
+            add="+",
+        )
         self._draw_search_clear_button()
+        self.after_idle(self._position_search_clear)
 
         self.search_btn = tk.Canvas(
             self.search_inner,
@@ -1303,6 +1329,50 @@ class PTMApp(tk.Tk):
         """Limita el buscador para evitar cadenas innecesariamente largas."""
         return len(str(proposed)) <= SEARCH_MAX_LENGTH
 
+    def _position_search_clear(self):
+        """Coloca la X inmediatamente despues del ultimo caracter escrito."""
+        if not hasattr(self, "search_text_area"):
+            return
+
+        value = self.query.get()
+        try:
+            area_width = max(20, self.search_text_area.winfo_width())
+        except tk.TclError:
+            return
+
+        # El Entry solo ocupa lo necesario para mostrar el texto/cursor.
+        text_width = self.search_entry_font.measure(value)
+        entry_width = max(18, text_width + 7)
+
+        if value:
+            # Reservar espacio para la X, manteniendola junto al texto.
+            max_entry = max(18, area_width - 22)
+            entry_width = min(entry_width, max_entry)
+            clear_x = min(entry_width + 1, area_width - 18)
+            try:
+                self.search_clear.place(
+                    x=clear_x,
+                    y=1,
+                    width=18,
+                    height=28,
+                )
+                self.search_clear.lift()
+            except tk.TclError:
+                pass
+        else:
+            try:
+                self.search_clear.place_forget()
+            except tk.TclError:
+                pass
+
+        try:
+            self.search_entry.place_configure(
+                width=max(18, entry_width),
+                height=28,
+            )
+        except tk.TclError:
+            pass
+
     def _draw_search_clear_button(self):
         if not hasattr(self, "search_clear"):
             return
@@ -1311,13 +1381,13 @@ class PTMApp(tk.Tk):
         c.delete("all")
 
         if not self.query.get():
-            c.configure(cursor="")
+            self._position_search_clear()
             return
 
-        c.configure(cursor="hand2")
-        # X pequena y limpia, centrada dentro del extremo derecho del input.
-        c.create_line(7, 8, 17, 18, fill=MUTED, width=2)
-        c.create_line(17, 8, 7, 18, fill=MUTED, width=2)
+        # X compacta: visualmente queda como "juan  ×".
+        c.create_line(5, 9, 13, 17, fill=MUTED, width=2)
+        c.create_line(13, 9, 5, 17, fill=MUTED, width=2)
+        self._position_search_clear()
 
     def _on_query_text_changed(self, *_args):
         # Protege tambien asignaciones programaticas al StringVar.
