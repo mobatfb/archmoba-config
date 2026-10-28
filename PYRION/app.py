@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -157,7 +157,7 @@ class PyrionApp(tk.Tk):
         self.title(APP_NAME)
         self.configure(bg="#101218")
 
-        self.attributes("-fullscreen", True)
+        self._force_fullscreen()
 
         tk.Label(
             self,
@@ -166,6 +166,44 @@ class PyrionApp(tk.Tk):
             fg="#FFFFFF",
             font=("Segoe UI", 28, "bold"),
         ).pack(expand=True)
+
+    def _force_fullscreen(self):
+        """Pantalla completa compatible con Windows y Xorg sin window manager."""
+        self.update_idletasks()
+
+        if os.name == "nt":
+            self.attributes("-fullscreen", True)
+            return
+
+        # En Linux/Xorg minimal, -fullscreen puede requerir un window manager.
+        # PYRION fuerza directamente el tamaño real de la pantalla y elimina bordes.
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+
+        self.overrideredirect(True)
+        self.geometry(f"{screen_width}x{screen_height}+0+0")
+
+        try:
+            self.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+
+        try:
+            self.attributes("-fullscreen", True)
+        except tk.TclError:
+            pass
+
+        self.update_idletasks()
+        self.lift()
+        self.focus_force()
+
+        # Reaplica la geometría después de que Xorg mapee la ventana.
+        self.after(
+            100,
+            lambda: self.geometry(
+                f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0"
+            ),
+        )
 
 
 if __name__ == "__main__":
