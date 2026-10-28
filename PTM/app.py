@@ -26,7 +26,7 @@ from tkinter import filedialog, messagebox
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
 APP_VERSION = "1.0.33"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:05"
+APP_UPDATE_TIME = "22:09"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1094,7 +1094,7 @@ class PTMApp(tk.Tk):
             None,
         )
         if current is not None:
-            self.open_tool(current)
+            self.open_tool(current, record_usage=False)
 
     # ---------- Herramientas ----------
     def reload_tools(self, local_only=False, refresh=True):
@@ -2862,8 +2862,9 @@ class PTMApp(tk.Tk):
         meta["loading_status"] = None
         self.switch_to_tool(key)
 
-    def open_tool(self, tool):
-        self._record_tool_open(tool)
+    def open_tool(self, tool, record_usage=True):
+        if record_usage:
+            self._record_tool_open(tool)
         key = self._tool_tab_key(tool)
 
         if key in self.open_tabs:
