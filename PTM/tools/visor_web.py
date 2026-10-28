@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.4"
+TOOL_VERSION = "2.0.5"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -856,7 +856,13 @@ class WebViewerTool(ttk.Frame):
 
     # ---------- Integración Win32 ----------
     def _win_api(self):
+        """Configura Win32 una sola vez con firmas compatibles con Python 3.14."""
         user32 = ctypes.windll.user32
+
+        HWND = ctypes.c_void_p
+        BOOL = ctypes.c_int
+        DWORD = ctypes.c_ulong
+        UINT = ctypes.c_uint
 
         get_long = getattr(
             user32,
@@ -869,15 +875,63 @@ class WebViewerTool(ttk.Frame):
             user32.SetWindowLongW,
         )
 
-        get_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        get_long.argtypes = [HWND, ctypes.c_int]
         get_long.restype = ctypes.c_ssize_t
 
         set_long.argtypes = [
-            ctypes.c_void_p,
+            HWND,
             ctypes.c_int,
             ctypes.c_ssize_t,
         ]
         set_long.restype = ctypes.c_ssize_t
+
+        user32.FindWindowW.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+        ]
+        user32.FindWindowW.restype = HWND
+
+        user32.SetParent.argtypes = [HWND, HWND]
+        user32.SetParent.restype = HWND
+
+        user32.ShowWindow.argtypes = [HWND, ctypes.c_int]
+        user32.ShowWindow.restype = BOOL
+
+        user32.SetWindowPos.argtypes = [
+            HWND,
+            HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            UINT,
+        ]
+        user32.SetWindowPos.restype = BOOL
+
+        user32.GetWindowThreadProcessId.argtypes = [
+            HWND,
+            ctypes.POINTER(DWORD),
+        ]
+        user32.GetWindowThreadProcessId.restype = DWORD
+
+        user32.SetForegroundWindow.argtypes = [HWND]
+        user32.SetForegroundWindow.restype = BOOL
+
+        user32.SetActiveWindow.argtypes = [HWND]
+        user32.SetActiveWindow.restype = HWND
+
+        user32.SetFocus.argtypes = [HWND]
+        user32.SetFocus.restype = HWND
+
+        user32.AttachThreadInput.argtypes = [
+            DWORD,
+            DWORD,
+            BOOL,
+        ]
+        user32.AttachThreadInput.restype = BOOL
+
+        user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        user32.GetAsyncKeyState.restype = ctypes.c_short
 
         return user32, get_long, set_long
 
@@ -888,18 +942,16 @@ class WebViewerTool(ttk.Frame):
         try:
             user32, get_long, set_long = self._win_api()
 
-            user32.FindWindowW.argtypes = [
-                ctypes.c_wchar_p,
-                ctypes.c_wchar_p,
-            ]
-            user32.FindWindowW.restype = ctypes.c_void_p
-
-            hwnd = ctypes.c_void_p(self._child_hwnd) if self._child_hwnd else None
+            # Mantener HWND como entero. En Python 3.14 envolver un
+            # c_void_p dentro de otro c_void_p produce:
+            # "cannot be converted to pointer".
+            hwnd = int(self._child_hwnd or 0)
             if not hwnd:
-                hwnd = user32.FindWindowW(
+                found = user32.FindWindowW(
                     None,
                     self._child_title,
                 )
+                hwnd = int(found or 0)
 
             if not hwnd:
                 self._embed_attempts += 1
@@ -911,9 +963,7 @@ class WebViewerTool(ttk.Frame):
                     )
                 return
 
-            parent_hwnd = ctypes.c_void_p(
-                int(self.browser_host.winfo_id())
-            )
+            parent_hwnd = int(self.browser_host.winfo_id())
 
             GWL_STYLE = -16
             WS_CHILD = 0x40000000
@@ -929,7 +979,7 @@ class WebViewerTool(ttk.Frame):
 
             style = int(
                 get_long(
-                    ctypes.c_void_p(hwnd),
+                    hwnd,
                     GWL_STYLE,
                 )
             )
@@ -950,16 +1000,16 @@ class WebViewerTool(ttk.Frame):
             )
 
             user32.SetParent(
-                ctypes.c_void_p(hwnd),
+                hwnd,
                 parent_hwnd,
             )
             set_long(
-                ctypes.c_void_p(hwnd),
+                hwnd,
                 GWL_STYLE,
                 style,
             )
 
-            self._child_hwnd = int(hwnd)
+            self._child_hwnd = hwnd
             self._embedded = True
 
             self.placeholder.place_forget()
@@ -967,7 +1017,7 @@ class WebViewerTool(ttk.Frame):
             self._resize_embedded(force=True)
 
             user32.ShowWindow(
-                ctypes.c_void_p(hwnd),
+                hwnd,
                 5,
             )
 
@@ -1009,7 +1059,7 @@ class WebViewerTool(ttk.Frame):
             width = max(1, int(self.browser_host.winfo_width()))
             height = max(1, int(self.browser_host.winfo_height()))
 
-            user32 = ctypes.windll.user32
+            user32, _get_long, _set_long = self._win_api()
             SWP_NOZORDER = 0x0004
             SWP_NOACTIVATE = 0x0010
             SWP_FRAMECHANGED = 0x0020
@@ -1024,8 +1074,8 @@ class WebViewerTool(ttk.Frame):
                 flags |= SWP_FRAMECHANGED
 
             user32.SetWindowPos(
-                ctypes.c_void_p(self._child_hwnd),
-                None,
+                int(self._child_hwnd),
+                0,
                 0,
                 0,
                 width,
@@ -1040,8 +1090,9 @@ class WebViewerTool(ttk.Frame):
             return
 
         try:
-            ctypes.windll.user32.ShowWindow(
-                ctypes.c_void_p(self._child_hwnd),
+            user32, _get_long, _set_long = self._win_api()
+            user32.ShowWindow(
+                int(self._child_hwnd),
                 5 if visible else 0,
             )
         except Exception:
@@ -1094,30 +1145,24 @@ class WebViewerTool(ttk.Frame):
             return
 
         try:
-            user32 = ctypes.windll.user32
+            user32, _get_long, _set_long = self._win_api()
             kernel32 = ctypes.windll.kernel32
 
             target_hwnd = int(self._webview_hwnd or self._child_hwnd)
             parent_hwnd = int(self.winfo_toplevel().winfo_id())
-
-            user32.GetWindowThreadProcessId.argtypes = [
-                ctypes.c_void_p,
-                ctypes.POINTER(ctypes.c_ulong),
-            ]
-            user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
 
             parent_pid = ctypes.c_ulong(0)
             child_pid = ctypes.c_ulong(0)
 
             parent_tid = int(
                 user32.GetWindowThreadProcessId(
-                    ctypes.c_void_p(parent_hwnd),
+                    parent_hwnd,
                     ctypes.byref(parent_pid),
                 )
             )
             child_tid = int(
                 user32.GetWindowThreadProcessId(
-                    ctypes.c_void_p(target_hwnd),
+                    target_hwnd,
                     ctypes.byref(child_pid),
                 )
             )
@@ -1141,20 +1186,20 @@ class WebViewerTool(ttk.Frame):
             try:
                 try:
                     user32.SetForegroundWindow(
-                        ctypes.c_void_p(parent_hwnd)
+                        parent_hwnd
                     )
                 except Exception:
                     pass
 
                 try:
                     user32.SetActiveWindow(
-                        ctypes.c_void_p(parent_hwnd)
+                        parent_hwnd
                     )
                 except Exception:
                     pass
 
                 user32.SetFocus(
-                    ctypes.c_void_p(target_hwnd)
+                    target_hwnd
                 )
             finally:
                 if attached:
