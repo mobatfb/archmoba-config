@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.0"
+TOOL_VERSION = "2.0.1"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -156,17 +156,35 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
                             current_url = ""
 
                         current_title = ""
+                        page_loaded = False
                         try:
-                            current_title = str(
-                                window.evaluate_js("document.title") or ""
-                            ).strip()
+                            page_loaded = bool(window.events.loaded.is_set())
                         except Exception:
                             pass
 
-                        if (
-                            current_url != state["last_url"]
-                            or current_title != state["last_title"]
-                        ):
+                        if page_loaded:
+                            try:
+                                current_title = str(
+                                    window.evaluate_js("document.title") or ""
+                                ).strip()
+                            except Exception:
+                                pass
+
+                        url_changed = current_url != state["last_url"]
+                        title_changed = current_title != state["last_title"]
+
+                        if url_changed and page_loaded:
+                            percent = int(round(state["zoom"] * 100))
+                            try:
+                                window.run_js(
+                                    "document.documentElement.style.zoom="
+                                    + repr(str(percent) + "%")
+                                    + ";"
+                                )
+                            except Exception:
+                                pass
+
+                        if url_changed or title_changed:
                             state["last_url"] = current_url
                             state["last_title"] = current_title
                             _child_send(
@@ -668,13 +686,31 @@ class WebViewerTool(ttk.Frame):
             self._process is not None
             and self._process.poll() is not None
             and self._alive
-            and self._embedded
         ):
+            exit_code = self._process.poll()
+            self._process = None
+            was_embedded = self._embedded
             self._embedded = False
             self._child_hwnd = 0
-            self._show_browser_error(
-                "El proceso Edge WebView2 se cerró. PTM continúa funcionando."
-            )
+
+            # Si ya recibimos un error explicito, conservar ese mensaje.
+            current = self.status_var.get()
+            if (
+                "No se pudo" not in current
+                and "requiere" not in current
+                and "cerró" not in current
+            ):
+                if was_embedded:
+                    message = (
+                        "El proceso Edge WebView2 se cerró. "
+                        "PTM continúa funcionando."
+                    )
+                else:
+                    message = (
+                        "Edge WebView2 no pudo iniciar "
+                        f"(código {exit_code}). PTM continúa funcionando."
+                    )
+                self._show_browser_error(message)
 
         try:
             self.after(90, self._poll_ipc)
