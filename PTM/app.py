@@ -5,6 +5,7 @@ import csv
 import hashlib
 import importlib.util
 import importlib.metadata
+import inspect
 import io
 import json
 import os
@@ -26,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.43"
+APP_VERSION = "1.0.44"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "23:03"
+APP_UPDATE_TIME = "23:23"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -2159,7 +2160,7 @@ class PTMApp(tk.Tk):
         add_entry(6, version_var)
 
         add_label(7, "Modo")
-        mode_menu = tk.OptionMenu(container, mode_var, "Integrado", "Externo")
+        mode_menu = tk.OptionMenu(container, mode_var, "Integrado")
         mode_menu.configure(
             bg=WHITE, fg=BLACK, activebackground=LIGHT,
             relief="solid", bd=1, highlightthickness=0,
@@ -3140,6 +3141,65 @@ class PTMApp(tk.Tk):
         # Dependencias: se preparan en segundo plano y se muestran en esta pestaña.
         self._install_dependencies(tool, key)
 
+    def _resolve_integrated_entry(self, module):
+        """Encuentra automáticamente la entrada embebible de una herramienta."""
+        for name in ("App", "Application"):
+            entry = getattr(module, name, None)
+            if callable(entry):
+                return entry
+
+        # Si el autor no usa un nombre estándar, detectar una clase Frame
+        # definida por el propio módulo.
+        for entry in vars(module).values():
+            if not inspect.isclass(entry):
+                continue
+            if getattr(entry, "__module__", None) != module.__name__:
+                continue
+            try:
+                if issubclass(entry, tk.Frame):
+                    return entry
+            except TypeError:
+                continue
+
+        # Compatibilidad temporal con paquetes antiguos.
+        legacy = getattr(module, "create_tool", None)
+        if callable(legacy):
+            return legacy
+        return None
+
+    def _instantiate_integrated_entry(self, entry, parent):
+        """Instancia App/Application adaptando parent y app según la firma."""
+        try:
+            signature = inspect.signature(entry)
+            params = list(signature.parameters.values())
+            positional = [
+                p for p in params
+                if p.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+            ]
+            has_varargs = any(
+                p.kind == inspect.Parameter.VAR_POSITIONAL
+                for p in params
+            )
+        except (TypeError, ValueError):
+            positional = []
+            has_varargs = True
+
+        if has_varargs or len(positional) >= 2:
+            widget = entry(parent, self)
+        elif len(positional) == 1:
+            widget = entry(parent)
+        else:
+            widget = entry()
+
+        if widget is None or not hasattr(widget, "pack"):
+            raise TypeError(
+                "La entrada integrada debe devolver o construir un widget Tkinter."
+            )
+        return widget
+
     def _load_tool_into_tab(self, tool, key):
         meta = self.open_tabs.get(key)
         if not meta:
@@ -3149,43 +3209,13 @@ class PTMApp(tk.Tk):
         self._clear_tool_frame(frame)
 
         if str(tool.get("mode", "")).strip().lower() == "externo":
-            info = tk.Frame(frame, bg=WHITE)
-            info.pack(expand=True)
-            tk.Label(
-                info,
-                text=tool["name"],
-                bg=WHITE,
-                fg=BLACK,
-                font=("Segoe UI", 20, "bold"),
-            ).pack(pady=(0, 8))
-
-            if tool.get("description"):
-                tk.Label(
-                    info,
-                    text=tool["description"],
-                    bg=WHITE,
-                    fg=MUTED,
-                    font=("Segoe UI", 10),
-                    wraplength=520,
-                    justify="center",
-                ).pack(pady=(0, 10))
-
-            tk.Button(
-                info,
-                text="Ejecutar herramienta",
-                command=lambda p=tool["path"]: self.run_external(p),
-                bg=TEAL,
-                fg=ON_ACCENT,
-                activebackground=TEAL_DARK,
-                activeforeground=ON_ACCENT,
-                relief="flat",
-                padx=18,
-                pady=8,
-            ).pack(pady=8)
-
-            meta["module"] = None
-            meta["state"] = "ready"
-            self._activate_tool_if_foreground(key)
+            self._show_tool_unavailable(
+                tool,
+                key,
+                RuntimeError(
+                    "PTM solo admite herramientas integradas dentro de una pestaña."
+                ),
+            )
             return
 
         try:
@@ -3199,42 +3229,24 @@ class PTMApp(tk.Tk):
             self._show_tool_unavailable(tool, key, exc)
             return
 
-        factory = getattr(module, "create_tool", None)
-        if callable(factory):
+        entry = self._resolve_integrated_entry(module)
+        if callable(entry):
             try:
-                widget = factory(frame, self)
+                widget = self._instantiate_integrated_entry(entry, frame)
                 widget.pack(fill="both", expand=True)
             except Exception as exc:
                 self._show_tool_unavailable(tool, key, exc)
                 return
         else:
-            info = tk.Frame(frame, bg=WHITE)
-            info.pack(expand=True)
-            tk.Label(
-                info,
-                text=tool["name"],
-                bg=WHITE,
-                fg=BLACK,
-                font=("Segoe UI", 20, "bold"),
-            ).pack(pady=(0, 10))
-            tk.Label(
-                info,
-                text="Este archivo no contiene create_tool(parent, app).",
-                bg=WHITE,
-                fg=MUTED,
-                font=("Segoe UI", 10),
-            ).pack(pady=5)
-            tk.Button(
-                info,
-                text="Ejecutar como programa externo",
-                command=lambda p=tool["path"]: self.run_external(p),
-                bg=TEAL,
-                fg=ON_ACCENT,
-                activebackground=TEAL_DARK,
-                relief="flat",
-                padx=16,
-                pady=8,
-            ).pack(pady=10)
+            self._show_tool_unavailable(
+                tool,
+                key,
+                RuntimeError(
+                    "No se encontró una entrada integrada compatible. "
+                    "Define una clase App/Application basada en Tkinter."
+                ),
+            )
+            return
 
         meta["module"] = module
         meta["state"] = "ready"
