@@ -2,8 +2,8 @@
   "app": "PYRION",
   "name": "PYRION OS",
   "description": "Entorno gráfico y sistema visual de PYRION Mini OS",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "app_path": "PYRION/app.py",
-  "release_commit": "43f1b0e51ed34ccb95f580f22fbbf2cdcabaad77",
+  "release_commit": "9233ba6ce99a998f81f4d8a5ffe6d65ab5f12a48",
   "maintenance": false
 }
