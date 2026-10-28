@@ -19,7 +19,7 @@ except Exception:
     PIL_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
-CANVAEDIT_VERSION = "1.0.3"
+CANVAEDIT_VERSION = "1.0.4"
 DEFAULT_PROJECT = "pyrion_desing"
 
 REPO_OWNER = "mobatfb"
