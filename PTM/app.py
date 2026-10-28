@@ -17,9 +17,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "18:38"
+APP_UPDATE_TIME = "19:11"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
@@ -549,14 +549,39 @@ class PTMApp(tk.Tk):
                 self.results_window, width=e.width
             ),
         )
-        self.results_canvas.bind(
-            "<MouseWheel>",
-            lambda e: self.results_canvas.yview_scroll(
-                int(-1 * (e.delta / 120)), "units"
-            ),
-        )
+        self._bind_results_scroll(self.results_canvas)
+        self._bind_results_scroll(self.results_frame)
+        self._bind_results_scroll(self.results_container)
 
         self._apply_search_layout(expanded=False)
+
+    def _scroll_results(self, event):
+        """Desplaza la lista aunque el cursor esté sobre tarjetas o textos."""
+        if not self.show_all_results:
+            return "break"
+
+        first, last = self.results_canvas.yview()
+        if first <= 0.0 and last >= 1.0:
+            return "break"
+
+        if getattr(event, "num", None) == 4:
+            direction = -1
+        elif getattr(event, "num", None) == 5:
+            direction = 1
+        else:
+            delta = getattr(event, "delta", 0)
+            if delta == 0:
+                return "break"
+            direction = -1 if delta > 0 else 1
+
+        self.results_canvas.yview_scroll(direction * 3, "units")
+        return "break"
+
+    def _bind_results_scroll(self, widget):
+        """Enlaza rueda/trackpad al scroll de resultados para cualquier widget."""
+        widget.bind("<MouseWheel>", self._scroll_results, add="+")
+        widget.bind("<Button-4>", self._scroll_results, add="+")
+        widget.bind("<Button-5>", self._scroll_results, add="+")
 
     def _apply_search_layout(self, expanded=False):
         """Cambia la composición del inicio al pulsar Enter."""
@@ -944,6 +969,13 @@ class PTMApp(tk.Tk):
             for widget in clickable:
                 widget.bind("<Double-Button-1>", lambda _e, t=tool: self.open_tool(t))
                 widget.bind("<Button-1>", lambda _e, t=tool: self.open_tool(t))
+                self._bind_results_scroll(widget)
+
+        # El Canvas debe conocer el alto real después de crear todas las filas.
+        self.results_frame.update_idletasks()
+        bbox = self.results_canvas.bbox("all")
+        if bbox:
+            self.results_canvas.configure(scrollregion=bbox)
 
     def open_first_result(self):
         shown = self.filtered_tools()
