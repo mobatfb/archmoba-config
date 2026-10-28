@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.29"
+APP_VERSION = "1.0.30"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:28"
+APP_UPDATE_TIME = "21:31"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -232,17 +232,30 @@ MUTED = "#A9AFB8" if DARK_MODE else "#666666"
 class TabButton(tk.Canvas):
     """Pestaña dibujada por código con esquina roja tipo PTM."""
 
-    def __init__(self, parent, title, on_open, on_close=None, active=False, width=118, height=30):
-        super().__init__(parent, width=width, height=height, highlightthickness=0, bd=0, bg=WHITE)
+    def __init__(
+        self, parent, title, on_open, on_close=None, active=False,
+        width=118, height=30, processing=False
+    ):
+        super().__init__(
+            parent, width=width, height=height,
+            highlightthickness=0, bd=0, bg=WHITE
+        )
         self.title = title
         self.on_open = on_open
         self.on_close = on_close
         self.tab_width = width
         self.tab_height = height
         self.active = active
+        self.processing = processing
+        self.spinner_angle = 0
+        self.spinner_arc = None
+        self._spinner_job = None
         self.bind("<Button-1>", self._click)
         self.bind("<Button-3>", self._right_click)
+        self.bind("<Destroy>", self._on_destroy)
         self.draw()
+        if self.processing:
+            self._schedule_spinner()
 
     def set_active(self, active):
         self.active = active
@@ -255,18 +268,84 @@ class TabButton(tk.Canvas):
 
     def draw(self):
         self.delete("all")
+        self.spinner_arc = None
         w, h = self.tab_width, self.tab_height
         fill = WHITE if self.active else TEAL
         fg = (BLACK if DARK_MODE else TEAL_DARK) if self.active else ON_ACCENT
         outline = TEAL_DARK
-        self.create_rectangle(1, 1, w - 1, h - 1, fill=fill, outline=outline, width=1)
-        self.create_polygon(w - 18, 1, w - 1, 1, w - 1, 18, fill=RED, outline=RED)
+        self.create_rectangle(
+            1, 1, w - 1, h - 1,
+            fill=fill, outline=outline, width=1
+        )
+        self.create_polygon(
+            w - 18, 1, w - 1, 1, w - 1, 18,
+            fill=RED, outline=RED
+        )
         if self.active:
-            self.create_rectangle(1, h - 5, w - 1, h - 1, fill=RED, outline=RED)
-        max_chars = max(7, int((w - 20) / 7.2))
-        shown = self.title if len(self.title) <= max_chars else self.title[: max_chars - 1] + "…"
-        self.create_text(w / 2, h / 2 - (2 if self.active else 0), text=shown,
-                         fill=fg, font=("Segoe UI", 9, "bold" if self.active else "normal"))
+            self.create_rectangle(
+                1, h - 5, w - 1, h - 1,
+                fill=RED, outline=RED
+            )
+
+        if self.processing:
+            spinner_color = TEAL if self.active else ON_ACCENT
+            self.spinner_arc = self.create_arc(
+                7, 8, 19, 20,
+                start=self.spinner_angle,
+                extent=265,
+                style="arc",
+                outline=spinner_color,
+                width=2,
+            )
+            max_chars = max(5, int((w - 46) / 7.2))
+            shown = (
+                self.title
+                if len(self.title) <= max_chars
+                else self.title[: max_chars - 1] + "…"
+            )
+            text_x = (25 + (w - 20)) / 2
+        else:
+            max_chars = max(7, int((w - 20) / 7.2))
+            shown = (
+                self.title
+                if len(self.title) <= max_chars
+                else self.title[: max_chars - 1] + "…"
+            )
+            text_x = w / 2
+
+        self.create_text(
+            text_x,
+            h / 2 - (2 if self.active else 0),
+            text=shown,
+            fill=fg,
+            font=("Segoe UI", 9, "bold" if self.active else "normal"),
+        )
+
+    def _schedule_spinner(self):
+        if self.processing and self._spinner_job is None:
+            self._spinner_job = self.after(45, self._animate_spinner)
+
+    def _animate_spinner(self):
+        self._spinner_job = None
+        if not self.processing:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+            self.spinner_angle = (self.spinner_angle - 18) % 360
+            if self.spinner_arc is not None:
+                self.itemconfigure(self.spinner_arc, start=self.spinner_angle)
+            self._schedule_spinner()
+        except tk.TclError:
+            return
+
+    def _on_destroy(self, _event=None):
+        if self._spinner_job is not None:
+            try:
+                self.after_cancel(self._spinner_job)
+            except tk.TclError:
+                pass
+            self._spinner_job = None
 
     def _click(self, event):
         # En pestañas de herramientas, la esquina roja también sirve para cerrarlas.
@@ -505,52 +584,22 @@ class PTMApp(tk.Tk):
         self.tab_widgets["home"] = home
 
         processing_states = {"loading", "preparing", "processing"}
-        spinner_frames = ("◐", "◓", "◑", "◒")
-        spinner_index = int(getattr(self, "_tab_spinner_index", 0))
-        has_processing_tabs = False
 
         for key in self.open_tabs:
             meta = self.open_tabs[key]
             is_processing = meta.get("state") in processing_states
-            if is_processing:
-                has_processing_tabs = True
-                tab_title = (
-                    f"{spinner_frames[spinner_index % len(spinner_frames)]} "
-                    f"{meta['name']}"
-                )
-            else:
-                tab_title = meta["name"]
 
             tab = TabButton(
                 self.tabs_holder,
-                tab_title,
+                meta["name"],
                 on_open=lambda k=key: self.switch_to_tool(k),
                 on_close=lambda k=key: self.close_tool_tab(k),
                 active=(self.current_key == key),
                 width=tab_width,
+                processing=is_processing,
             )
             tab.pack(side="left", padx=(0, 6))
             self.tab_widgets[key] = tab
-
-        # El spinner de la pestaña solo existe mientras haya trabajo activo.
-        if has_processing_tabs:
-            if not getattr(self, "_tab_spinner_scheduled", False):
-                self._tab_spinner_scheduled = True
-                self.after(140, self._animate_processing_tabs)
-
-    def _animate_processing_tabs(self):
-        self._tab_spinner_scheduled = False
-        processing_states = {"loading", "preparing"}
-        if not any(
-            meta.get("state") in processing_states
-            for meta in self.open_tabs.values()
-        ):
-            return
-
-        self._tab_spinner_index = (
-            int(getattr(self, "_tab_spinner_index", 0)) + 1
-        ) % 4
-        self._render_tabs()
 
     def _clear_content(self):
         if self.current_tool_widget is not None:
