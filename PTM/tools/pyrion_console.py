@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.9.0"
+TOOL_VERSION = "1.10.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -814,10 +814,14 @@ class PyrionConsoleTool(tk.Frame):
 
         width = 560
         height = 255
+
+        # Siempre aparece centrado en la pantalla, no relativo a la consola.
         try:
-            self.update_idletasks()
-            x = self.winfo_rootx() + max(20, (self.winfo_width() - width) // 2)
-            y = self.winfo_rooty() + max(40, self.winfo_height() - height - 55)
+            win.update_idletasks()
+            screen_w = win.winfo_screenwidth()
+            screen_h = win.winfo_screenheight()
+            x = max(0, (screen_w - width) // 2)
+            y = max(0, (screen_h - height) // 2)
         except tk.TclError:
             x, y = 120, 120
 
@@ -886,7 +890,31 @@ class PyrionConsoleTool(tk.Frame):
         self.keyboard_rows.pack(fill="both", expand=True, padx=5, pady=(2, 5))
 
         self._draw_keyboard()
+
+        # Forzar que aparezca al frente incluso en Xorg minimal o sin WM completo.
+        try:
+            win.deiconify()
+            win.lift()
+            win.attributes("-topmost", True)
+            win.focus_force()
+        except tk.TclError:
+            pass
+
+        self.after(50, self._raise_keyboard)
+        self.after(250, self._raise_keyboard)
         self.command.focus_set()
+
+    def _raise_keyboard(self):
+        win = self.keyboard_window
+        if win is None:
+            return
+        try:
+            if not win.winfo_exists():
+                return
+            win.lift()
+            win.attributes("-topmost", True)
+        except tk.TclError:
+            pass
 
     def close_keyboard(self):
         if self.keyboard_window is not None:
