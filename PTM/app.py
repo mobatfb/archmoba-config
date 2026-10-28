@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.63"
+APP_VERSION = "1.0.64"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "05:42"
+APP_UPDATE_TIME = "05:48"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -48,6 +48,45 @@ SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
 SELF_CONFIG_API_URL = (
     f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/config.json?ref=main"
 )
+
+# Entorno Python administrado por PTM. En MiniLinux el Python del sistema puede
+# no incluir pip; PTM mantiene pip y las dependencias de las tools fuera de
+# /usr/lib para no requerir permisos de administrador ni modificar el sistema.
+if os.environ.get("LOCALAPPDATA"):
+    PTM_PYTHON_ROOT = (
+        Path(os.environ["LOCALAPPDATA"]) / "ARCHMOBA" / "PTM" / "python"
+    )
+else:
+    PTM_PYTHON_ROOT = Path.home() / ".archmoba" / "PTM" / "python"
+
+PTM_PIP_LIB = PTM_PYTHON_ROOT / "pip"
+PTM_DEPS_LIB = PTM_PYTHON_ROOT / "site-packages"
+GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
+
+
+def _activate_ptm_python_paths():
+    """Hace visibles pip y dependencias gestionadas por PTM."""
+    managed = [str(PTM_DEPS_LIB), str(PTM_PIP_LIB)]
+
+    for value in reversed(managed):
+        if value not in sys.path:
+            sys.path.insert(0, value)
+
+    current = os.environ.get("PYTHONPATH", "")
+    existing = [part for part in current.split(os.pathsep) if part]
+    combined = []
+    for value in managed + existing:
+        if value and value not in combined:
+            combined.append(value)
+    os.environ["PYTHONPATH"] = os.pathsep.join(combined)
+
+
+def _ptm_python_env():
+    _activate_ptm_python_paths()
+    return os.environ.copy()
+
+
+_activate_ptm_python_paths()
 
 def _version_tuple(value):
     """Convierte 1.2.3 en una tupla comparable sin depender de librerías externas."""
@@ -2762,6 +2801,143 @@ class PTMApp(tk.Tk):
 
         return packages
 
+    def _pip_works(self, env=None):
+        """Comprueba que este mismo Python pueda ejecutar python -m pip."""
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "--version",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env or _ptm_python_env(),
+                timeout=20,
+                check=False,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _ensure_pip_runtime(self, key, tool):
+        """Prepara pip automáticamente en Python mínimos como MiniLinux."""
+        env = _ptm_python_env()
+        if self._pip_works(env):
+            return env
+
+        self._dependency_events.put(
+            (
+                "status",
+                key,
+                tool,
+                "Python no incluye pip. Preparando instalador...",
+                None,
+            )
+        )
+
+        details = []
+
+        # 1) Preferir ensurepip cuando la distribución de Python lo incluye.
+        try:
+            cmd = [
+                sys.executable,
+                "-m",
+                "ensurepip",
+                "--upgrade",
+            ]
+            if os.name != "nt":
+                cmd.append("--user")
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                timeout=180,
+                check=False,
+            )
+            if result.stdout:
+                details.append(result.stdout.strip()[-1200:])
+
+            _activate_ptm_python_paths()
+            env = _ptm_python_env()
+            if self._pip_works(env):
+                return env
+        except Exception as exc:
+            details.append(f"ensurepip: {exc}")
+
+        # 2) Algunos Python mínimos se compilan sin ensurepip. En ese caso PTM
+        # descarga el bootstrap oficial y coloca pip en su propio directorio.
+        self._dependency_events.put(
+            (
+                "status",
+                key,
+                tool,
+                "Descargando pip para el entorno de PTM...",
+                None,
+            )
+        )
+
+        try:
+            PTM_PYTHON_ROOT.mkdir(parents=True, exist_ok=True)
+            PTM_PIP_LIB.mkdir(parents=True, exist_ok=True)
+            bootstrap = PTM_PYTHON_ROOT / "get-pip.py"
+
+            request = urllib.request.Request(
+                GET_PIP_URL,
+                headers={
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                bootstrap.write_bytes(response.read())
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(bootstrap),
+                    "--disable-pip-version-check",
+                    "--no-warn-script-location",
+                    "--target",
+                    str(PTM_PIP_LIB),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+                timeout=600,
+                check=False,
+            )
+            if result.stdout:
+                details.append(result.stdout.strip()[-1800:])
+
+            try:
+                bootstrap.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            _activate_ptm_python_paths()
+            env = _ptm_python_env()
+            if self._pip_works(env):
+                return env
+
+        except Exception as exc:
+            details.append(f"get-pip.py: {exc}")
+
+        detail = "\n".join(part for part in details if part).strip()
+        if len(detail) > 2200:
+            detail = detail[-2200:]
+
+        raise RuntimeError(
+            "Python no incluye pip y PTM no pudo prepararlo "
+            "automáticamente.\n\n"
+            + (detail or "No se recibió información adicional.")
+        )
+
     def _install_dependencies(self, tool, key):
         """Prepara dependencias sin abrir ventanas; todo se muestra en la pestaña."""
         meta = self.open_tabs.get(key)
@@ -2783,6 +2959,13 @@ class PTMApp(tk.Tk):
 
         def worker():
             try:
+                pip_env = self._ensure_pip_runtime(key, tool)
+
+                if os.name != "nt":
+                    PTM_DEPS_LIB.mkdir(parents=True, exist_ok=True)
+                    _activate_ptm_python_paths()
+                    pip_env = _ptm_python_env()
+
                 for package in missing:
                     install_package = self._compatible_install_package(package)
 
@@ -2806,8 +2989,21 @@ class PTMApp(tk.Tk):
                         "install",
                         "--disable-pip-version-check",
                         "--prefer-binary",
-                        install_package,
                     ]
+
+                    if os.name != "nt":
+                        # Nunca escribir dependencias de tools dentro del Python
+                        # del sistema de MiniLinux. Se almacenan en PTM.
+                        cmd.extend(
+                            [
+                                "--upgrade",
+                                "--target",
+                                str(PTM_DEPS_LIB),
+                            ]
+                        )
+
+                    cmd.append(install_package)
+
                     process = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
@@ -2815,6 +3011,7 @@ class PTMApp(tk.Tk):
                         text=True,
                         bufsize=1,
                         universal_newlines=True,
+                        env=pip_env,
                         creationflags=(
                             subprocess.CREATE_NO_WINDOW
                             if os.name == "nt"
@@ -2920,6 +3117,7 @@ class PTMApp(tk.Tk):
                             f"{detail or 'pip devolvió un error.'}"
                         )
 
+                _activate_ptm_python_paths()
                 importlib.invalidate_caches()
 
                 still_missing = []
