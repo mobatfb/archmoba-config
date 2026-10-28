@@ -19,7 +19,7 @@ except Exception:
     PIL_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
-CANVAEDIT_VERSION = "1.0.6"
+CANVAEDIT_VERSION = "1.0.7"
 DEFAULT_PROJECT = "pyrion_desing"
 
 REPO_OWNER = "mobatfb"
@@ -69,6 +69,7 @@ class Layer:
     y: int = 0
     width: int = 0
     height: int = 0
+    align: str = ""
 
     @classmethod
     def create(cls, name, type="generic", **kwargs):
