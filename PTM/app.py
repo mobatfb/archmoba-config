@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.62"
+APP_VERSION = "1.0.63"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "03:38"
+APP_UPDATE_TIME = "05:42"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -156,10 +156,21 @@ def check_self_update(restart=True):
         os.replace(temp_file, current_file)
 
         if restart:
-            subprocess.Popen(
+            if os.name == "nt":
+                subprocess.Popen(
+                    [sys.executable, str(current_file), *sys.argv[1:]],
+                    cwd=str(current_file.parent),
+                )
+                return True
+
+            # MiniLinux/Linux: mantener el mismo PID/proceso para no devolver
+            # el control al init ni dejar una instancia fantasma.
+            os.execv(
+                sys.executable,
                 [sys.executable, str(current_file), *sys.argv[1:]],
-                cwd=str(current_file.parent),
             )
+            return False
+
         return True
     except Exception:
         # Una falla de actualización nunca debe impedir abrir la versión instalada.
@@ -171,8 +182,15 @@ INSTANCE_LOCK_PORT = 47651
 
 
 def acquire_single_instance_lock():
-    """Impide que dos instancias de PTM se ejecuten simultáneamente."""
+    """Impide instancias duplicadas en Windows sin bloquear MiniLinux/Linux."""
     global INSTANCE_LOCK_SOCKET
+
+    # En MiniLinux/Linux AMDEV ya controla la instancia anterior. El bloqueo
+    # TCP puede sobrevivir a procesos ocultos o copias antiguas y hacía que
+    # PTM terminara voluntariamente con código 0 antes de crear su ventana.
+    if os.name != "nt":
+        return True
+
     lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -587,11 +605,20 @@ class PTMApp(tk.Tk):
                             self.floating.destroy()
                     except Exception:
                         pass
-                    subprocess.Popen(
+                    if os.name == "nt":
+                        subprocess.Popen(
+                            [sys.executable, str(current_file), *sys.argv[1:]],
+                            cwd=str(current_file.parent),
+                        )
+                        self.destroy()
+                        return
+
+                    # En Linux reemplazar el proceso actual; evita una salida
+                    # intermedia que MiniLinux puede interpretar como fin de sesión.
+                    os.execv(
+                        sys.executable,
                         [sys.executable, str(current_file), *sys.argv[1:]],
-                        cwd=str(current_file.parent),
                     )
-                    self.destroy()
                     return
 
                 # Si no hubo actualización, programar la próxima comprobación.
@@ -5017,9 +5044,18 @@ class PTMApp(tk.Tk):
 
 if __name__ == "__main__":
     if check_self_update():
+        print("[PTM] Actualizacion aplicada; reiniciando.", flush=True)
         raise SystemExit(0)
 
     if not acquire_single_instance_lock():
+        print(
+            "[PTM] Ya existe otra instancia de PTM en Windows.",
+            flush=True,
+        )
         raise SystemExit(0)
 
+    print(
+        f"[PTM] Iniciando PTM v{APP_VERSION} en {sys.platform}.",
+        flush=True,
+    )
     PTMApp().mainloop()
