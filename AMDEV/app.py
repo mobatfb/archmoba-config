@@ -12,11 +12,14 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:14"
+APP_UPDATE_TIME = "19:32"
 
-REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main"
+REPO_OWNER = "mobatfb"
+REPO_NAME = "archmoba-config"
+REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
+REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main"
 APPS_URL = f"{REPO_RAW_BASE}/apps.json"
 
 TEAL = "#176684"
@@ -534,7 +537,34 @@ class AMDEVApp(tk.Tk):
             self.status.configure(text=f"Descargando {app_path}...")
             self.update_idletasks()
 
-            source = self._request_text(f"{REPO_RAW_BASE}/{app_path}", timeout=20)
+            release_commit = str(config.get("release_commit", "")).strip()
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", release_commit):
+                raise RuntimeError(
+                    "El config.json no contiene un release_commit válido."
+                )
+
+            immutable_app_url = f"{REPO_RAW_ROOT}/{release_commit}/{app_path}"
+
+            source = None
+            last_error = None
+            for attempt in range(4):
+                try:
+                    source = self._request_text(immutable_app_url, timeout=20)
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    self.status.configure(
+                        text=f"Esperando release confirmado... intento {attempt + 1}/4"
+                    )
+                    self.update_idletasks()
+                    if attempt < 3:
+                        time.sleep(0.8)
+
+            if source is None:
+                raise RuntimeError(
+                    f"No se pudo descargar el release confirmado: {last_error}"
+                )
+
             compile(source, app_path, "exec")
 
             expected_version = str(config.get("version", "")).strip()
