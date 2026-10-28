@@ -13,13 +13,50 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 APP_UPDATE_DATE = "27/10/2026"
 APP_UPDATE_TIME = "20:17"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
+
+def _windowless_python():
+    """Devuelve pythonw.exe en Windows cuando está disponible."""
+    executable = Path(sys.executable)
+    if os.name == "nt" and executable.name.lower() == "python.exe":
+        pythonw = executable.with_name("pythonw.exe")
+        if pythonw.is_file():
+            return str(pythonw)
+    return str(executable)
+
+
+def _ensure_windowless_amdev():
+    """Relanza AMDEV sin consola cuando fue iniciado con python.exe."""
+    if os.name != "nt":
+        return False
+
+    executable = Path(sys.executable)
+    if executable.name.lower() != "python.exe":
+        return False
+
+    pythonw = executable.with_name("pythonw.exe")
+    if not pythonw.is_file():
+        return False
+
+    if os.environ.get("AMDEV_WINDOWLESS") == "1":
+        return False
+
+    env = os.environ.copy()
+    env["AMDEV_WINDOWLESS"] = "1"
+    current = Path(__file__).resolve()
+    subprocess.Popen(
+        [str(pythonw), str(current), *sys.argv[1:]],
+        cwd=str(current.parent),
+        env=env,
+    )
+    return True
+
 REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main"
 APPS_REPO_PATH = "AMDEV/apps.json"
 APPS_URL = f"{REPO_RAW_BASE}/{APPS_REPO_PATH}"
@@ -95,7 +132,7 @@ def check_self_update():
         temp.write_text(source, encoding="utf-8")
         os.replace(temp, current)
 
-        subprocess.Popen([sys.executable, str(current), *sys.argv[1:]], cwd=str(current.parent))
+        subprocess.Popen([_windowless_python(), str(current), *sys.argv[1:]], cwd=str(current.parent))
         return True
     except Exception:
         return False
@@ -693,7 +730,7 @@ class AMDEVApp(tk.Tk):
                 text=f"Ejecutando {config.get('name', item.get('name', app_id))} v{config.get('version', '')}..."
             )
             process = subprocess.Popen(
-                [sys.executable, str(local_app)],
+                [_windowless_python(), str(local_app)],
                 cwd=str(local_dir),
             )
             self.running_processes[app_id] = process
@@ -792,6 +829,9 @@ class AMDEVApp(tk.Tk):
 
 
 if __name__ == "__main__":
+    if _ensure_windowless_amdev():
+        raise SystemExit(0)
+
     if check_self_update():
         raise SystemExit(0)
 
