@@ -24,9 +24,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.32"
+APP_VERSION = "1.0.33"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:55"
+APP_UPDATE_TIME = "22:05"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -235,7 +235,8 @@ class TabButton(tk.Canvas):
 
     def __init__(
         self, parent, title, on_open, on_close=None, active=False,
-        width=118, height=30, processing=False
+        width=118, height=30, processing=False,
+        on_favorite=None, on_reload=None, favorite=False
     ):
         super().__init__(
             parent, width=width, height=height,
@@ -244,6 +245,9 @@ class TabButton(tk.Canvas):
         self.title = title
         self.on_open = on_open
         self.on_close = on_close
+        self.on_favorite = on_favorite
+        self.on_reload = on_reload
+        self.favorite = bool(favorite)
         self.tab_width = width
         self.tab_height = height
         self.active = active
@@ -358,7 +362,15 @@ class TabButton(tk.Canvas):
     def _right_click(self, _event):
         if self.on_close:
             menu = tk.Menu(self, tearoff=0)
-            menu.add_command(label="Cerrar pestaña", command=self.on_close)
+            if self.on_favorite:
+                menu.add_command(
+                    label=("Quitar de favoritos" if self.favorite
+                           else "Añadir a favoritos"),
+                    command=self.on_favorite,
+                )
+            if self.on_reload:
+                menu.add_command(label="Recargar", command=self.on_reload)
+            menu.add_command(label="Cerrar", command=self.on_close)
             menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
 
 
@@ -454,6 +466,14 @@ class PTMApp(tk.Tk):
         self.tools_dir.mkdir(exist_ok=True)
         self.guide_path = self.base_dir / "guide.csv"
         self.guide_meta_path = self.base_dir / "guide_meta.json"
+
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            self.user_cache_dir = Path(local_appdata) / "ARCHMOBA" / "PTM" / "cache"
+        else:
+            self.user_cache_dir = Path.home() / ".archmoba" / "PTM" / "cache"
+        self.user_state_path = self.user_cache_dir / "user_state.json"
+        self.user_state = self._load_user_state()
 
         self.query = tk.StringVar()
         self.show_all_results = False
@@ -593,6 +613,7 @@ class PTMApp(tk.Tk):
             meta = self.open_tabs[key]
             is_processing = meta.get("state") in processing_states
 
+            tool = meta.get("tool", {})
             tab = TabButton(
                 self.tabs_holder,
                 meta["name"],
@@ -601,6 +622,9 @@ class PTMApp(tk.Tk):
                 active=(self.current_key == key),
                 width=tab_width,
                 processing=is_processing,
+                favorite=self._is_favorite(tool),
+                on_favorite=lambda t=tool: self._toggle_favorite(t),
+                on_reload=lambda t=tool: self.reload_tool(t),
             )
             tab.pack(side="left", padx=(0, 6))
             self.tab_widgets[key] = tab
@@ -918,6 +942,129 @@ class PTMApp(tk.Tk):
         canvas.create_line(10, 9, 15, 4, 20, 9, fill=BLACK, width=2)
         canvas.create_line(7, 16, 7, 23, 24, 23, 24, 16, fill=BLACK, width=2)
 
+    # ---------- Estado local del usuario ----------
+    def _load_user_state(self):
+        default = {"recents": [], "favorites": [], "usage": {}}
+        try:
+            if self.user_state_path.is_file():
+                data = json.loads(
+                    self.user_state_path.read_text(encoding="utf-8-sig")
+                )
+                if isinstance(data, dict):
+                    recents = data.get("recents", [])
+                    favorites = data.get("favorites", [])
+                    usage = data.get("usage", {})
+                    return {
+                        "recents": list(recents) if isinstance(recents, list) else [],
+                        "favorites": list(favorites) if isinstance(favorites, list) else [],
+                        "usage": dict(usage) if isinstance(usage, dict) else {},
+                    }
+        except Exception:
+            pass
+        return default
+
+    def _save_user_state(self):
+        try:
+            self.user_cache_dir.mkdir(parents=True, exist_ok=True)
+            temp = self.user_state_path.with_suffix(".tmp")
+            temp.write_text(
+                json.dumps(self.user_state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temp.replace(self.user_state_path)
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _tool_state_key(tool):
+        return (
+            str(tool.get("slug", "")).strip()
+            or str(tool.get("id", "")).strip()
+            or str(tool.get("repo_path", "")).strip()
+            or str(tool.get("path", "")).strip()
+        )
+
+    def _is_favorite(self, tool):
+        key = self._tool_state_key(tool)
+        return bool(key and key in self.user_state.get("favorites", []))
+
+    def _toggle_favorite(self, tool):
+        key = self._tool_state_key(tool)
+        if not key:
+            return
+        favorites = self.user_state.setdefault("favorites", [])
+        if key in favorites:
+            favorites.remove(key)
+        else:
+            favorites.append(key)
+        self._save_user_state()
+        if hasattr(self, "results_frame") and self.results_frame.winfo_exists():
+            self.refresh_results()
+        self._render_tabs()
+
+    def _record_tool_open(self, tool):
+        key = self._tool_state_key(tool)
+        if not key:
+            return
+        recents = self.user_state.setdefault("recents", [])
+        if key in recents:
+            recents.remove(key)
+        recents.insert(0, key)
+        del recents[10:]
+
+        usage = self.user_state.setdefault("usage", {})
+        try:
+            usage[key] = int(usage.get(key, 0)) + 1
+        except (TypeError, ValueError):
+            usage[key] = 1
+        self._save_user_state()
+
+    def _tool_by_state_key(self):
+        return {
+            self._tool_state_key(tool): tool
+            for tool in self.tools
+            if self._tool_state_key(tool)
+        }
+
+    def _set_search_command(self, command):
+        self.query.set(command)
+        self._show_all_search_results()
+
+    def _show_tool_context_menu(self, event, tool):
+        key = self._tool_tab_key(tool)
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(
+            label=("Quitar de favoritos" if self._is_favorite(tool)
+                   else "Añadir a favoritos"),
+            command=lambda t=tool: self._toggle_favorite(t),
+        )
+        menu.add_command(
+            label="Recargar",
+            command=lambda t=tool: self.reload_tool(t),
+        )
+        menu.add_command(
+            label="Cerrar",
+            command=lambda k=key: self.close_tool_tab(k),
+            state=("normal" if key in self.open_tabs else "disabled"),
+        )
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    def reload_tool(self, tool):
+        key = self._tool_tab_key(tool)
+        if key in self.open_tabs:
+            self.close_tool_tab(key)
+
+        state_key = self._tool_state_key(tool)
+        current = next(
+            (item for item in self.tools
+             if self._tool_state_key(item) == state_key),
+            None,
+        )
+        if current is not None:
+            self.open_tool(current)
+
     # ---------- Herramientas ----------
     def reload_tools(self, local_only=False, refresh=True):
         """Carga exclusivamente el catálogo guide.csv."""
@@ -967,6 +1114,8 @@ class PTMApp(tk.Tk):
                 "dependencies": dependencies,
                 "author": author,
                 "visits": visits,
+                "recommended": str(row.get("recomendado", "")).strip().lower()
+                    in {"1", "true", "si", "sí", "yes", "recomendado"},
                 "main_file": str(row.get("archivo_principal", "")).strip(),
                 "search": (
                     f"{slug} {Path(repo_path).stem} {name} {description} "
@@ -1301,6 +1450,41 @@ class PTMApp(tk.Tk):
         if not q:
             return []
 
+        by_key = self._tool_by_state_key()
+        if q == "%recents%":
+            return [
+                by_key[key]
+                for key in self.user_state.get("recents", [])
+                if key in by_key
+            ]
+        if q == "%favorites%":
+            return [
+                by_key[key]
+                for key in self.user_state.get("favorites", [])
+                if key in by_key
+            ]
+        if q == "%used%":
+            usage = self.user_state.get("usage", {})
+            used = [
+                tool for key, tool in by_key.items()
+                if int(usage.get(key, 0) or 0) > 0
+            ]
+            return sorted(
+                used,
+                key=lambda tool: (
+                    -int(usage.get(self._tool_state_key(tool), 0) or 0),
+                    tool["name"].lower(),
+                ),
+            )[:10]
+        if q == "%recommended%":
+            return sorted(
+                [tool for tool in self.tools if tool.get("recommended")],
+                key=lambda tool: (
+                    -int(tool.get("visits", 0)),
+                    tool["name"].lower(),
+                ),
+            )
+
         tokens = [t for t in q.replace(",", " ").split() if t]
         matches = [tool for tool in self.tools if all(t in tool["search"] for t in tokens)]
 
@@ -1482,6 +1666,10 @@ class PTMApp(tk.Tk):
             for widget in clickable:
                 widget.bind("<Double-Button-1>", lambda _e, t=tool: self.open_tool(t))
                 widget.bind("<Button-1>", lambda _e, t=tool: self.open_tool(t))
+                widget.bind(
+                    "<Button-3>",
+                    lambda e, t=tool: self._show_tool_context_menu(e, t),
+                )
                 self._bind_results_scroll(widget)
 
         # El Canvas debe conocer el alto real después de crear todas las filas.
@@ -2644,6 +2832,7 @@ class PTMApp(tk.Tk):
         self.switch_to_tool(key)
 
     def open_tool(self, tool):
+        self._record_tool_open(tool)
         key = self._tool_tab_key(tool)
 
         if key in self.open_tabs:
