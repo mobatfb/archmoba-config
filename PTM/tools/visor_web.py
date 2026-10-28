@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.6"
+TOOL_VERSION = "2.0.7"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -344,6 +344,9 @@ class WebViewerTool(ttk.Frame):
         self._embed_attempts = 0
         self._resize_job = None
         self._last_left_button_down = False
+        self._input_threads_attached = False
+        self._ptm_input_tid = 0
+        self._web_input_tid = 0
 
         self._token = secrets.token_hex(8)
         self._child_title = "PTM_WEBVIEW_" + self._token
@@ -355,7 +358,6 @@ class WebViewerTool(ttk.Frame):
 
         self._build_ui()
         self.after(80, self._poll_ipc)
-        self.after(120, self._poll_browser_focus_click)
         self.after(180, self._start_browser_process)
 
     # ---------- Estado ----------
@@ -816,7 +818,7 @@ class WebViewerTool(ttk.Frame):
                 self.title_var.set(title[:100])
             if self._embedded:
                 self.status_var.set("Listo")
-                self.after(100, self._refresh_webview_focus_hwnd)
+                self.after(120, self._refresh_input_threads)
             self._update_favorite_button()
             self._save_state()
 
@@ -1109,8 +1111,8 @@ class WebViewerTool(ttk.Frame):
                     "factor": self.zoom_level,
                 }
             )
-            self.after(180, self._refresh_webview_focus_hwnd)
-            self.after(240, self._focus_embedded_browser)
+            self.after(160, self._refresh_webview_focus_hwnd)
+            self.after(220, self._attach_input_threads)
 
         except Exception as exc:
             self._show_browser_error(
@@ -1182,144 +1184,119 @@ class WebViewerTool(ttk.Frame):
             pass
 
     # ---------- Foco teclado Win32 ----------
-    def _poll_browser_focus_click(self):
-        """Transfiere el foco al WebView2 cuando el usuario hace clic dentro."""
-        if not self._alive:
-            return
-
-        if os.name == "nt" and self._embedded:
-            try:
-                user32 = ctypes.windll.user32
-                down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)
-
-                if down and not self._last_left_button_down:
-                    class POINT(ctypes.Structure):
-                        _fields_ = [
-                            ("x", ctypes.c_long),
-                            ("y", ctypes.c_long),
-                        ]
-
-                    point = POINT()
-                    if user32.GetCursorPos(ctypes.byref(point)):
-                        x0 = int(self.browser_host.winfo_rootx())
-                        y0 = int(self.browser_host.winfo_rooty())
-                        x1 = x0 + int(self.browser_host.winfo_width())
-                        y1 = y0 + int(self.browser_host.winfo_height())
-
-                        if x0 <= point.x < x1 and y0 <= point.y < y1:
-                            self._focus_embedded_browser()
-
-                self._last_left_button_down = down
-            except Exception:
-                pass
-
-        try:
-            self.after(35, self._poll_browser_focus_click)
-        except tk.TclError:
-            pass
-
-    def _focus_embedded_browser(self):
-        """Comparte temporalmente las colas de input y da foco al WebView2."""
+    def _attach_input_threads(self):
+        """
+        Une las colas de entrada de PTM y WebView2 mientras la pestaña está
+        visible. El foco queda en manos de Windows y sigue al control clicado.
+        """
         if (
             os.name != "nt"
             or not self._embedded
             or not self._child_hwnd
+            or self._input_threads_attached
         ):
             return
 
         try:
             user32, _get_long, _set_long = self._win_api()
-            kernel32 = ctypes.windll.kernel32
 
-            # El HWND del renderer puede cambiar al navegar. Resolverlo
-            # justo antes de enfocar garantiza que el teclado vaya al DOM.
-            render_hwnd = self._find_webview_focus_hwnd()
-            if render_hwnd:
-                self._render_hwnd = render_hwnd
-
+            self._refresh_webview_focus_hwnd()
             target_hwnd = int(
                 self._render_hwnd
                 or self._webview_hwnd
                 or self._child_hwnd
             )
-            parent_hwnd = int(self.winfo_toplevel().winfo_id())
+            ptm_hwnd = int(self.winfo_toplevel().winfo_id())
 
-            parent_pid = ctypes.c_ulong(0)
-            child_pid = ctypes.c_ulong(0)
+            ptm_pid = ctypes.c_ulong(0)
+            web_pid = ctypes.c_ulong(0)
 
-            parent_tid = int(
+            ptm_tid = int(
                 user32.GetWindowThreadProcessId(
-                    parent_hwnd,
-                    ctypes.byref(parent_pid),
+                    ptm_hwnd,
+                    ctypes.byref(ptm_pid),
                 )
             )
-            child_tid = int(
+            web_tid = int(
                 user32.GetWindowThreadProcessId(
                     target_hwnd,
-                    ctypes.byref(child_pid),
+                    ctypes.byref(web_pid),
                 )
             )
 
-            current_tid = int(kernel32.GetCurrentThreadId())
-            attach_from = current_tid or parent_tid
-            attached = False
+            if not ptm_tid or not web_tid or ptm_tid == web_tid:
+                return
 
-            if child_tid and attach_from and child_tid != attach_from:
-                try:
-                    attached = bool(
-                        user32.AttachThreadInput(
-                            attach_from,
-                            child_tid,
-                            True,
-                        )
-                    )
-                except Exception:
-                    attached = False
-
-            try:
-                try:
-                    user32.SetForegroundWindow(
-                        parent_hwnd
-                    )
-                except Exception:
-                    pass
-
-                # La ventana PTM sigue siendo la foreground, pero el foco
-                # efectivo se entrega al renderer Chromium.
-                try:
-                    user32.SetActiveWindow(
-                        int(self._child_hwnd)
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    user32.SetFocus(
-                        int(self._webview_hwnd or self._child_hwnd)
-                    )
-                except Exception:
-                    pass
-
-                user32.SetFocus(
-                    target_hwnd
-                )
-            finally:
-                if attached:
-                    try:
-                        user32.AttachThreadInput(
-                            attach_from,
-                            child_tid,
-                            False,
-                        )
-                    except Exception:
-                        pass
-
-            # Refuerzo dentro del proceso hijo: enfoca el control WinForms
-            # Microsoft.Web.WebView2.WinForms.WebView2.
-            self._send({"cmd": "focus"})
-
+            if user32.AttachThreadInput(
+                ptm_tid,
+                web_tid,
+                True,
+            ):
+                self._ptm_input_tid = ptm_tid
+                self._web_input_tid = web_tid
+                self._input_threads_attached = True
         except Exception:
-            self._send({"cmd": "focus"})
+            self._input_threads_attached = False
+            self._ptm_input_tid = 0
+            self._web_input_tid = 0
+
+    def _detach_input_threads(self):
+        if (
+            os.name != "nt"
+            or not self._input_threads_attached
+            or not self._ptm_input_tid
+            or not self._web_input_tid
+        ):
+            self._input_threads_attached = False
+            self._ptm_input_tid = 0
+            self._web_input_tid = 0
+            return
+
+        try:
+            user32, _get_long, _set_long = self._win_api()
+            user32.AttachThreadInput(
+                int(self._ptm_input_tid),
+                int(self._web_input_tid),
+                False,
+            )
+        except Exception:
+            pass
+        finally:
+            self._input_threads_attached = False
+            self._ptm_input_tid = 0
+            self._web_input_tid = 0
+
+    def _refresh_input_threads(self):
+        """Reenlaza el input si Chromium recreó su HWND al navegar."""
+        if not self._embedded:
+            return
+
+        old_tid = int(self._web_input_tid or 0)
+        self._refresh_webview_focus_hwnd()
+
+        try:
+            user32, _get_long, _set_long = self._win_api()
+            target_hwnd = int(
+                self._render_hwnd
+                or self._webview_hwnd
+                or self._child_hwnd
+            )
+            pid = ctypes.c_ulong(0)
+            new_tid = int(
+                user32.GetWindowThreadProcessId(
+                    target_hwnd,
+                    ctypes.byref(pid),
+                )
+            )
+        except Exception:
+            new_tid = old_tid
+
+        if (
+            not self._input_threads_attached
+            or (new_tid and old_tid and new_tid != old_tid)
+        ):
+            self._detach_input_threads()
+            self._attach_input_threads()
 
     # ---------- Navegación ----------
     def _normalize_address(self, raw):
@@ -1520,6 +1497,7 @@ class WebViewerTool(ttk.Frame):
             pass
 
     def _restart_browser(self):
+        self._detach_input_threads()
         self._stop_browser()
         self._token = secrets.token_hex(8)
         self._child_title = "PTM_WEBVIEW_" + self._token
@@ -1535,6 +1513,7 @@ class WebViewerTool(ttk.Frame):
         self.after(120, self._start_browser_process)
 
     def _stop_browser(self):
+        self._detach_input_threads()
         self._send({"cmd": "close"})
 
         conn = self._conn
@@ -1573,14 +1552,16 @@ class WebViewerTool(ttk.Frame):
     def on_show(self):
         self._set_embedded_visible(True)
         self.after(25, lambda: self._resize_embedded(force=True))
-        self.after(90, self._focus_embedded_browser)
+        self.after(100, self._refresh_input_threads)
 
     def on_hide(self):
+        self._detach_input_threads()
         self._set_embedded_visible(False)
         self._save_state()
 
     def on_close(self):
         self._alive = False
+        self._detach_input_threads()
         self._save_state()
         self._stop_browser()
 
