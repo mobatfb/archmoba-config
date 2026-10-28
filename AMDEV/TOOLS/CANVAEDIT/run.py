@@ -8,20 +8,23 @@ import tempfile
 import tkinter as tk
 from tkinter import messagebox
 import urllib.request
+import json
+import base64
 
 BASE_DIR = Path(__file__).resolve().parent
 CANVAEDIT_FILE = BASE_DIR / "canvaedit.py"
-CANVAEDIT_RAW_URL = (
-    "https://raw.githubusercontent.com/"
-    "mobatfb/archmoba-config/main/"
-    "AMDEV/TOOLS/CANVAEDIT/canvaedit.py"
+RUN_VERSION = "1.0.1"
+CANVAEDIT_API_URL = (
+    "https://api.github.com/repos/"
+    "mobatfb/archmoba-config/contents/"
+    "AMDEV/TOOLS/CANVAEDIT/canvaedit.py?ref=main"
 )
 
 
 class CanvaEditRunner(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("CANVAEDIT RUN")
+        self.title(f"CANVAEDIT RUN v{RUN_VERSION}")
         self.geometry("1280x820")
         self.minsize(900, 620)
         self.configure(bg="#11151a")
@@ -96,11 +99,29 @@ class CanvaEditRunner(tk.Tk):
 
         try:
             request = urllib.request.Request(
-                CANVAEDIT_RAW_URL,
-                headers={"User-Agent": "CANVAEDIT-RUN/1.0"},
+                CANVAEDIT_API_URL,
+                headers={
+                    "User-Agent": "CANVAEDIT-RUN/1.0",
+                    "Accept": "application/vnd.github+json",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
             )
             with urllib.request.urlopen(request, timeout=20) as response:
-                new_code = response.read().decode("utf-8")
+                payload = json.loads(response.read().decode("utf-8"))
+
+            content = payload.get("content", "")
+            encoding = payload.get("encoding", "")
+
+            if encoding != "base64" or not content:
+                raise RuntimeError(
+                    "GitHub no devolvio canvaedit.py en Base64."
+                )
+
+            new_code = base64.b64decode(
+                content.replace("\n", "")
+            ).decode("utf-8")
 
             if not new_code.strip():
                 raise RuntimeError("El archivo recibido esta vacio.")
