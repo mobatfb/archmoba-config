@@ -22,9 +22,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.0.11"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:46"
+APP_UPDATE_TIME = "19:48"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1699,7 +1699,8 @@ class PTMApp(tk.Tk):
         if not meta:
             return
 
-        meta["state"] = "unavailable"
+        meta["state"] = "failed"
+        meta["download_cycle_active"] = False
         meta["loading_status"] = None
         frame = meta["frame"]
         self._clear_tool_frame(frame)
@@ -1798,71 +1799,136 @@ class PTMApp(tk.Tk):
         meta = self.open_tabs.get(key)
         if not meta:
             return
+
+        # Solo el usuario puede sacar una pestaña del estado failed.
         meta["state"] = "loading"
-        self._show_tool_loading(tool, key, "Reintentando descarga...")
-        self._start_tool_download(tool, key)
+        meta["download_attempt"] = 0
+        meta["download_cycle_active"] = True
+        meta["last_download_error"] = None
+
+        self._show_tool_loading(tool, key, "Preparando descarga...")
+        self._schedule_next_tool_attempt(tool, key, delay_ms=0)
 
     def _start_tool_download(self, tool, key):
+        """Inicia un ciclo nuevo de hasta 5 intentos."""
         meta = self.open_tabs.get(key)
         if not meta:
             return
 
-        token = int(meta.get("download_token", 0)) + 1
-        meta["download_token"] = token
+        # Si ya existe un ciclo activo, no arrancar otro.
+        if meta.get("download_cycle_active"):
+            return
 
-        def worker():
-            last_error = None
+        meta["state"] = "loading"
+        meta["download_attempt"] = 0
+        meta["download_cycle_active"] = True
+        meta["last_download_error"] = None
 
-            for attempt in range(1, 6):
-                self._tool_download_events.put(
-                    ("progress", key, token, tool, None, attempt)
-                )
+        self._schedule_next_tool_attempt(tool, key, delay_ms=0)
 
+    def _schedule_next_tool_attempt(self, tool, key, delay_ms=2000):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        if not meta.get("download_cycle_active"):
+            return
+
+        if meta.get("state") != "loading":
+            return
+
+        attempt = int(meta.get("download_attempt", 0)) + 1
+
+        # Corte definitivo. Nunca volver automáticamente a 1/5.
+        if attempt > 5:
+            meta["download_cycle_active"] = False
+            meta["state"] = "failed"
+            self._show_tool_unavailable(
+                tool,
+                key,
+                meta.get("last_download_error"),
+            )
+            return
+
+        meta["download_attempt"] = attempt
+
+        status_widget = meta.get("loading_status")
+        if status_widget is not None and status_widget.winfo_exists():
+            status_widget.configure(
+                text=f"Descargando... intento {attempt}/5"
+            )
+
+        def begin_attempt():
+            current = self.open_tabs.get(key)
+            if not current:
+                return
+            if not current.get("download_cycle_active"):
+                return
+            if current.get("state") != "loading":
+                return
+            if int(current.get("download_attempt", 0)) != attempt:
+                return
+
+            token = int(current.get("download_token", 0)) + 1
+            current["download_token"] = token
+
+            def worker():
                 try:
                     local_path = self._ensure_tool_local(tool)
                     self._tool_download_events.put(
-                        ("ok", key, token, tool, local_path, None)
+                        ("ok", key, token, attempt, tool, local_path, None)
                     )
-                    return
                 except Exception as exc:
-                    last_error = exc
+                    self._tool_download_events.put(
+                        ("error", key, token, attempt, tool, None, exc)
+                    )
 
-                if attempt < 5:
-                    time.sleep(2)
+            threading.Thread(target=worker, daemon=True).start()
 
-            self._tool_download_events.put(
-                ("error", key, token, tool, None, last_error)
-            )
-
-        threading.Thread(target=worker, daemon=True).start()
+        self.after(max(0, int(delay_ms)), begin_attempt)
 
     def _poll_tool_download_events(self):
-        """Procesa en el hilo principal los resultados de las descargas."""
+        """Procesa resultados de descarga exclusivamente en el hilo principal."""
         try:
             while True:
-                kind, key, token, tool, local_path, exc = self._tool_download_events.get_nowait()
+                kind, key, token, attempt, tool, local_path, exc = (
+                    self._tool_download_events.get_nowait()
+                )
 
                 meta = self.open_tabs.get(key)
                 if not meta:
                     continue
 
-                # Ignorar respuestas viejas de intentos anteriores.
+                if not meta.get("download_cycle_active"):
+                    continue
+
+                if meta.get("state") != "loading":
+                    continue
+
                 if int(meta.get("download_token", 0)) != int(token):
                     continue
 
-                if kind == "progress":
-                    attempt = int(exc or 1)
-                    current = self.open_tabs.get(key)
-                    if current and current.get("state") == "loading":
-                        status_widget = current.get("loading_status")
-                        if status_widget is not None and status_widget.winfo_exists():
-                            status_widget.configure(
-                                text=f"Descargando... intento {attempt}/5"
-                            )
-                elif kind == "ok":
+                if int(meta.get("download_attempt", 0)) != int(attempt):
+                    continue
+
+                if kind == "ok":
+                    meta["download_cycle_active"] = False
                     self._tool_download_ready(tool, key, local_path)
-                else:
+                    continue
+
+                meta["last_download_error"] = exc
+
+                if int(attempt) >= 5:
+                    meta["download_cycle_active"] = False
+                    meta["state"] = "failed"
                     self._show_tool_unavailable(tool, key, exc)
+                else:
+                    # Esperar exactamente 2 segundos antes del siguiente intento.
+                    self._schedule_next_tool_attempt(
+                        tool,
+                        key,
+                        delay_ms=2000,
+                    )
         except queue.Empty:
             pass
 
@@ -2007,6 +2073,9 @@ class PTMApp(tk.Tk):
             "module": None,
             "state": "loading",
             "download_token": 0,
+            "download_attempt": 0,
+            "download_cycle_active": False,
+            "last_download_error": None,
         }
 
         self._show_tool_loading(tool, key)
