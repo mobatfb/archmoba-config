@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.24"
+APP_VERSION = "1.0.25"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:58"
+APP_UPDATE_TIME = "21:07"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -2527,6 +2527,80 @@ class PTMApp(tk.Tk):
         except Exception:
             pass
         self._render_tabs()
+
+    def show_dialog(self, title, message, kind="info", button_text="Aceptar", on_close=None):
+        """Muestra un diálogo modal dentro del área de PTM, sin crear otra ventana."""
+        host = self.content
+        if not host.winfo_exists():
+            return None
+
+        old = getattr(self, "_inline_dialog", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except tk.TclError:
+                pass
+
+        overlay = tk.Frame(host, bg="#D9DEE2")
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+        self._inline_dialog = overlay
+
+        card = tk.Frame(
+            overlay, bg=WHITE, highlightbackground="#B7BEC5",
+            highlightthickness=1, bd=0
+        )
+        card.place(relx=0.5, rely=0.46, anchor="center", width=390)
+
+        header = tk.Frame(card, bg=WHITE)
+        header.pack(fill="x", padx=18, pady=(16, 6))
+        tk.Label(
+            header, text=title, bg=WHITE, fg=BLACK,
+            font=("Segoe UI", 11, "bold"), anchor="w"
+        ).pack(side="left", fill="x", expand=True)
+
+        symbol = {"info": "i", "success": "✓", "warning": "!", "error": "×"}.get(
+            str(kind).lower(), "i"
+        )
+        symbol_fg = {
+            "success": TEAL, "warning": "#B36B00", "error": RED, "info": TEAL
+        }.get(str(kind).lower(), TEAL)
+
+        body = tk.Frame(card, bg=WHITE)
+        body.pack(fill="x", padx=20, pady=(8, 14))
+        tk.Label(
+            body, text=symbol, bg=WHITE, fg=symbol_fg,
+            font=("Segoe UI", 22, "bold"), width=2
+        ).pack(side="left", anchor="n", padx=(0, 8))
+        tk.Label(
+            body, text=message, bg=WHITE, fg=BLACK,
+            font=("Segoe UI", 10), justify="left", anchor="w",
+            wraplength=285
+        ).pack(side="left", fill="x", expand=True)
+
+        def close_dialog(event=None):
+            if getattr(self, "_inline_dialog", None) is overlay:
+                self._inline_dialog = None
+            try:
+                overlay.destroy()
+            except tk.TclError:
+                pass
+            if callable(on_close):
+                on_close()
+
+        footer = tk.Frame(card, bg="#F4F6F7")
+        footer.pack(fill="x")
+        btn = tk.Button(
+            footer, text=button_text, command=close_dialog,
+            bg=TEAL, fg=ON_ACCENT, activebackground=TEAL_DARK,
+            activeforeground=ON_ACCENT, relief="flat", padx=18, pady=6,
+            cursor="hand2"
+        )
+        btn.pack(side="right", padx=14, pady=10)
+        btn.focus_set()
+        overlay.bind("<Return>", close_dialog)
+        overlay.bind("<Escape>", close_dialog)
+        return overlay
 
     def set_tool_processing(self, active=True, key=None):
         """Marca una pestaña como ocupada durante trabajo propio de la herramienta."""
