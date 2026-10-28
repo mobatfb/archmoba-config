@@ -2,7 +2,7 @@
   "app": "AMDEV",
   "name": "ArchMomaDEV",
   "description": "Lanzador maestro de aplicaciones de desarrollo ARCHMOBA",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "app_path": "AMDEV/app.py",
   "maintenance": false
 }
