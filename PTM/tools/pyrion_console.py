@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.10.0"
+TOOL_VERSION = "1.11.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -148,6 +148,7 @@ class PyrionConsoleTool(tk.Frame):
         self.keyboard_mode = "lower"
         self.keyboard_drag_x = 0
         self.keyboard_drag_y = 0
+        self.keyboard_keep_job = None
 
         self._build_ui()
 
@@ -797,8 +798,14 @@ class PyrionConsoleTool(tk.Frame):
             except tk.TclError:
                 pass
 
-        win = tk.Toplevel(self)
+        parent_top = self.winfo_toplevel()
+        win = tk.Toplevel(parent_top)
         self.keyboard_window = win
+
+        try:
+            win.transient(parent_top)
+        except tk.TclError:
+            pass
 
         try:
             win.overrideredirect(True)
@@ -900,9 +907,12 @@ class PyrionConsoleTool(tk.Frame):
         except tk.TclError:
             pass
 
-        self.after(50, self._raise_keyboard)
-        self.after(250, self._raise_keyboard)
-        self.command.focus_set()
+        # El Entry sigue recibiendo inserciones programaticas sin robar
+        # el orden visual de la ventana flotante.
+        self.after(10, self._raise_keyboard)
+        self.after(80, self._raise_keyboard)
+        self.after(220, self._raise_keyboard)
+        self._schedule_keyboard_front()
 
     def _raise_keyboard(self):
         win = self.keyboard_window
@@ -916,14 +926,40 @@ class PyrionConsoleTool(tk.Frame):
         except tk.TclError:
             pass
 
+    def _schedule_keyboard_front(self):
+        if self.keyboard_window is None:
+            self.keyboard_keep_job = None
+            return
+        try:
+            if not self.keyboard_window.winfo_exists():
+                self.keyboard_keep_job = None
+                return
+            self.keyboard_window.lift()
+            self.keyboard_window.attributes("-topmost", True)
+        except tk.TclError:
+            self.keyboard_keep_job = None
+            return
+
+        self.keyboard_keep_job = self.after(300, self._schedule_keyboard_front)
+
     def close_keyboard(self):
+        if self.keyboard_keep_job is not None:
+            try:
+                self.after_cancel(self.keyboard_keep_job)
+            except tk.TclError:
+                pass
+            self.keyboard_keep_job = None
+
         if self.keyboard_window is not None:
             try:
                 self.keyboard_window.destroy()
             except tk.TclError:
                 pass
         self.keyboard_window = None
-        self.command.focus_set()
+        try:
+            self.command.focus_set()
+        except tk.TclError:
+            pass
 
     def _keyboard_drag_start(self, event):
         self.keyboard_drag_x = event.x_root
@@ -1011,6 +1047,7 @@ class PyrionConsoleTool(tk.Frame):
                     relief="solid",
                     width=4,
                     font=("DejaVu Sans Mono", 9),
+                    takefocus=False,
                 ).pack(side="left", padx=1, pady=1)
 
             spacer_right = tk.Frame(row, bg=PANEL)
@@ -1059,13 +1096,13 @@ class PyrionConsoleTool(tk.Frame):
 
     def _insert_key(self, value):
         self.command.insert("insert", value)
-        self.command.focus_set()
+        self._raise_keyboard()
 
     def _backspace(self):
         position = self.command.index("insert")
         if position > 0:
             self.command.delete(position - 1, position)
-        self.command.focus_set()
+        self._raise_keyboard()
 
 
 App = PyrionConsoleTool
