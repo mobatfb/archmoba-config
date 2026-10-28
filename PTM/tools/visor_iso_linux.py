@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.4"
+TOOL_VERSION = "1.0.5"
 
 
 def human_size(n):
@@ -31,6 +31,16 @@ def human_size(n):
         if v < 1024 or u == units[-1]:
             return f"{v:.0f} {u}" if u == "B" else f"{v:.1f} {u}"
         v /= 1024
+
+
+def search_terms(text):
+    """Búsqueda por ruta o nombre, sin distinguir mayúsculas."""
+    return tuple(word.casefold() for word in text.strip().split() if word)
+
+
+def matches_search(path, terms):
+    name = str(path).casefold()
+    return all(word in name for word in terms)
 
 
 def which(name):
@@ -262,6 +272,9 @@ class InitrdEditor(ttk.Frame):
         self.entries = []
         self.compression = "none"
         self.prefix = b""
+        self.search_var = tk.StringVar(value="")
+        self.search_info = tk.StringVar(value="")
+        self._search_job = None
         self._build()
         self._load()
 
@@ -273,6 +286,19 @@ class InitrdEditor(ttk.Frame):
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
         ttk.Button(bar, text="Guardar INITRD", command=self.save).pack(side="left", padx=12)
         self.info = ttk.Label(bar, text=""); self.info.pack(side="right")
+
+        search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
+        search_bar.pack(fill="x")
+        ttk.Label(search_bar, text="Buscar en INITRD:").pack(side="left", padx=(0, 8))
+        search_entry = ttk.Entry(search_bar, textvariable=self.search_var)
+        search_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            search_bar, text="X", width=3,
+            command=lambda: self.search_var.set("")
+        ).pack(side="left", padx=(5, 8))
+        ttk.Label(search_bar, textvariable=self.search_info).pack(side="left")
+        search_entry.bind("<Escape>", lambda _event: self.search_var.set(""))
+        self.search_var.trace_add("write", self._schedule_search)
 
         self.tree = ttk.Treeview(self, columns=("name","size","mode"), show="headings")
         self.tree.heading("name", text="Ruta")
@@ -292,10 +318,35 @@ class InitrdEditor(ttk.Frame):
             text=f"{len(self.entries)} entradas | {self.compression}{extra}"
         )
 
+    def _schedule_search(self, *_args):
+        if self._search_job is not None:
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(160, self._apply_search)
+
+    def _apply_search(self):
+        self._search_job = None
+        self.refresh()
+
     def refresh(self):
+        old_selection = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
-        for i,e in enumerate(self.entries):
-            self.tree.insert("", "end", iid=str(i), values=(e["name"], human_size(len(e.get("data",b""))), oct(e.get("mode",0))))
+        terms = search_terms(self.search_var.get())
+        found = 0
+        for i, entry in enumerate(self.entries):
+            if not matches_search(entry["name"], terms):
+                continue
+            found += 1
+            self.tree.insert(
+                "", "end", iid=str(i),
+                values=(
+                    entry["name"],
+                    human_size(len(entry.get("data", b""))),
+                    oct(entry.get("mode", 0)),
+                ),
+            )
+        if old_selection and self.tree.exists(old_selection[0]):
+            self.tree.selection_set(old_selection[0])
+        self.search_info.set(f"{found} de {len(self.entries)} entradas")
 
     def selected_index(self):
         s = self.tree.selection()
@@ -351,6 +402,11 @@ class FatEditor(ttk.Frame):
         self.img_path = Path(img_path)
         self.fs = None
         self.current = "/"
+        self.search_var = tk.StringVar(value="")
+        self.search_info = tk.StringVar(value="")
+        self._search_job = None
+        self._search_index = None
+        self._result_paths = {}
         self._build()
         self._open_fs()
 
@@ -363,6 +419,18 @@ class FatEditor(ttk.Frame):
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
         self.path_var = tk.StringVar(value="/")
         ttk.Label(bar, textvariable=self.path_var).pack(side="left", padx=12)
+        search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
+        search_bar.pack(fill="x")
+        ttk.Label(search_bar, text="Buscar en FAT:").pack(side="left", padx=(0, 8))
+        search_entry = ttk.Entry(search_bar, textvariable=self.search_var)
+        search_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            search_bar, text="X", width=3,
+            command=lambda: self.search_var.set("")
+        ).pack(side="left", padx=(5, 8))
+        ttk.Label(search_bar, textvariable=self.search_info).pack(side="left")
+        search_entry.bind("<Escape>", lambda _event: self.search_var.set(""))
+        self.search_var.trace_add("write", self._schedule_search)
         self.tree = ttk.Treeview(self, columns=("name","type","size"), show="headings")
         for c,t,w in (("name","Nombre",560),("type","Tipo",120),("size","Tamano",120)):
             self.tree.heading(c,text=t); self.tree.column(c,width=w)
@@ -393,6 +461,7 @@ class FatEditor(ttk.Frame):
             if self.fs is not None:
                 self.fs.close()
             self.fs = PyFatFS(str(self.img_path), read_only=False)
+            self._search_index = None
             self.refresh()
         except Exception as exc:
             self.fs = None
@@ -410,38 +479,95 @@ class FatEditor(ttk.Frame):
     def _join(self, name):
         return (self.current.rstrip("/") + "/" + name).replace("//","/")
 
+    def _schedule_search(self, *_args):
+        if self._search_job is not None:
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(160, self._apply_search)
+
+    def _apply_search(self):
+        self._search_job = None
+        self.refresh()
+
+    def _scan_paths(self):
+        """Indexa una vez todas las carpetas FAT para buscar en subcarpetas."""
+        result = []
+        stack = ["/"]
+        visited = {"/"}
+        while stack:
+            folder = stack.pop()
+            for name in self.fs.listdir(folder):
+                path = (folder.rstrip("/") + "/" + name).replace("//", "/")
+                if path in visited:
+                    continue
+                visited.add(path)
+                try:
+                    is_dir = self.fs.isdir(path)
+                except Exception:
+                    continue
+                result.append((path, is_dir))
+                if is_dir:
+                    stack.append(path)
+        return result
+
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
+        self._result_paths.clear()
+        if self.fs is None:
+            return
         try:
-            names = sorted(self.fs.listdir(self.current), key=lambda s: s.lower())
-            for n in names:
-                p = self._join(n)
+            terms = search_terms(self.search_var.get())
+            if terms:
+                if self._search_index is None:
+                    self._search_index = self._scan_paths()
+                items = [
+                    (path, is_dir, path)
+                    for path, is_dir in self._search_index
+                    if matches_search(path, terms)
+                ]
+                self.path_var.set("Resultados en toda la imagen FAT")
+            else:
+                items = [
+                    (self._join(name), self.fs.isdir(self._join(name)), name)
+                    for name in sorted(
+                        self.fs.listdir(self.current), key=str.casefold
+                    )
+                ]
+                self.path_var.set(self.current)
+            for path, is_dir, label in items:
                 try:
-                    info = self.fs.getinfo(p, namespaces=["details"])
-                    isdir = info.is_dir
-                    size = 0 if isdir else info.size
+                    info = self.fs.getinfo(path, namespaces=["details"])
+                    size = "" if is_dir else human_size(info.size)
                 except Exception:
-                    isdir = self.fs.isdir(p); size = 0
-                self.tree.insert("", "end", values=(n, "Carpeta" if isdir else "Archivo", "" if isdir else human_size(size)))
-            self.path_var.set(self.current)
+                    size = ""
+                iid = self.tree.insert(
+                    "", "end",
+                    values=(label, "Carpeta" if is_dir else "Archivo", size),
+                )
+                self._result_paths[iid] = path
+            self.search_info.set(f"{len(items)} coincidencias" if terms else "")
         except Exception as exc:
             messagebox.showerror("FAT", str(exc), parent=self)
 
     def selected(self):
-        s = self.tree.selection()
-        if not s: return None
-        n = self.tree.item(s[0],"values")[0]
-        return self._join(n)
+        selected = self.tree.selection()
+        return self._result_paths.get(selected[0]) if selected else None
 
     def open_selected(self, _e=None):
-        p = self.selected()
-        if p and self.fs.isdir(p):
-            self.current = p; self.refresh()
+        path = self.selected()
+        if path and self.fs.isdir(path):
+            self.current = path
+            self.search_var.set("")
+            self.refresh()
 
     def up(self):
-        if self.current == "/": return
-        self.current = str(Path(self.current).parent).replace("\\","/")
-        if not self.current.startswith("/"): self.current = "/" + self.current
+        if self.current == "/":
+            if self.search_var.get():
+                self.search_var.set("")
+            return
+        self.current = str(Path(self.current).parent).replace("\\", "/")
+        if not self.current.startswith("/"):
+            self.current = "/" + self.current
+        self.search_var.set("")
         self.refresh()
 
     def replace(self):
@@ -452,6 +578,7 @@ class FatEditor(ttk.Frame):
         try:
             with self.fs.openbin(p, "w") as f:
                 f.write(Path(src).read_bytes())
+            self._search_index = None
             self.refresh(); self.owner.refresh_tree()
         except Exception as exc:
             messagebox.showerror("FAT", str(exc), parent=self)
@@ -463,6 +590,7 @@ class FatEditor(ttk.Frame):
         try:
             if self.fs.isdir(p): self.fs.removetree(p)
             else: self.fs.remove(p)
+            self._search_index = None
             self.refresh(); self.owner.refresh_tree()
         except Exception as exc:
             messagebox.showerror("FAT", str(exc), parent=self)
@@ -489,6 +617,10 @@ class ISOEditor(ttk.Frame):
         self.status_var = tk.StringVar(value="Abra un ISO para comenzar")
         self._paths = {}
         self._container_host = None
+        self.search_var = tk.StringVar(value="")
+        self.search_info = tk.StringVar(value="")
+        self._search_job = None
+        self._search_index = None
         self._build_ui()
 
     def _build_ui(self):
@@ -500,6 +632,19 @@ class ISOEditor(ttk.Frame):
         ttk.Button(top, text="Extraer", command=self.extract_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Abrir contenedor", command=self.open_container).pack(side="left", padx=3)
         ttk.Button(top, text="Guardar copia ISO", command=self.save_iso_copy).pack(side="left", padx=14)
+
+        search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
+        search_bar.pack(fill="x")
+        ttk.Label(search_bar, text="Buscar en ISO:").pack(side="left", padx=(0, 8))
+        search_entry = ttk.Entry(search_bar, textvariable=self.search_var)
+        search_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            search_bar, text="X", width=3,
+            command=lambda: self.search_var.set("")
+        ).pack(side="left", padx=(5, 8))
+        ttk.Label(search_bar, textvariable=self.search_info).pack(side="left")
+        search_entry.bind("<Escape>", lambda _event: self.search_var.set(""))
+        self.search_var.trace_add("write", self._schedule_search)
 
         mid = ttk.Panedwindow(self, orient="horizontal"); mid.pack(fill="both", expand=True, padx=8)
         left = ttk.Frame(mid); right = ttk.Frame(mid); mid.add(left, weight=3); mid.add(right, weight=2)
@@ -550,6 +695,7 @@ class ISOEditor(ttk.Frame):
 
     def cleanup(self):
         self._close_container_editor()
+        self._search_index = None
         if self.temp_dir:
             try: shutil.rmtree(self.temp_dir, ignore_errors=True)
             except Exception: pass
@@ -625,24 +771,71 @@ class ISOEditor(ttk.Frame):
         raise RuntimeError(f"No se pudo recorrer el ISO: {last}")
 
     def _after_open(self):
+        self._search_index = None
         self.refresh_tree()
         self.set_status(f"Copia de trabajo lista: {self.iso_path.name}")
+
+    def _schedule_search(self, *_args):
+        if self._search_job is not None:
+            self.after_cancel(self._search_job)
+        self._search_job = self.after(160, self._apply_search)
+
+    def _apply_search(self):
+        self._search_job = None
+        self.refresh_tree()
 
     def refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
         self._paths.clear()
-        if not self.work_dir or not self.work_dir.exists(): return
-        root_id = self.tree.insert("", "end", text="/", values=(self.iso_path.name if self.iso_path else "ISO", "ISO", ""), open=True)
+        if not self.work_dir or not self.work_dir.exists():
+            self.search_info.set("")
+            return
+        root_id = self.tree.insert(
+            "", "end", text="/",
+            values=(self.iso_path.name if self.iso_path else "ISO", "ISO", ""),
+            open=True,
+        )
         self._paths[root_id] = self.work_dir
+        terms = search_terms(self.search_var.get())
+        if terms:
+            if self._search_index is None:
+                self._search_index = list(self.work_dir.rglob("*"))
+            found = 0
+            for path in self._search_index:
+                relative = path.relative_to(self.work_dir).as_posix()
+                if not matches_search(relative, terms) or not path.exists():
+                    continue
+                found += 1
+                is_dir = path.is_dir()
+                typ = "Carpeta" if is_dir else path.suffix.upper().lstrip(".") or "Archivo"
+                size = "" if is_dir else human_size(path.stat().st_size)
+                iid = self.tree.insert(
+                    root_id, "end", text=relative,
+                    values=(path.name, typ, size),
+                )
+                self._paths[iid] = path
+            self.search_info.set(f"{found} coincidencias")
+            return
+
+        self.search_info.set("")
         def add(parent_id, folder):
-            try: items = sorted(folder.iterdir(), key=lambda p:(not p.is_dir(), p.name.lower()))
-            except Exception: return
-            for p in items:
-                typ = "Carpeta" if p.is_dir() else p.suffix.upper().lstrip(".") or "Archivo"
-                size = "" if p.is_dir() else human_size(p.stat().st_size)
-                iid = self.tree.insert(parent_id, "end", text=p.name, values=(p.name, typ, size))
-                self._paths[iid] = p
-                if p.is_dir(): add(iid, p)
+            try:
+                items = sorted(
+                    folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.casefold())
+                )
+            except Exception:
+                return
+            for path in items:
+                is_dir = path.is_dir()
+                typ = "Carpeta" if is_dir else path.suffix.upper().lstrip(".") or "Archivo"
+                size = "" if is_dir else human_size(path.stat().st_size)
+                iid = self.tree.insert(
+                    parent_id, "end", text=path.name,
+                    values=(path.name, typ, size),
+                )
+                self._paths[iid] = path
+                if is_dir:
+                    add(iid, path)
         add(root_id, self.work_dir)
 
     def selected_path(self):
@@ -678,6 +871,7 @@ class ISOEditor(ttk.Frame):
         if not src: return
         try:
             shutil.copy2(src, p)
+            self._search_index = None
             self.refresh_tree(); self.set_status(f"Reemplazado: {p.name}")
         except Exception as exc:
             messagebox.showerror("Reemplazar", str(exc), parent=self)
@@ -689,6 +883,7 @@ class ISOEditor(ttk.Frame):
         try:
             if p.is_dir(): shutil.rmtree(p)
             else: p.unlink()
+            self._search_index = None
             self.refresh_tree(); self.set_status(f"Eliminado: {p.name}")
         except Exception as exc:
             messagebox.showerror("Eliminar", str(exc), parent=self)
