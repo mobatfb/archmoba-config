@@ -3,6 +3,7 @@ import ast
 import base64
 import csv
 import hashlib
+import importlib
 import importlib.util
 import importlib.metadata
 import inspect
@@ -27,9 +28,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.68"
+APP_VERSION = "1.0.69"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "18:40"
+APP_UPDATE_TIME = "18:55"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -2853,6 +2854,15 @@ class PTMApp(tk.Tk):
         except Exception:
             return False
 
+    @staticmethod
+    def _pkg_resources_available():
+        """Verifica el import real, no solo los metadatos de setuptools."""
+        try:
+            importlib.import_module("pkg_resources")
+            return True
+        except Exception:
+            return False
+
     def _collect_missing_dependencies(self, tool):
         path = Path(tool["path"])
         declared = str(tool.get("dependencies", "") or "").strip()
@@ -2894,6 +2904,19 @@ class PTMApp(tk.Tk):
             if key not in seen:
                 packages.append(package)
                 seen.add(key)
+
+        # pyfatfs puede estar instalado pero fallar porque setuptools 81+
+        # ya no incluye pkg_resources. Se repara AL FINAL para impedir que
+        # la resolucion transitiva de pyfatfs vuelva a instalar setuptools
+        # sin el modulo legacy.
+        if (
+            any(
+                self._normalize_distribution_name(p).lower() == "pyfatfs"
+                for p in packages
+            )
+            and not self._pkg_resources_available()
+        ):
+            packages.append("setuptools<81")
 
         return packages
 
@@ -3059,7 +3082,8 @@ class PTMApp(tk.Tk):
                 pip_env = self._ensure_pip_runtime(key, tool)
 
                 if os.name != "nt" or any(
-                    self._normalize_distribution_name(p).lower() == "pyfatfs"
+                    self._normalize_distribution_name(p).lower()
+                    in {"pyfatfs", "setuptools"}
                     for p in missing
                 ):
                     PTM_DEPS_LIB.mkdir(parents=True, exist_ok=True)
@@ -3094,11 +3118,11 @@ class PTMApp(tk.Tk):
                     if (
                         os.name != "nt"
                         or self._normalize_distribution_name(package).lower()
-                        == "pyfatfs"
+                        in {"pyfatfs", "setuptools"}
                     ):
-                        # pyfatfs tambien se repara de forma aislada en Windows:
-                        # pip debe reinstalar sus dependencias transitivas aunque
-                        # ya haya metadatos de una instalacion incompleta.
+                        # pyfatfs y setuptools legacy se instalan en el entorno
+                        # aislado de PTM, tambien en Windows. --upgrade permite
+                        # reparar una version incompatible o incompleta.
                         cmd.extend(
                             [
                                 "--upgrade",
@@ -3233,6 +3257,14 @@ class PTMApp(tk.Tk):
                     if lower == "pygame":
                         if not self._module_available("pygame"):
                             still_missing.append(package)
+                        continue
+
+                    if lower == "setuptools":
+                        if not self._pkg_resources_available():
+                            raise RuntimeError(
+                                "setuptools<81 se instaló, pero el módulo "
+                                "pkg_resources sigue sin estar disponible."
+                            )
                         continue
 
                     if lower == "pyfatfs":
@@ -3473,11 +3505,27 @@ class PTMApp(tk.Tk):
             if exc is not None
             else display_detail
         )
+        main_file = (
+            tool.get("main_file")
+            or tool.get("path")
+            or tool.get("repo_path")
+        )
+        py_filename = (
+            Path(str(main_file)).name if main_file else "No identificado"
+        )
         error_report = (
             f"Programa: {tool.get('name', 'Herramienta')}\n"
+            f"Archivo PY: {py_filename}\n"
             f"Motivo: {title}\n"
             f"Detalle: {copy_detail}"
         )
+        tk.Label(
+            holder,
+            text=f"Archivo PY: {py_filename}",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+        ).pack(pady=(0, 3))
         detail_preview = (
             display_detail[:257] + "..."
             if len(display_detail) > 260
