@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.47"
+APP_VERSION = "1.0.48"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "00:40"
+APP_UPDATE_TIME = "00:43"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -441,7 +441,7 @@ class FloatingPTM(tk.Toplevel):
         self.canvas.bind("<Button-3>", self._menu)
         self.canvas.bind("<Enter>", lambda _e: self._draw(hover=True))
         self.canvas.bind("<Leave>", lambda _e: self._draw(hover=False))
-        self.bind("<Double-Button-1>", lambda _e: self.app.show_main())
+        self.bind("<Double-Button-1>", lambda _e: self.app.toggle_main())
 
         self._dragging = False
         self._press_xy = (0, 0)
