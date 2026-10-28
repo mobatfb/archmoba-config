@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.54"
+APP_VERSION = "1.0.55"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "01:25"
+APP_UPDATE_TIME = "01:48"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -3454,10 +3454,19 @@ class PTMApp(tk.Tk):
         meta["viewport_window_id"] = window_id
         meta["tool_widget"] = None
 
-        def changed(_event=None, k=key):
-            self._schedule_tool_viewport(k, delay=45, allow_grow=False)
+        def changed(event=None, k=key):
+            meta_now = self.open_tabs.get(k)
+            if not meta_now or meta_now.get("zoom_updating"):
+                return
 
-        host.bind("<Configure>", changed, add="+")
+            if event is not None:
+                size = (int(event.width), int(event.height))
+                if meta_now.get("last_viewport_size") == size:
+                    return
+                meta_now["last_viewport_size"] = size
+
+            self._schedule_tool_viewport(k, delay=90, allow_grow=False)
+
         canvas.bind("<Configure>", changed, add="+")
         return host
 
@@ -3758,7 +3767,7 @@ class PTMApp(tk.Tk):
             "paned": paned,
             "natural_w": natural_w,
             "natural_h": natural_h,
-            "last_factor": 1.0,
+            "last_factor": None,
         }
 
     def _restore_tool_zoom_base(self, key):
@@ -3861,6 +3870,12 @@ class PTMApp(tk.Tk):
             return
 
         factor = max(0.50, min(1.25, float(factor)))
+
+        previous = state.get("last_factor")
+        if previous is not None and abs(float(previous) - factor) < 0.002:
+            meta["zoom"] = factor
+            return
+
         self._restore_tool_zoom_base(key)
         style = ttk.Style(self)
 
@@ -4020,6 +4035,8 @@ class PTMApp(tk.Tk):
         meta = self.open_tabs.get(key)
         if not meta or meta.get("state") not in {"ready", "processing"}:
             return
+        if meta.get("zoom_updating"):
+            return
 
         canvas = meta.get("viewport_canvas")
         host = meta.get("tool_host")
@@ -4031,6 +4048,7 @@ class PTMApp(tk.Tk):
         if not all((canvas, host, window_id, hbar, vbar)) or not state:
             return
 
+        meta["zoom_updating"] = True
         try:
             if not canvas.winfo_exists() or not host.winfo_exists():
                 return
@@ -4118,6 +4136,8 @@ class PTMApp(tk.Tk):
                 self._update_zoom_footer(key)
         except tk.TclError:
             return
+        finally:
+            meta["zoom_updating"] = False
 
     def _load_tool_into_tab(self, tool, key):
         meta = self.open_tabs.get(key)
@@ -4248,6 +4268,8 @@ class PTMApp(tk.Tk):
             "zoom_mode": "fit",
             "zoom": 1.0,
             "zoom_state": None,
+            "zoom_updating": False,
+            "last_viewport_size": None,
         }
 
         self._render_tabs()
