@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.28"
+APP_VERSION = "1.0.29"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:22"
+APP_UPDATE_TIME = "21:28"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -2566,17 +2566,56 @@ class PTMApp(tk.Tk):
         disable_controls(host)
         meta["dialog_disabled_controls"] = disabled_controls
 
-        # Tkinter no ofrece transparencia alfa por widget. Para conservar la
-        # herramienta visible, el modal ya no cubre el contenido con un gris sólido.
-        # Se dibuja una sombra suave alrededor de la tarjeta, dejando el fondo intacto.
-        overlay = tk.Frame(host, bg=WHITE, bd=0, highlightthickness=0)
-        overlay.place(relx=0.5, rely=0.46, anchor="center", width=426, height=218)
+        # Backdrop real: captura la pestaña antes de cubrirla, la desenfoca y
+        # aplica un velo claro translúcido. El overlay ocupa toda la herramienta,
+        # por lo que también intercepta cualquier clic sobre el contenido inferior.
+        host.update_idletasks()
+        host_w = max(1, host.winfo_width())
+        host_h = max(1, host.winfo_height())
+        backdrop_photo = None
+
+        try:
+            from PIL import Image, ImageEnhance, ImageFilter, ImageGrab, ImageTk
+
+            x1 = host.winfo_rootx()
+            y1 = host.winfo_rooty()
+            snapshot = ImageGrab.grab(
+                bbox=(x1, y1, x1 + host_w, y1 + host_h)
+            ).convert("RGBA")
+            snapshot = snapshot.filter(ImageFilter.GaussianBlur(radius=4))
+            snapshot = ImageEnhance.Brightness(snapshot).enhance(0.96)
+
+            veil = Image.new(
+                "RGBA",
+                snapshot.size,
+                (242, 246, 248, 72),
+            )
+            snapshot = Image.alpha_composite(snapshot, veil)
+            backdrop_photo = ImageTk.PhotoImage(snapshot)
+        except Exception:
+            backdrop_photo = None
+
+        overlay = tk.Frame(host, bg="#EEF2F4", bd=0, highlightthickness=0)
+        overlay.place(x=0, y=0, relwidth=1, relheight=1)
         overlay.lift()
         meta["inline_dialog"] = overlay
 
-        # Glow/sombra escalonada alrededor de la tarjeta.
+        if backdrop_photo is not None:
+            backdrop = tk.Label(
+                overlay,
+                image=backdrop_photo,
+                bd=0,
+                highlightthickness=0,
+            )
+            backdrop.place(x=0, y=0, width=host_w, height=host_h)
+            overlay._backdrop_photo = backdrop_photo
+
+        # Glow/sombra suave alrededor de la tarjeta, encima del backdrop.
         shadow_outer = tk.Frame(overlay, bg="#D7DDE1", bd=0)
-        shadow_outer.place(x=0, y=0, width=426, height=218)
+        shadow_outer.place(
+            relx=0.5, rely=0.46, anchor="center",
+            width=426, height=218
+        )
         shadow_mid = tk.Frame(shadow_outer, bg="#C5CDD2", bd=0)
         shadow_mid.place(x=8, y=8, width=410, height=202)
 
