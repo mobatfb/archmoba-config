@@ -19,7 +19,7 @@ TOOL_DESCRIPTION = (
     "Visor web seguro integrado en PTM. Muestra paginas como contenido "
     "estructurado con titulos, texto y enlaces clicables."
 )
-TOOL_VERSION = "1.0.1"
+TOOL_VERSION = "1.0.2"
 
 HOME_URL = "https://www.wikipedia.org/"
 SEARCH_URL = "https://html.duckduckgo.com/html/?q={query}"
@@ -38,9 +38,12 @@ class _SafeHTMLParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
         self.parts = []
+        self.main_parts = []
         self.title = ""
         self._in_title = False
         self._skip_depth = 0
+        self._main_depth = 0
+        self._main_tag_stack = []
         self._style_stack = ["body"]
         self._href_stack = [None]
 
@@ -53,7 +56,14 @@ class _SafeHTMLParser(HTMLParser):
     def _append(self, text, style=None, href=None):
         if not text:
             return
-        self.parts.append((text, style or self._style(), href if href is not None else self._href()))
+        part = (
+            text,
+            style or self._style(),
+            href if href is not None else self._href(),
+        )
+        self.parts.append(part)
+        if self._main_depth > 0:
+            self.main_parts.append(part)
 
     def _newline(self, count=1):
         if not self.parts:
@@ -62,7 +72,10 @@ class _SafeHTMLParser(HTMLParser):
         have = len(current) - len(current.rstrip("\n"))
         need = max(0, count - have)
         if need:
-            self.parts.append(("\n" * need, "body", None))
+            part = ("\n" * need, "body", None)
+            self.parts.append(part)
+            if self._main_depth > 0:
+                self.main_parts.append(part)
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
@@ -77,6 +90,17 @@ class _SafeHTMLParser(HTMLParser):
         if tag == "title":
             self._in_title = True
             return
+
+        # Los sitios modernos suelen separar el contenido útil con <main>,
+        # <article> o role="main". Guardamos ese flujo por separado para
+        # evitar mostrar primero cabeceras, menús y navegación lateral.
+        is_main_container = (
+            tag in {"main", "article"}
+            or str(attrs.get("role", "")).strip().lower() == "main"
+        )
+        if is_main_container:
+            self._main_depth += 1
+            self._main_tag_stack.append(tag)
 
         if tag in self.HEADING_TAGS:
             self._newline(2)
@@ -128,6 +152,11 @@ class _SafeHTMLParser(HTMLParser):
             self._in_title = False
             return
 
+        closes_main = (
+            self._main_tag_stack
+            and tag == self._main_tag_stack[-1]
+        )
+
         if tag in self.HEADING_TAGS:
             if len(self._style_stack) > 1:
                 self._style_stack.pop()
@@ -148,6 +177,10 @@ class _SafeHTMLParser(HTMLParser):
             self._newline(1)
         elif tag == "tr":
             self._newline(1)
+
+        if closes_main:
+            self._main_tag_stack.pop()
+            self._main_depth = max(0, self._main_depth - 1)
 
     def handle_data(self, data):
         if self._skip_depth:
@@ -178,6 +211,14 @@ class _SafeHTMLParser(HTMLParser):
 
     def document(self):
         title = re.sub(r"\s+", " ", self.title).strip()
+
+        # Preferir el contenido principal cuando exista y tenga sustancia.
+        # Esto elimina de la vista inicial menús, barras laterales y pie.
+        main_text = "".join(part[0] for part in self.main_parts)
+        main_text = re.sub(r"\s+", " ", main_text).strip()
+        if len(main_text) >= 120:
+            return title, self.main_parts
+
         return title, self.parts
 
 
