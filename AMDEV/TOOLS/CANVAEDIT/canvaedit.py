@@ -4,14 +4,36 @@
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
+import sys
 import uuid
 
 BASE_DIR = Path(__file__).resolve().parent
-ASSETS_DIR = BASE_DIR / "assets"
-PROJECT_FILE = BASE_DIR / "layers.json"
-BG_ASSET = ASSETS_DIR / "pyrion_background.jpg"
+PROJECTS_DIR = BASE_DIR / "projects"
+DEFAULT_PROJECT = "pyrion_desing"
 
-ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_project_dir(project_name=DEFAULT_PROJECT):
+    return PROJECTS_DIR / project_name
+
+
+def get_project_file(project_name=DEFAULT_PROJECT):
+    return get_project_dir(project_name) / "layers.json"
+
+
+def get_assets_dir(project_name=DEFAULT_PROJECT):
+    return get_project_dir(project_name) / "assets"
+
+
+def list_projects():
+    if not PROJECTS_DIR.is_dir():
+        return []
+    return sorted(
+        p.name
+        for p in PROJECTS_DIR.iterdir()
+        if p.is_dir() and (p / "layers.json").is_file()
+    )
 
 
 @dataclass
@@ -40,7 +62,11 @@ class Layer:
 
 
 class LayerManager:
-    def __init__(self):
+    def __init__(self, project_name=DEFAULT_PROJECT):
+        self.project_name = project_name
+        self.project_dir = get_project_dir(project_name)
+        self.project_file = get_project_file(project_name)
+        self.assets_dir = get_assets_dir(project_name)
         self.layers = []
 
     def add(self, layer):
@@ -96,56 +122,74 @@ class LayerManager:
         for i, layer in enumerate(self.layers):
             layer.z_index = i
 
-    def save(self, path=PROJECT_FILE):
+    def save(self, path=None):
+        target = Path(path) if path else self.project_file
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self.assets_dir.mkdir(parents=True, exist_ok=True)
+
         payload = {
             "format": "CANVAEDIT",
             "version": 1,
+            "project": self.project_name,
             "layers": [asdict(x) for x in self.layers],
         }
-        Path(path).write_text(
+        target.write_text(
             json.dumps(payload, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
 
-    def load(self, path=PROJECT_FILE):
-        path = Path(path)
-        if not path.is_file():
-            return
-        data = json.loads(path.read_text(encoding="utf-8"))
+    def load(self, path=None):
+        target = Path(path) if path else self.project_file
+        if not target.is_file():
+            return False
+
+        data = json.loads(target.read_text(encoding="utf-8"))
+        self.project_name = data.get("project", self.project_name)
+        self.project_dir = get_project_dir(self.project_name)
+        self.project_file = get_project_file(self.project_name)
+        self.assets_dir = get_assets_dir(self.project_name)
         self.layers = [Layer(**item) for item in data.get("layers", [])]
         self._normalize()
+        return True
 
 
-def create_default_project():
-    manager = LayerManager()
-    manager.add(
-        Layer(
-            id="bg",
-            name="BG",
-            type="background",
-            visible=True,
-            locked=True,
-            opacity=1.0,
-            z_index=0,
-            asset="assets/pyrion_background.jpg",
-        )
-    )
+def create_project(project_name):
+    project_dir = get_project_dir(project_name)
+    assets_dir = get_assets_dir(project_name)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    manager = LayerManager(project_name)
     manager.save()
     return manager
 
 
-if __name__ == "__main__":
-    manager = LayerManager()
-    manager.load()
-    if not manager.layers:
-        manager = create_default_project()
+def main():
+    project_name = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROJECT
+    manager = LayerManager(project_name)
 
     print("CANVAEDIT - Sistema de capas")
-    print(f"BG asset: {BG_ASSET}")
-    print(f"BG exists: {BG_ASSET.is_file()}")
+    print(f"Proyecto: {project_name}")
+    print(f"Archivo: {manager.project_file}")
+
+    if not manager.load():
+        print(f"ERROR: no existe el proyecto '{project_name}'.")
+        available = list_projects()
+        print("Proyectos disponibles:", ", ".join(available) if available else "(ninguno)")
+        return 1
+
+    print(f"Capas cargadas: {len(manager.layers)}")
     for layer in manager.layers:
         print(
             f"{layer.z_index}: {layer.name} | "
+            f"type={layer.type} | "
             f"asset={layer.asset} | "
-            f"visible={layer.visible} | locked={layer.locked}"
+            f"visible={layer.visible} | locked={layer.locked} | "
+            f"opacity={layer.opacity}"
         )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
