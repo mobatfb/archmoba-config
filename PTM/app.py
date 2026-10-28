@@ -19,14 +19,15 @@ import time
 import tkinter as tk
 import urllib.error
 import urllib.request
+import unicodedata
 import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.36"
+APP_VERSION = "1.0.37"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:16"
+APP_UPDATE_TIME = "22:20"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -505,6 +506,7 @@ class PTMApp(tk.Tk):
         self._catalog_sync_lock = threading.Lock()
         self._catalog_search_request_id = 0
         self._catalog_search_inflight = 0
+        self._search_debounce_job = None
         self._self_update_events = queue.Queue()
         self._self_update_check_running = False
 
@@ -1161,6 +1163,81 @@ class PTMApp(tk.Tk):
         if current is not None:
             self.open_tool(current, record_usage=False)
 
+    # ---------- Búsqueda ----------
+    @staticmethod
+    def _normalize_search_text(value):
+        """Normaliza texto para buscar sin distinguir tildes, mayúsculas o símbolos."""
+        text = unicodedata.normalize("NFKD", str(value or ""))
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = text.lower()
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return " ".join(text.split())
+
+    @staticmethod
+    def _field_token_score(token, field_text, weight):
+        """Devuelve puntaje por coincidencia exacta/prefijo/subcadena en un campo."""
+        if not token or not field_text:
+            return 0
+
+        words = field_text.split()
+        if token in words:
+            return weight
+
+        if any(word.startswith(token) for word in words):
+            return max(1, int(weight * 0.90))
+
+        if token in field_text:
+            return max(1, int(weight * 0.70))
+
+        return 0
+
+    def _score_tool_for_query(self, tool, normalized_query, tokens):
+        """Calcula relevancia; todos los tokens deben encontrar alguna coincidencia."""
+        title = tool.get("search_title", "")
+        slug = tool.get("search_slug", "")
+        keywords = tool.get("search_keywords", "")
+        category = tool.get("search_category", "")
+        description = tool.get("search_description", "")
+        path = tool.get("search_path", "")
+        author = tool.get("search_author", "")
+        dependencies = tool.get("search_dependencies", "")
+
+        score = 0
+
+        if normalized_query == title:
+            score += 100
+        elif title.startswith(normalized_query):
+            score += 70
+
+        if normalized_query == slug:
+            score += 80
+        elif slug.startswith(normalized_query):
+            score += 55
+
+        fields = (
+            (title, 50),
+            (slug, 40),
+            (keywords, 30),
+            (category, 20),
+            (path, 15),
+            (description, 10),
+            (author, 8),
+            (dependencies, 6),
+        )
+
+        for token in tokens:
+            best = 0
+            for field_text, weight in fields:
+                best = max(
+                    best,
+                    self._field_token_score(token, field_text, weight),
+                )
+            if best == 0:
+                return None
+            score += best
+
+        return score
+
     # ---------- Herramientas ----------
     def reload_tools(self, local_only=False, refresh=True):
         """Carga exclusivamente el catálogo guide.csv."""
@@ -1196,6 +1273,17 @@ class PTMApp(tk.Tk):
             except ValueError:
                 visits = 0
 
+            normalized_title = self._normalize_search_text(name)
+            normalized_slug = self._normalize_search_text(slug)
+            normalized_keywords = self._normalize_search_text(keywords)
+            normalized_category = self._normalize_search_text(category)
+            normalized_description = self._normalize_search_text(description)
+            normalized_path = self._normalize_search_text(
+                f"{Path(repo_path).stem} {repo_path}"
+            )
+            normalized_author = self._normalize_search_text(author)
+            normalized_dependencies = self._normalize_search_text(dependencies)
+
             self.tools.append({
                 "id": str(row.get("id", "")).strip(),
                 "slug": slug,
@@ -1211,10 +1299,28 @@ class PTMApp(tk.Tk):
                 "author": author,
                 "visits": visits,
                 "main_file": str(row.get("archivo_principal", "")).strip(),
-                "search": (
-                    f"{slug} {Path(repo_path).stem} {name} {description} "
-                    f"{keywords} {category} {version} {dependencies} {author}"
-                ).lower(),
+                "search_title": normalized_title,
+                "search_slug": normalized_slug,
+                "search_keywords": normalized_keywords,
+                "search_category": normalized_category,
+                "search_description": normalized_description,
+                "search_path": normalized_path,
+                "search_author": normalized_author,
+                "search_dependencies": normalized_dependencies,
+                "search": " ".join(
+                    part for part in (
+                        normalized_slug,
+                        normalized_path,
+                        normalized_title,
+                        normalized_description,
+                        normalized_keywords,
+                        normalized_category,
+                        self._normalize_search_text(version),
+                        normalized_dependencies,
+                        normalized_author,
+                    )
+                    if part
+                ),
             })
 
         if (
@@ -1540,24 +1646,26 @@ class PTMApp(tk.Tk):
         return local_path
 
     def filtered_tools(self):
-        q = self.query.get().strip().lower()
-        if not q:
+        raw_query = self.query.get().strip()
+        if not raw_query:
             return []
 
+        command = raw_query.lower()
         by_key = self._tool_by_state_key()
-        if q == "%recents%":
+
+        if command == "%recents%":
             return [
                 by_key[key]
                 for key in self.user_state.get("recents", [])
                 if key in by_key
             ]
-        if q == "%favorites%":
+        if command == "%favorites%":
             return [
                 by_key[key]
                 for key in self.user_state.get("favorites", [])
                 if key in by_key
             ]
-        if q == "%used%":
+        if command == "%used%":
             usage = self.user_state.get("usage", {})
             used = [
                 tool for key, tool in by_key.items()
@@ -1570,7 +1678,7 @@ class PTMApp(tk.Tk):
                     tool["name"].lower(),
                 ),
             )[:10]
-        if q == "%recommended%":
+        if command == "%recommended%":
             return sorted(
                 self.tools,
                 key=lambda tool: (
@@ -1579,29 +1687,77 @@ class PTMApp(tk.Tk):
                 ),
             )[:20]
 
-        tokens = [t for t in q.replace(",", " ").split() if t]
-        matches = [tool for tool in self.tools if all(t in tool["search"] for t in tokens)]
+        normalized_query = self._normalize_search_text(raw_query)
+        if not normalized_query:
+            return []
 
-        # Evitar duplicados por id/slug/ruta y priorizar las más visitadas.
+        tokens = normalized_query.split()
+        ranked = []
+
+        for tool in self.tools:
+            score = self._score_tool_for_query(
+                tool,
+                normalized_query,
+                tokens,
+            )
+            if score is None:
+                continue
+            ranked.append((score, tool))
+
+        # Evita duplicados y conserva la variante de mayor relevancia.
         unique = {}
-        for tool in matches:
-            key = tool.get("id") or tool.get("slug") or tool.get("repo_path") or str(tool["path"])
+        for score, tool in ranked:
+            key = (
+                tool.get("id")
+                or tool.get("slug")
+                or tool.get("repo_path")
+                or str(tool["path"])
+            )
             current = unique.get(key)
-            if current is None or int(tool.get("visits", 0)) > int(current.get("visits", 0)):
-                unique[key] = tool
+            candidate = (
+                score,
+                int(tool.get("visits", 0)),
+                tool,
+            )
+            if current is None or candidate[:2] > current[:2]:
+                unique[key] = candidate
 
-        return sorted(
+        ordered = sorted(
             unique.values(),
-            key=lambda tool: (-int(tool.get("visits", 0)), tool["name"].lower()),
+            key=lambda item: (
+                -item[0],
+                -item[1],
+                item[2]["name"].lower(),
+            ),
         )
+        return [item[2] for item in ordered]
+
+    def _schedule_search_catalog_check(self):
+        """Debounce: una sola consulta remota 500 ms después de dejar de escribir."""
+        if self._search_debounce_job is not None:
+            try:
+                self.after_cancel(self._search_debounce_job)
+            except tk.TclError:
+                pass
+            self._search_debounce_job = None
+
+        def run_check():
+            self._search_debounce_job = None
+            self._check_guide_on_search_async()
+
+        self._search_debounce_job = self.after(500, run_check)
 
     def _on_search_key_release(self, event):
         if getattr(event, "keysym", "") == "Return":
             return
-        self._check_guide_on_search_async()
+
+        # La respuesta visual usa únicamente el índice ya cargado en memoria.
         self.show_all_results = False
         self._apply_search_layout(expanded=False)
         self.refresh_results()
+
+        # GitHub se consulta una sola vez cuando el usuario deja de escribir.
+        self._schedule_search_catalog_check()
 
     def _show_all_search_results(self, _event=None):
         # Enter y el botón rojo nunca muestran resultados de una copia vieja:
