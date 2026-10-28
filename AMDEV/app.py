@@ -1,6 +1,7 @@
 # ARGUMENTOS: amdev archmomadev launcher apps aplicaciones catalogo remoto github
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -11,9 +12,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:09"
+APP_UPDATE_TIME = "19:14"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main"
 APPS_URL = f"{REPO_RAW_BASE}/apps.json"
@@ -423,16 +424,9 @@ class AMDEVApp(tk.Tk):
             text=f"{name} seleccionada. Clic izquierdo en AMDEV para actualizar y ejecutar."
         )
 
-    def run_selected_app(self):
-        """Reinicia la app seleccionada, descarga su última versión y la ejecuta."""
-        if not self.selected_app:
-            # La selección se realiza exclusivamente desde el clic derecho.
-            return
-
-        item = self.selected_app
-        app_id = str(item.get("id", "app")).strip() or "app"
+    def _stop_cached_app_processes(self, app_id, local_app):
+        """Cierra instancias anteriores de la app, incluso si AMDEV fue reiniciado."""
         previous = self.running_processes.get(app_id)
-
         if previous is not None and previous.poll() is None:
             try:
                 previous.terminate()
@@ -443,6 +437,72 @@ class AMDEVApp(tk.Tk):
                 except Exception:
                     pass
 
+        pid_file = local_app.parent / "process.pid"
+        if pid_file.is_file():
+            try:
+                old_pid = int(pid_file.read_text(encoding="utf-8").strip())
+                if old_pid > 0:
+                    if sys.platform == "win32":
+                        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                        subprocess.run(
+                            ["taskkill", "/PID", str(old_pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=creationflags,
+                            check=False,
+                        )
+                    else:
+                        try:
+                            os.kill(old_pid, 15)
+                        except OSError:
+                            pass
+            except Exception:
+                pass
+
+        # Compatibilidad con versiones anteriores de AMDEV que aún no
+        # guardaban process.pid. En Windows busca la ruta exacta del app.py.
+        if sys.platform == "win32":
+            try:
+                target = str(local_app.resolve()).replace("'", "''")
+                script = (
+                    "$target='" + target + "'; "
+                    "Get-CimInstance Win32_Process | "
+                    "Where-Object { "
+                    "($_.Name -like 'python*.exe') -and "
+                    "$_.CommandLine -and "
+                    "$_.CommandLine.Contains($target) "
+                    "} | ForEach-Object { "
+                    "Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue "
+                    "}"
+                )
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                    timeout=5,
+                    check=False,
+                )
+            except Exception:
+                pass
+
+        try:
+            pid_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def run_selected_app(self):
+        """Reinicia la app seleccionada, descarga su última versión y la ejecuta."""
+        if not self.selected_app:
+            return
+
+        item = self.selected_app
+        app_id = str(item.get("id", "app")).strip() or "app"
+        local_dir = self.cache_dir / app_id
+        local_app = local_dir / "app.py"
+
+        self._stop_cached_app_processes(app_id, local_app)
         self.launch_app(item, force_update=True)
 
     def launch_app(self, item, force_update=False):
@@ -477,6 +537,25 @@ class AMDEVApp(tk.Tk):
             source = self._request_text(f"{REPO_RAW_BASE}/{app_path}", timeout=20)
             compile(source, app_path, "exec")
 
+            expected_version = str(config.get("version", "")).strip()
+            version_match = re.search(
+                r'''APP_VERSION\s*=\s*["']([^"']+)["']''',
+                source,
+            )
+            downloaded_version = version_match.group(1).strip() if version_match else ""
+
+            if expected_version:
+                if not downloaded_version:
+                    raise RuntimeError(
+                        f"El app.py descargado no declara APP_VERSION; se esperaba v{expected_version}."
+                    )
+                if downloaded_version != expected_version:
+                    raise RuntimeError(
+                        "Versión inconsistente: "
+                        f"config.json indica v{expected_version}, "
+                        f"pero app.py contiene v{downloaded_version}."
+                    )
+
             temp = local_app.with_suffix(".py.tmp")
             temp.write_text(source, encoding="utf-8")
             temp.replace(local_app)
@@ -492,6 +571,13 @@ class AMDEVApp(tk.Tk):
                 cwd=str(local_dir),
             )
             self.running_processes[app_id] = process
+            try:
+                (local_dir / "process.pid").write_text(
+                    str(process.pid),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
 
             if force_update:
                 self.status.configure(
