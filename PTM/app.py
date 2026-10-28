@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.51"
+APP_VERSION = "1.0.52"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "01:04"
+APP_UPDATE_TIME = "01:08"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -3484,21 +3484,47 @@ class PTMApp(tk.Tk):
                 except Exception:
                     pass
 
-            # Algunos controles ttk conservan un ancho minimo en caracteres.
-            # Reducirlo junto con la fuente evita que el ultimo boton sea cortado.
+            # Algunos controles ttk conservan un ancho minimo impuesto por
+            # el tema aunque la fuente ya haya sido reducida. Cuando el widget
+            # esta realmente comprimido, liberar ese minimo deja que grid/pack
+            # repartan el espacio disponible sin cortar el ultimo control.
             if not isinstance(widget, protected):
                 try:
                     keys = widget.keys()
+                    actual_w = max(1, widget.winfo_width())
+                    req_w = max(1, widget.winfo_reqwidth())
+                    actual_h = max(1, widget.winfo_height())
+                    req_h = max(1, widget.winfo_reqheight())
+
                     if "width" in keys:
                         raw_width = widget.cget("width")
-                        width_value = int(float(raw_width or 0))
-                        if width_value > 1:
-                            widget.configure(width=max(1, int(width_value * scale)))
+                        try:
+                            width_value = int(float(raw_width or 0))
+                        except Exception:
+                            width_value = 0
+
+                        if isinstance(widget, (ttk.Button, ttk.Entry, ttk.Combobox)):
+                            if req_w > actual_w + 6:
+                                widget.configure(width=1)
+                            elif width_value > 1:
+                                widget.configure(
+                                    width=max(1, int(width_value * scale))
+                                )
+                        elif width_value > 1:
+                            widget.configure(
+                                width=max(1, int(width_value * scale))
+                            )
+
                     if "height" in keys:
                         raw_height = widget.cget("height")
-                        height_value = int(float(raw_height or 0))
-                        if height_value > 1:
-                            widget.configure(height=max(1, int(height_value * scale)))
+                        try:
+                            height_value = int(float(raw_height or 0))
+                        except Exception:
+                            height_value = 0
+                        if req_h > actual_h + 4 and height_value > 1:
+                            widget.configure(
+                                height=max(1, int(height_value * scale))
+                            )
                 except Exception:
                     pass
 
@@ -3678,6 +3704,24 @@ class PTMApp(tk.Tk):
         scale = max(0.50, scale)
 
         self._apply_tool_autofit_scale(root, state, scale)
+
+        # Segunda pasada tras recalcular geometria: algunos temas ttk solo
+        # revelan su minimo real despues del primer ajuste.
+        try:
+            root.update_idletasks()
+            for child in self._iter_tool_widgets(root):
+                if isinstance(child, ttk.Button):
+                    actual = max(1, child.winfo_width())
+                    requested = max(1, child.winfo_reqwidth())
+                    if requested > actual + 6:
+                        try:
+                            child.configure(width=1)
+                        except Exception:
+                            pass
+            root.update_idletasks()
+        except Exception:
+            pass
+
         state["scale"] = scale
 
     def _schedule_tool_autofit(self, key, delay=70):
