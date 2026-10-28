@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.66"
+APP_VERSION = "1.0.67"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "18:05"
+APP_UPDATE_TIME = "18:30"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -3444,8 +3444,8 @@ class PTMApp(tk.Tk):
             else display_detail
         )
         error_report = (
-            f"Programa: {tool.get('name', 'Herramienta')}\\n"
-            f"Motivo: {title}\\n"
+            f"Programa: {tool.get('name', 'Herramienta')}\n"
+            f"Motivo: {title}\n"
             f"Detalle: {copy_detail}"
         )
         detail_preview = (
@@ -3716,12 +3716,14 @@ class PTMApp(tk.Tk):
 
     def _resolve_integrated_entry(self, module):
         """Encuentra automáticamente la entrada embebible de una herramienta."""
-        for name in ("App", "Application"):
+        # Preferir entradas explicitas; las clases auxiliares Toplevel pueden
+        # heredar de Frame durante la importacion embebida de PTM.
+        for name in ("App", "Application", "create_tool"):
             entry = getattr(module, name, None)
             if callable(entry):
                 return entry
 
-        # Si el autor no usa un nombre estándar, detectar una clase Frame
+        # Solo si no hay una entrada explicita, detectar una clase Frame
         # definida por el propio módulo.
         for entry in vars(module).values():
             if not inspect.isclass(entry):
@@ -3734,10 +3736,6 @@ class PTMApp(tk.Tk):
             except TypeError:
                 continue
 
-        # Compatibilidad temporal con paquetes antiguos.
-        legacy = getattr(module, "create_tool", None)
-        if callable(legacy):
-            return legacy
         return None
 
     def _instantiate_integrated_entry(self, entry, parent):
