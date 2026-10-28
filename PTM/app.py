@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.18"
+APP_VERSION = "1.0.19"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:12"
+APP_UPDATE_TIME = "20:21"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -384,6 +384,7 @@ class PTMApp(tk.Tk):
         self.current_tool_widget = None
         self.current_tool_module = None
         self._tool_download_events = queue.Queue()
+        self._dependency_events = queue.Queue()
         self._failed_download_keys = set()
         self._catalog_events = queue.Queue()
         self._catalog_meta_check_running = False
@@ -400,6 +401,7 @@ class PTMApp(tk.Tk):
         self.floating = FloatingPTM(self)
         self.bind("<Escape>", lambda _e: self.hide_main())
         self.after(100, self._poll_tool_download_events)
+        self.after(100, self._poll_dependency_events)
         self.after(100, self._poll_catalog_events)
 
     # ---------- Ventana / proporción ----------
@@ -1726,149 +1728,173 @@ class PTMApp(tk.Tk):
 
         return packages
 
-    def _install_dependencies(self, tool):
-        missing = self._collect_missing_dependencies(tool)
-        if not missing:
-            return True
-
-        tool_name = tool.get("name", Path(tool["path"]).stem)
-        self.update_idletasks()
-
-        progress = tk.Toplevel(self)
-        progress.title("PTM - Dependencias")
-        progress.configure(bg=WHITE)
-        progress.resizable(False, False)
-        progress.transient(self)
-        progress.grab_set()
-
-        tk.Label(
-            progress,
-            text=f"Preparando {tool_name}",
-            bg=WHITE,
-            fg=BLACK,
-            font=("Segoe UI", 12, "bold"),
-        ).pack(padx=24, pady=(18, 6))
-
-        status = tk.Label(
-            progress,
-            text="Verificando dependencias...",
-            bg=WHITE,
-            fg=MUTED,
-            font=("Segoe UI", 9),
-            wraplength=390,
-            justify="center",
-        )
-        status.pack(padx=24, pady=(0, 18))
-
-        progress.update_idletasks()
-        w, h = 440, 120
-        x = self.winfo_x() + max(0, (self.winfo_width() - w) // 2)
-        y = self.winfo_y() + max(0, (self.winfo_height() - h) // 2)
-        progress.geometry(f"{w}x{h}+{x}+{y}")
-        progress.update()
+    def _install_dependencies(self, tool, key):
+        """Prepara dependencias sin abrir ventanas; todo se muestra en la pestaña."""
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
 
         try:
-            for package in missing:
-                install_package = self._compatible_install_package(package)
+            missing = self._collect_missing_dependencies(tool)
+        except Exception as exc:
+            self._dependency_events.put(("failed", key, tool, None, exc))
+            return
 
-                if install_package != package:
-                    status.configure(
-                        text=(
+        if not missing:
+            self._dependency_events.put(("success", key, tool, None, None))
+            return
+
+        meta["state"] = "preparing"
+        meta["failure_stage"] = "dependencies"
+
+        def worker():
+            try:
+                for package in missing:
+                    install_package = self._compatible_install_package(package)
+
+                    if install_package != package:
+                        status_text = (
                             f"Instalando {install_package}... "
-                            f"(compatible con Python {sys.version_info.major}.{sys.version_info.minor})"
+                            f"(compatible con Python "
+                            f"{sys.version_info.major}.{sys.version_info.minor})"
                         )
-                    )
-                else:
-                    status.configure(text=f"Instalando {install_package}...")
-                progress.update()
+                    else:
+                        status_text = f"Instalando {install_package}..."
 
-                cmd = [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--disable-pip-version-check",
-                    "--prefer-binary",
-                    install_package,
-                ]
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
+                    self._dependency_events.put(
+                        ("status", key, tool, status_text, None)
+                    )
+
+                    cmd = [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--disable-pip-version-check",
+                        "--prefer-binary",
+                        install_package,
+                    ]
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                    )
+
+                    if result.returncode != 0:
+                        detail = (result.stderr or result.stdout or "").strip()
+                        if len(detail) > 1800:
+                            detail = detail[-1800:]
+
+                        python_label = (
+                            f"{sys.version_info.major}."
+                            f"{sys.version_info.minor}."
+                            f"{sys.version_info.micro}"
+                        )
+                        raise RuntimeError(
+                            f"No se pudo instalar {install_package} "
+                            f"para Python {python_label}.\n\n"
+                            f"{detail or 'pip devolvió un error.'}"
+                        )
+
+                importlib.invalidate_caches()
+
+                still_missing = []
+                for package in missing:
+                    normalized = self._normalize_distribution_name(package)
+                    lower = normalized.lower()
+
+                    if lower == "pygame":
+                        if not self._module_available("pygame"):
+                            still_missing.append(package)
+                        continue
+
+                    candidates = [
+                        name for name, value in {
+                            "PIL": "Pillow",
+                            "cv2": "opencv-python",
+                            "sklearn": "scikit-learn",
+                            "yaml": "PyYAML",
+                            "bs4": "beautifulsoup4",
+                            "docx": "python-docx",
+                            "pptx": "python-pptx",
+                            "fitz": "PyMuPDF",
+                            "serial": "pyserial",
+                            "dateutil": "python-dateutil",
+                            "dotenv": "python-dotenv",
+                            "Crypto": "pycryptodome",
+                        }.items()
+                        if value.lower() == lower
+                    ]
+
+                    if candidates:
+                        if not any(self._module_available(name) for name in candidates):
+                            still_missing.append(package)
+                    elif (
+                        not self._dependency_satisfied(package)
+                        and not self._module_available(
+                            normalized.replace("-", "_")
+                        )
+                    ):
+                        still_missing.append(package)
+
+                if still_missing:
+                    raise RuntimeError(
+                        "Las siguientes dependencias siguen sin estar disponibles: "
+                        + ", ".join(still_missing)
+                    )
+
+                self._dependency_events.put(
+                    ("success", key, tool, None, None)
                 )
 
-                if result.returncode != 0:
-                    detail = (result.stderr or result.stdout or "").strip()
-                    if len(detail) > 1800:
-                        detail = detail[-1800:]
+            except Exception as exc:
+                self._dependency_events.put(
+                    ("failed", key, tool, None, exc)
+                )
 
-                    python_label = (
-                        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-                    )
-                    raise RuntimeError(
-                        f"No se pudo instalar {install_package} para Python {python_label}.\n\n"
-                        f"{detail or 'pip devolvió un error.'}"
-                    )
+        threading.Thread(target=worker, daemon=True).start()
 
-            importlib.invalidate_caches()
+    def _poll_dependency_events(self):
+        """Actualiza la instalación de dependencias dentro de la pestaña."""
+        try:
+            while True:
+                kind, key, tool, status_text, exc = (
+                    self._dependency_events.get_nowait()
+                )
 
-            still_missing = []
-            for package in missing:
-                normalized = self._normalize_distribution_name(package)
-                lower = normalized.lower()
-
-                if lower == "pygame":
-                    if not self._module_available("pygame"):
-                        still_missing.append(package)
+                meta = self.open_tabs.get(key)
+                if not meta:
                     continue
 
-                # Si era una dependencia inferida con alias, comprobar por import.
-                candidates = [
-                    key for key, value in {
-                        "PIL": "Pillow",
-                        "cv2": "opencv-python",
-                        "sklearn": "scikit-learn",
-                        "yaml": "PyYAML",
-                        "bs4": "beautifulsoup4",
-                        "docx": "python-docx",
-                        "pptx": "python-pptx",
-                        "fitz": "PyMuPDF",
-                        "serial": "pyserial",
-                        "dateutil": "python-dateutil",
-                        "dotenv": "python-dotenv",
-                        "Crypto": "pycryptodome",
-                    }.items()
-                    if value.lower() == lower
-                ]
-                if candidates:
-                    if not any(self._module_available(name) for name in candidates):
-                        still_missing.append(package)
-                elif not self._dependency_satisfied(package) and not self._module_available(
-                    normalized.replace("-", "_")
-                ):
-                    still_missing.append(package)
+                if kind == "status":
+                    meta["state"] = "preparing"
+                    status_widget = meta.get("loading_status")
+                    if (
+                        status_widget is not None
+                        and status_widget.winfo_exists()
+                    ):
+                        status_widget.configure(text=status_text)
+                    continue
 
-            if still_missing:
-                raise RuntimeError(
-                    "Las siguientes dependencias siguen sin estar disponibles: "
-                    + ", ".join(still_missing)
-                )
+                if kind == "success":
+                    meta["failure_stage"] = None
+                    self._load_tool_into_tab(tool, key)
+                    continue
 
-            return True
-        except Exception as exc:
-            messagebox.showerror(
-                "PTM - Dependencias",
-                f"No se pudo preparar la herramienta:\n\n{exc}",
-                parent=progress,
-            )
-            return False
-        finally:
-            try:
-                progress.grab_release()
-            except Exception:
-                pass
-            progress.destroy()
+                if kind == "failed":
+                    meta["failure_stage"] = "dependencies"
+                    meta["last_download_error"] = exc
+                    self._show_tool_unavailable(tool, key, exc)
+                    continue
+
+        except queue.Empty:
+            pass
+
+        try:
+            self.after(100, self._poll_dependency_events)
+        except tk.TclError:
+            pass
 
     def _tool_tab_key(self, tool):
         repo_path = str(tool.get("repo_path", "")).strip()
@@ -1979,7 +2005,11 @@ class PTMApp(tk.Tk):
         ).pack()
 
         is_404 = isinstance(exc, urllib.error.HTTPError) and getattr(exc, "code", None) == 404
-        title = "No está disponible" if is_404 else "No se pudo descargar"
+        failure_stage = meta.get("failure_stage")
+        if failure_stage == "dependencies":
+            title = "No se pudieron preparar las dependencias"
+        else:
+            title = "No está disponible" if is_404 else "No se pudo descargar"
 
         tk.Label(
             holder,
@@ -2225,16 +2255,8 @@ class PTMApp(tk.Tk):
         meta["state"] = "preparing"
         self._show_tool_loading(tool, key, "Verificando dependencias...")
 
-        # La instalación existente se ejecuta después de la descarga.
-        if not self._install_dependencies(tool):
-            self._show_tool_unavailable(
-                tool,
-                key,
-                RuntimeError("No se pudieron preparar las dependencias requeridas."),
-            )
-            return
-
-        self._load_tool_into_tab(tool, key)
+        # Dependencias: se preparan en segundo plano y se muestran en esta pestaña.
+        self._install_dependencies(tool, key)
 
     def _load_tool_into_tab(self, tool, key):
         meta = self.open_tabs.get(key)
