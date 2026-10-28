@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.12"
+APP_VERSION = "1.0.13"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:52"
+APP_UPDATE_TIME = "19:53"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1724,6 +1724,7 @@ class PTMApp(tk.Tk):
             return
 
         meta["state"] = "failed"
+        meta["download_worker_running"] = False
         meta["download_finished"] = True
         meta["loading_status"] = None
         frame = meta["frame"]
@@ -1824,110 +1825,78 @@ class PTMApp(tk.Tk):
         if not meta:
             return
 
-        # Un reintento manual crea un ciclo nuevo e invalida todo lo anterior.
-        meta["download_cycle_id"] = int(meta.get("download_cycle_id", 0)) + 1
-        meta["download_attempt"] = 0
+        # Solo se permite reintentar después de un fallo terminal.
+        if meta.get("state") != "failed":
+            return
+
+        self._begin_tool_download_session(tool, key)
+
+    def _start_tool_download(self, tool, key):
+        """Primer ciclo de descarga de la pestaña."""
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        if meta.get("download_worker_running"):
+            return
+
+        self._begin_tool_download_session(tool, key)
+
+    def _begin_tool_download_session(self, tool, key):
+        """Crea una sesión única. El worker hace los 5 intentos completos."""
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        if meta.get("download_worker_running"):
+            return
+
+        session_id = int(meta.get("download_session_id", 0)) + 1
+        meta["download_session_id"] = session_id
+        meta["download_worker_running"] = True
         meta["download_finished"] = False
+        meta["download_attempt"] = 0
         meta["state"] = "loading"
         meta["last_download_error"] = None
 
         self._show_tool_loading(
             tool,
             key,
-            f"PTM v{APP_VERSION} · Preparando descarga..."
+            f"PTM v{APP_VERSION} · Descargando... intento 1/5",
         )
-        self._run_tool_download_attempt(
-            tool,
-            key,
-            cycle_id=meta["download_cycle_id"],
-            attempt=1,
-        )
-
-    def _start_tool_download(self, tool, key):
-        """Inicia un único ciclo de descarga de máximo 5 intentos."""
-        meta = self.open_tabs.get(key)
-        if not meta:
-            return
-
-        if meta.get("state") == "loading" and not meta.get("download_finished"):
-            # Ya existe un ciclo en curso.
-            if int(meta.get("download_attempt", 0)) > 0:
-                return
-
-        meta["download_cycle_id"] = int(meta.get("download_cycle_id", 0)) + 1
-        meta["download_attempt"] = 0
-        meta["download_finished"] = False
-        meta["state"] = "loading"
-        meta["last_download_error"] = None
-
-        self._run_tool_download_attempt(
-            tool,
-            key,
-            cycle_id=meta["download_cycle_id"],
-            attempt=1,
-        )
-
-    def _run_tool_download_attempt(self, tool, key, cycle_id, attempt):
-        """Ejecuta exactamente un intento y nunca crea otro ciclo por sí solo."""
-        meta = self.open_tabs.get(key)
-        if not meta:
-            return
-
-        if meta.get("download_finished"):
-            return
-
-        if int(meta.get("download_cycle_id", 0)) != int(cycle_id):
-            return
-
-        if meta.get("state") != "loading":
-            return
-
-        if attempt < 1 or attempt > 5:
-            return
-
-        meta["download_attempt"] = attempt
-
-        status_widget = meta.get("loading_status")
-        if status_widget is not None and status_widget.winfo_exists():
-            status_widget.configure(
-                text=f"PTM v{APP_VERSION} · Descargando... intento {attempt}/5"
-            )
-
-        token = int(meta.get("download_token", 0)) + 1
-        meta["download_token"] = token
 
         def worker():
-            try:
-                local_path = self._ensure_tool_local(tool)
+            last_error = None
+
+            for attempt in range(1, 6):
                 self._tool_download_events.put(
-                    ("ok", key, cycle_id, token, attempt, tool, local_path, None)
+                    ("progress", key, session_id, attempt, tool, None, None)
                 )
-            except Exception as exc:
-                self._tool_download_events.put(
-                    ("error", key, cycle_id, token, attempt, tool, None, exc)
-                )
+
+                try:
+                    local_path = self._ensure_tool_local(tool)
+                    self._tool_download_events.put(
+                        ("success", key, session_id, attempt, tool, local_path, None)
+                    )
+                    return
+                except Exception as exc:
+                    last_error = exc
+
+                if attempt < 5:
+                    time.sleep(2)
+
+            # Este es el único punto que emite el fallo final.
+            self._tool_download_events.put(
+                ("failed", key, session_id, 5, tool, None, last_error)
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_tool_download_failure(self, tool, key, cycle_id, exc):
-        meta = self.open_tabs.get(key)
-        if not meta:
-            return
-
-        if int(meta.get("download_cycle_id", 0)) != int(cycle_id):
-            return
-
-        # Estado terminal: solo el botón Reintentar puede salir de aquí.
-        meta["download_finished"] = True
-        meta["state"] = "failed"
-        meta["last_download_error"] = exc
-        self._show_tool_unavailable(tool, key, exc)
-
     def _poll_tool_download_events(self):
-        """Procesa resultados de descarga en el hilo principal de Tkinter."""
+        """Actualiza la interfaz sin crear ni reiniciar ciclos automáticamente."""
         try:
             while True:
-                kind, key, cycle_id, token, attempt, tool, local_path, exc = (
+                kind, key, session_id, attempt, tool, local_path, exc = (
                     self._tool_download_events.get_nowait()
                 )
 
@@ -1935,67 +1904,36 @@ class PTMApp(tk.Tk):
                 if not meta:
                     continue
 
-                # Todo evento de un ciclo anterior queda descartado.
-                if int(meta.get("download_cycle_id", 0)) != int(cycle_id):
+                # Ignorar cualquier mensaje de una sesión anterior.
+                if int(meta.get("download_session_id", 0)) != int(session_id):
                     continue
 
-                if meta.get("download_finished"):
+                if kind == "progress":
+                    if meta.get("state") != "loading":
+                        continue
+                    meta["download_attempt"] = int(attempt)
+                    status_widget = meta.get("loading_status")
+                    if status_widget is not None and status_widget.winfo_exists():
+                        status_widget.configure(
+                            text=f"PTM v{APP_VERSION} · Descargando... intento {attempt}/5"
+                        )
                     continue
 
-                if meta.get("state") != "loading":
-                    continue
-
-                if int(meta.get("download_token", 0)) != int(token):
-                    continue
-
-                if int(meta.get("download_attempt", 0)) != int(attempt):
-                    continue
-
-                if kind == "ok":
+                if kind == "success":
+                    meta["download_worker_running"] = False
                     meta["download_finished"] = True
+                    meta["download_attempt"] = int(attempt)
                     self._tool_download_ready(tool, key, local_path)
                     continue
 
-                meta["last_download_error"] = exc
-
-                if int(attempt) >= 5:
-                    self._finish_tool_download_failure(
-                        tool,
-                        key,
-                        cycle_id,
-                        exc,
-                    )
+                if kind == "failed":
+                    meta["download_worker_running"] = False
+                    meta["download_finished"] = True
+                    meta["download_attempt"] = 5
+                    meta["state"] = "failed"
+                    meta["last_download_error"] = exc
+                    self._show_tool_unavailable(tool, key, exc)
                     continue
-
-                # El siguiente intento se programa una sola vez, 2 segundos después.
-                next_attempt = int(attempt) + 1
-
-                def launch_next(
-                    t=tool,
-                    k=key,
-                    cid=cycle_id,
-                    nxt=next_attempt,
-                ):
-                    current = self.open_tabs.get(k)
-                    if not current:
-                        return
-                    if current.get("download_finished"):
-                        return
-                    if current.get("state") != "loading":
-                        return
-                    if int(current.get("download_cycle_id", 0)) != int(cid):
-                        return
-                    if int(current.get("download_attempt", 0)) != int(nxt - 1):
-                        return
-
-                    self._run_tool_download_attempt(
-                        t,
-                        k,
-                        cycle_id=cid,
-                        attempt=nxt,
-                    )
-
-                self.after(2000, launch_next)
 
         except queue.Empty:
             pass
@@ -2140,9 +2078,9 @@ class PTMApp(tk.Tk):
             "frame": frame,
             "module": None,
             "state": "loading",
-            "download_token": 0,
             "download_attempt": 0,
-            "download_cycle_id": 0,
+            "download_session_id": 0,
+            "download_worker_running": False,
             "download_finished": False,
             "last_download_error": None,
         }
