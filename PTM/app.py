@@ -26,9 +26,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.40"
+APP_VERSION = "1.0.41"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:33"
+APP_UPDATE_TIME = "22:35"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -481,7 +481,7 @@ class FloatingPTM(tk.Toplevel):
 
     def _left_up(self, _event):
         if not self._dragging:
-            self.app.toggle_main()
+            self.app.show_main()
 
     def _menu(self, _event):
         menu = tk.Menu(self, tearoff=0)
@@ -489,7 +489,7 @@ class FloatingPTM(tk.Toplevel):
         menu.add_command(label="Recargar herramientas", command=self.app.reload_tools)
         menu.add_command(label="Abrir carpeta de herramientas", command=self.app.open_tools_folder)
         menu.add_separator()
-        menu.add_command(label="Salir", command=self.app.exit_app)
+        menu.add_command(label="Cerrar PTM por completo", command=self.app.exit_app)
         menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
 
 
@@ -537,6 +537,7 @@ class PTMApp(tk.Tk):
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
+        self.attributes("-topmost", True)
         self.protocol("WM_DELETE_WINDOW", self.hide_main)
 
         self._build_shell()
@@ -544,7 +545,6 @@ class PTMApp(tk.Tk):
         self.show_home()
 
         self.floating = FloatingPTM(self)
-        self.bind("<Escape>", lambda _e: self.hide_main())
         self.after(100, self._poll_tool_download_events)
         self.after(100, self._poll_dependency_events)
         self.after(100, self._poll_catalog_events)
@@ -628,8 +628,7 @@ class PTMApp(tk.Tk):
         self.close_canvas = tk.Canvas(self.top, width=30, height=30, bg=WHITE,
                                       highlightthickness=0, bd=0, cursor="hand2")
         self.close_canvas.pack(side="right", padx=(8, 4), pady=(2, 0))
-        self.close_canvas.create_line(8, 8, 22, 22, fill=BLACK, width=2)
-        self.close_canvas.create_line(22, 8, 8, 22, fill=BLACK, width=2)
+        self.close_canvas.create_line(7, 19, 23, 19, fill=BLACK, width=2)
         self.close_canvas.bind("<Button-1>", lambda _e: self.hide_main())
 
         self.separator = tk.Frame(self.outer, bg=WHITE, height=2)
@@ -1210,6 +1209,11 @@ class PTMApp(tk.Tk):
         key = self._tool_tab_key(tool)
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(
+            label="Abrir en nueva pestaña",
+            command=lambda t=tool: self.open_tool(t, background=True),
+        )
+        menu.add_separator()
+        menu.add_command(
             label=("Quitar de favoritos" if self._is_favorite(tool)
                    else "Añadir a favoritos"),
             command=lambda t=tool: self._toggle_favorite(t),
@@ -1224,6 +1228,12 @@ class PTMApp(tk.Tk):
             state=("normal" if key in self.open_tabs else "disabled"),
         )
         menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    def _open_tool_from_result(self, event, tool):
+        """Ctrl+clic abre/carga en segundo plano sin abandonar el buscador."""
+        ctrl_pressed = bool(int(getattr(event, "state", 0)) & 0x0004)
+        self.open_tool(tool, background=ctrl_pressed)
         return "break"
 
     def reload_tool(self, tool):
@@ -1971,8 +1981,14 @@ class PTMApp(tk.Tk):
                 clickable = (row, label, meta)
 
             for widget in clickable:
-                widget.bind("<Double-Button-1>", lambda _e, t=tool: self.open_tool(t))
-                widget.bind("<Button-1>", lambda _e, t=tool: self.open_tool(t))
+                widget.bind(
+                    "<Double-Button-1>",
+                    lambda e, t=tool: self._open_tool_from_result(e, t),
+                )
+                widget.bind(
+                    "<Button-1>",
+                    lambda e, t=tool: self._open_tool_from_result(e, t),
+                )
                 widget.bind(
                     "<Button-3>",
                     lambda e, t=tool: self._show_tool_context_menu(e, t),
@@ -2745,7 +2761,7 @@ class PTMApp(tk.Tk):
                 return
 
         animate()
-        self.switch_to_tool(key)
+        self._activate_tool_if_foreground(key)
 
     def _show_tool_unavailable(self, tool, key, exc=None):
         meta = self.open_tabs.get(key)
@@ -2861,7 +2877,7 @@ class PTMApp(tk.Tk):
             lambda event: self._close_failed_tool_from_click(event, key),
         )
 
-        self.switch_to_tool(key)
+        self._activate_tool_if_foreground(key)
 
     def _retry_tool_download(self, event, tool, key):
         """Solo un clic físico izquierdo puede iniciar un nuevo ciclo."""
@@ -3082,7 +3098,7 @@ class PTMApp(tk.Tk):
 
             meta["module"] = None
             meta["state"] = "ready"
-            self.switch_to_tool(key)
+            self._activate_tool_if_foreground(key)
             return
 
         try:
@@ -3136,15 +3152,28 @@ class PTMApp(tk.Tk):
         meta["module"] = module
         meta["state"] = "ready"
         meta["loading_status"] = None
+        self._activate_tool_if_foreground(key)
+
+    def _activate_tool_if_foreground(self, key):
+        """Actualiza la pestaña sin robar el foco si fue abierta en segundo plano."""
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+        if meta.get("background_open"):
+            self._render_tabs()
+            return
         self.switch_to_tool(key)
 
-    def open_tool(self, tool, record_usage=True):
+    def open_tool(self, tool, record_usage=True, background=False):
         if record_usage:
             self._record_tool_open(tool)
         key = self._tool_tab_key(tool)
 
         if key in self.open_tabs:
-            self.switch_to_tool(key)
+            if not background:
+                self.switch_to_tool(key)
+            else:
+                self._render_tabs()
             return
 
         frame = tk.Frame(self.content, bg=WHITE)
@@ -3154,6 +3183,7 @@ class PTMApp(tk.Tk):
             "frame": frame,
             "module": None,
             "state": "loading",
+            "background_open": bool(background),
             "download_attempt": 0,
             "download_session_id": 0,
             "download_worker_running": False,
@@ -3162,12 +3192,14 @@ class PTMApp(tk.Tk):
             "last_download_error": None,
         }
 
+        self._render_tabs()
         self._show_tool_loading(tool, key)
         self._start_tool_download(tool, key)
 
     def switch_to_tool(self, key):
         if key not in self.open_tabs:
             return
+        self.open_tabs[key]["background_open"] = False
         self.current_key = key
         self._clear_content()
         if hasattr(self, "home_frame") and self.home_frame.winfo_exists():
@@ -3418,9 +3450,9 @@ class PTMApp(tk.Tk):
 
     def show_main(self):
         self.deiconify()
-        self.lift()
         self.attributes("-topmost", True)
-        self.after(120, lambda: self.attributes("-topmost", False))
+        self.lift()
+        self.focus_force()
 
     def toggle_main(self):
         if self.state() == "withdrawn" or not self.winfo_viewable():
