@@ -21,6 +21,7 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 import urllib.error
+import urllib.parse
 import urllib.request
 import unicodedata
 import zipfile
@@ -28,7 +29,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.69"
+APP_VERSION = "1.0.70"
 APP_UPDATE_DATE = "28/10/2026"
 APP_UPDATE_TIME = "18:55"
 SEARCH_MAX_LENGTH = 40
@@ -467,7 +468,7 @@ class TabButton(tk.Canvas):
                     command=self.on_favorite,
                 )
             if self.on_reload:
-                menu.add_command(label="Recargar", command=self.on_reload)
+                menu.add_command(label="Recargar desde GitHub", command=self.on_reload)
             menu.add_command(label="Cerrar", command=self.on_close)
             menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
 
@@ -586,6 +587,9 @@ class PTMApp(tk.Tk):
         self.current_tool_widget = None
         self.current_tool_module = None
         self._tool_download_events = queue.Queue()
+        # Evita que descargas antiguas sobrescriban herramientas recargadas.
+        self._tool_download_session_counter = 0
+        self._tool_download_write_lock = threading.Lock()
         self._dependency_events = queue.Queue()
         self._failed_download_keys = set()
         self._catalog_events = queue.Queue()
@@ -1592,18 +1596,20 @@ class PTMApp(tk.Tk):
         return "break"
 
     def reload_tool(self, tool):
+        """Recargar siempre obtiene el archivo vigente de GitHub, sin caché."""
         key = self._tool_tab_key(tool)
         if key in self.open_tabs:
             self.close_tool_tab(key)
 
+        # Un error previo no debe bloquear una recarga solicitada por el usuario.
+        self._failed_download_keys.discard(key)
         state_key = self._tool_state_key(tool)
         current = next(
             (item for item in self.tools
              if self._tool_state_key(item) == state_key),
-            None,
+            tool,
         )
-        if current is not None:
-            self.open_tool(current, record_usage=False)
+        self.open_tool(current, record_usage=False, force_remote=True)
 
     # ---------- Búsqueda ----------
     @staticmethod
@@ -2061,8 +2067,8 @@ class PTMApp(tk.Tk):
             raise ValueError("guide.csv no contiene la columna 'ruta'.")
         return list(reader)
 
-    def _ensure_tool_local(self, tool):
-        """Descarga una herramienta remota y devuelve su archivo Python ejecutable."""
+    def _ensure_tool_local(self, tool, force_remote=False, is_current=None):
+        """Descarga el archivo; Recargar consulta GitHub API y no la copia local."""
         repo_path = str(tool.get("repo_path", "")).strip().replace("\\", "/").lstrip("/")
         if not repo_path:
             raise ValueError("La herramienta no tiene una ruta válida en guide.csv.")
@@ -2070,18 +2076,73 @@ class PTMApp(tk.Tk):
         local_path = self.base_dir / Path(repo_path)
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        remote_url = f"{REPO_RAW_BASE}/{repo_path}?v={time.time_ns()}"
-        request = urllib.request.Request(
-            remote_url,
-            headers={
+        if force_remote:
+            # GitHub Contents API devuelve el contenido de main y su SHA Git.
+            # No usar raw.githubusercontent.com: un CDN puede servir un PY viejo.
+            api_path = urllib.parse.quote(f"PTM/{repo_path}", safe="/")
+            api_url = (
+                f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}"
+                f"/contents/{api_path}?ref=main&nocache={time.time_ns()}"
+            )
+            headers = {
                 "User-Agent": f"PTM/{APP_VERSION}",
-                "Cache-Control": "no-cache",
-            },
-        )
+                "Accept": "application/vnd.github+json",
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
+            }
+            request = urllib.request.Request(api_url, headers=headers)
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
 
-        with urllib.request.urlopen(request, timeout=30) as response:
-            data = response.read()
+            if payload.get("type") != "file":
+                raise ValueError("GitHub no devolvió un archivo ejecutable.")
+            expected_sha = str(payload.get("sha", "")).strip()
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", expected_sha):
+                raise ValueError("GitHub no devolvió un SHA de archivo válido.")
 
+            if payload.get("encoding") == "base64" and payload.get("content"):
+                encoded = str(payload["content"]).replace("\n", "")
+                data = base64.b64decode(encoded, validate=True)
+            else:
+                # Los ZIP grandes pueden omitir content en Contents API.
+                blob_url = (
+                    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}"
+                    f"/git/blobs/{expected_sha}?nocache={time.time_ns()}"
+                )
+                blob_request = urllib.request.Request(blob_url, headers=headers)
+                with urllib.request.urlopen(blob_request, timeout=30) as response:
+                    blob = json.loads(response.read().decode("utf-8"))
+                if blob.get("encoding") != "base64":
+                    raise ValueError("GitHub no entregó contenido base64 válido.")
+                encoded = str(blob.get("content", "")).replace("\n", "")
+                data = base64.b64decode(encoded, validate=True)
+
+            blob_header = f"blob {len(data)}\0".encode("ascii")
+            actual_sha = hashlib.sha1(blob_header + data).hexdigest()
+            if actual_sha.lower() != expected_sha.lower():
+                raise ValueError("El contenido recibido no coincide con el SHA de GitHub.")
+        else:
+            remote_url = f"{REPO_RAW_BASE}/{repo_path}?v={time.time_ns()}"
+            request = urllib.request.Request(
+                remote_url,
+                headers={
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                data = response.read()
+
+        # No publicar descargas obsoletas si se cerró o recargó la pestaña.
+        if is_current is not None and not is_current():
+            raise RuntimeError("Esta sesión de descarga ya no está activa.")
+        with self._tool_download_write_lock:
+            if is_current is not None and not is_current():
+                raise RuntimeError("Esta sesión de descarga ya no está activa.")
+            return self._store_tool_download(tool, repo_path, local_path, data)
+
+    def _store_tool_download(self, tool, repo_path, local_path, data):
+        """Valida y reemplaza atómicamente la copia local descargada."""
         file_type = str(tool.get("file_type", "")).strip().lower()
         if not file_type:
             file_type = Path(repo_path).suffix.lower().lstrip(".")
@@ -3646,7 +3707,7 @@ class PTMApp(tk.Tk):
             self.close_tool_tab(key)
         return "break"
 
-    def _start_tool_download(self, tool, key):
+    def _start_tool_download(self, tool, key, force_remote=False):
         """Primer ciclo de descarga de la pestaña."""
         meta = self.open_tabs.get(key)
         if not meta:
@@ -3667,9 +3728,10 @@ class PTMApp(tk.Tk):
             tool,
             key,
             origin="initial",
+            force_remote=force_remote,
         )
 
-    def _begin_tool_download_session(self, tool, key, origin="initial"):
+    def _begin_tool_download_session(self, tool, key, origin="initial", force_remote=False):
         """Crea una sesión; tras failed solo acepta un clic manual autorizado."""
         meta = self.open_tabs.get(key)
         if not meta:
@@ -3685,7 +3747,10 @@ class PTMApp(tk.Tk):
         if origin == "manual_click":
             meta["manual_retry_authorized"] = False
 
-        session_id = int(meta.get("download_session_id", 0)) + 1
+        # Identificador único entre pestañas: impide aceptar eventos de
+        # descargas anteriores que compartían key y session_id=1.
+        self._tool_download_session_counter += 1
+        session_id = self._tool_download_session_counter
         meta["download_session_id"] = session_id
         meta["download_worker_running"] = True
         meta["download_finished"] = False
@@ -3694,36 +3759,53 @@ class PTMApp(tk.Tk):
         meta["failure_stage"] = None
         meta["last_download_error"] = None
 
-        self._show_tool_loading(
-            tool,
-            key,
-            f"PTM v{APP_VERSION} · Descargando... intento 1/5 · sesión única",
+        status = (
+            "Obteniendo versión actual desde GitHub (sin caché)..."
+            if force_remote else
+            f"PTM v{APP_VERSION} · Descargando... intento 1/5 · sesión única"
         )
+        self._show_tool_loading(tool, key, status)
+
+        def is_current():
+            active = self.open_tabs.get(key)
+            return (
+                active is meta
+                and int(active.get("download_session_id", 0)) == session_id
+            )
 
         def worker():
             last_error = None
 
             for attempt in range(1, 6):
+                if not is_current():
+                    return
                 self._tool_download_events.put(
                     ("progress", key, session_id, attempt, tool, None, None)
                 )
 
                 try:
-                    local_path = self._ensure_tool_local(tool)
+                    local_path = self._ensure_tool_local(
+                        tool, force_remote=force_remote, is_current=is_current,
+                    )
+                    if not is_current():
+                        return
                     self._tool_download_events.put(
                         ("success", key, session_id, attempt, tool, local_path, None)
                     )
                     return
                 except Exception as exc:
+                    if not is_current():
+                        return
                     last_error = exc
 
                 if attempt < 5:
                     time.sleep(2)
 
             # Este es el único punto que emite el fallo final.
-            self._tool_download_events.put(
-                ("failed", key, session_id, 5, tool, None, last_error)
-            )
+            if is_current():
+                self._tool_download_events.put(
+                    ("failed", key, session_id, 5, tool, None, last_error)
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -4971,9 +5053,13 @@ class PTMApp(tk.Tk):
                 raise RuntimeError("No se pudo preparar el módulo.")
             module = importlib.util.module_from_spec(spec)
 
+            # Ejecutar SIEMPRE el .py descargado, nunca un __pycache__/.pyc
+            # que puede conservar una versión anterior con igual mtime/tamaño.
+            source_bytes = Path(tool["path"]).read_bytes()
+            source_code = compile(source_bytes, str(tool["path"]), "exec")
             embedded_roots, tk_proxy = self._run_with_embedded_tk(
                 host,
-                lambda: spec.loader.exec_module(module),
+                lambda: exec(source_code, module.__dict__),
             )
 
             # Si el script hizo "import tkinter as tk", mantener un proxy
@@ -5044,7 +5130,7 @@ class PTMApp(tk.Tk):
             return
         self.switch_to_tool(key)
 
-    def open_tool(self, tool, record_usage=True, background=False):
+    def open_tool(self, tool, record_usage=True, background=False, force_remote=False):
         if record_usage:
             self._record_tool_open(tool)
         key = self._tool_tab_key(tool)
@@ -5082,7 +5168,7 @@ class PTMApp(tk.Tk):
 
         self._render_tabs()
         self._show_tool_loading(tool, key)
-        self._start_tool_download(tool, key)
+        self._start_tool_download(tool, key, force_remote=force_remote)
 
     def switch_to_tool(self, key):
         if key not in self.open_tabs:
