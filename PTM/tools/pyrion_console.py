@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.3.0"
+TOOL_VERSION = "1.4.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -108,7 +108,7 @@ def list_python_processes():
 
 
 class PyrionConsoleTool(tk.Frame):
-    TAB_ORDER = ("Shell", "KILL PY", "Red", "SSL", "GitHub", "Logs")
+    TAB_ORDER = ("Shell", "Killpy", "Red", "SSL", "GitHub", "Logs")
 
     def __init__(self, parent, app=None):
         super().__init__(parent, bg=BG)
@@ -124,8 +124,17 @@ class PyrionConsoleTool(tk.Frame):
 
         self._build_ui()
 
-        # Solo Shell existe al iniciar.
-        self.open_tab("Shell")
+        # Solo Consola existe al iniciar. Los accesos superiores crean las demas.
+        self.open_tabs.append("Consola")
+        self.histories["Consola"] = (
+            "PYRION - consola grafica\n"
+            "Shell persistente: /bin/sh\n"
+            "Atajo global: Ctrl + Alt + T\n"
+            "Abre nuevas pestañas desde la barra superior.\n"
+            "------------------------------------------------------------\n"
+        )
+        self._add_side_tab("Consola")
+        self.activate_tab("Consola")
 
     def _build_ui(self):
         # Barra de accesos: no son pestañas abiertas, son creadores/activadores.
@@ -284,7 +293,7 @@ class PyrionConsoleTool(tk.Frame):
 
     # ---------- pestañas ----------
     def open_tab(self, name):
-        if name not in self.TAB_ORDER:
+        if name not in self.TAB_ORDER and name != "Consola":
             return
 
         if name not in self.open_tabs:
@@ -315,40 +324,47 @@ class PyrionConsoleTool(tk.Frame):
             pady=7,
             font=("DejaVu Sans", 9),
         )
+        close_button = tk.Button(
+            row,
+            text="×",
+            command=lambda n=name: self.close_tab(n),
+            bg=TAB,
+            fg=MUTED,
+            activebackground=TAB_ACTIVE,
+            activeforeground=RED,
+            bd=0,
+            relief="flat",
+            width=2,
+            font=("DejaVu Sans", 9, "bold"),
+        )
+        close_button.pack(side="left", fill="y")
         button.pack(side="left", fill="x", expand=True)
-
-        # Shell es la base y no se puede cerrar.
-        if name != "Shell":
-            tk.Button(
-                row,
-                text="×",
-                command=lambda n=name: self.close_tab(n),
-                bg=TAB,
-                fg=MUTED,
-                activebackground=TAB_ACTIVE,
-                activeforeground=RED,
-                bd=0,
-                relief="flat",
-                width=2,
-                font=("DejaVu Sans", 9, "bold"),
-            ).pack(side="right", fill="y")
 
         self.side_buttons[name] = (row, button)
 
     def close_tab(self, name):
-        if name == "Shell" or name not in self.open_tabs:
+        if name not in self.open_tabs:
             return
 
         was_active = self.active_tab == name
         self.open_tabs.remove(name)
+        self.histories.pop(name, None)
 
         row, _button = self.side_buttons.pop(name)
         row.destroy()
 
         if was_active:
-            # Volver a la pestaña abierta inmediatamente anterior; Shell siempre existe.
-            target = self.open_tabs[-1] if self.open_tabs else "Shell"
-            self.activate_tab(target)
+            if self.open_tabs:
+                self.activate_tab(self.open_tabs[-1])
+            else:
+                self.active_tab = None
+                self.output.configure(state="normal")
+                self.output.delete("1.0", "end")
+                self.output.configure(state="disabled")
+                self.prompt_label.configure(text="root@mini1:#")
+                self.command.delete(0, "end")
+                for button in self.launch_buttons.values():
+                    button.configure(bg=TAB, fg=MUTED)
 
     def activate_tab(self, name):
         if name not in self.open_tabs:
@@ -377,7 +393,7 @@ class PyrionConsoleTool(tk.Frame):
         self.command.focus_set()
 
         # Diagnósticos se actualizan al entrar.
-        if name == "KILL PY":
+        if name == "Killpy":
             self.refresh_kill_py()
         elif name == "Red":
             self.refresh_red()
@@ -391,15 +407,12 @@ class PyrionConsoleTool(tk.Frame):
     def _initialize_tab(self, name):
         if name == "Shell":
             self.histories[name] = (
-                "PYRION - consola grafica\n"
-                "Shell persistente: /bin/sh\n"
-                "Atajo global: Ctrl + Alt + T\n"
-                "Abre otras pestañas desde la barra superior.\n"
+                "Shell /bin/sh\n"
                 "------------------------------------------------------------\n"
             )
 
     def _configure_prompt(self):
-        if self.active_tab == "KILL PY":
+        if self.active_tab == "Killpy":
             self.prompt_label.configure(text="killpy:#")
         else:
             self.prompt_label.configure(text="root@mini1:#")
@@ -469,19 +482,19 @@ class PyrionConsoleTool(tk.Frame):
             "Escribe SOLO el numero del proceso abajo y pulsa Enter.",
         ])
 
-        self._replace("\n".join(lines), "KILL PY")
+        self._replace("\n".join(lines), "Killpy")
 
     def _kill_number(self, raw):
         try:
             number = int(raw.strip())
         except ValueError:
-            self._append("KILL PY: escribe un numero valido.", "KILL PY")
+            self._append("Killpy: escribe un numero valido.", "Killpy")
             return
 
         if number < 1 or number > len(self.processes):
             self._append(
-                "KILL PY: ese numero no existe en la lista.",
-                "KILL PY",
+                "Killpy: ese numero no existe en la lista.",
+                "Killpy",
             )
             return
 
@@ -489,8 +502,8 @@ class PyrionConsoleTool(tk.Frame):
 
         if pid == os.getpid():
             self._append(
-                "KILL PY: PYRION CONSOLE esta protegida.",
-                "KILL PY",
+                "Killpy: PYRION CONSOLE esta protegida.",
+                "Killpy",
             )
             return
 
@@ -516,14 +529,14 @@ class PyrionConsoleTool(tk.Frame):
 
             self._append(
                 f"Cerrando #{number} · PID {pid} · {_shorten(cmd, 100)}",
-                "KILL PY",
+                "Killpy",
             )
             self.after(400, self.refresh_kill_py)
 
         except OSError as exc:
             self._append(
                 f"ERROR al cerrar PID {pid}: {exc}",
-                "KILL PY",
+                "Killpy",
             )
 
     # ---------- diagnósticos ----------
@@ -632,8 +645,8 @@ class PyrionConsoleTool(tk.Frame):
         if not text or not self.active_tab:
             return
 
-        if self.active_tab == "KILL PY":
-            self._append(f"killpy:# {text}", "KILL PY")
+        if self.active_tab == "Killpy":
+            self._append(f"killpy:# {text}", "Killpy")
             self._kill_number(text)
             return
 
