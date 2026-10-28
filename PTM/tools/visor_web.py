@@ -1,5 +1,6 @@
 # ARGUMENTOS: visor web navegador internet edge webview2 chromium google youtube javascript css historial favoritos zoom
 import ctypes
+import ctypes.util
 import importlib
 import json
 import os
@@ -17,10 +18,10 @@ from urllib.parse import quote_plus
 
 TOOL_NAME = "Visor Web"
 TOOL_DESCRIPTION = (
-    "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
-    "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
+    "Navegador web real integrado en PTM con Edge WebView2 en Windows y "
+    "Qt WebEngine en Linux, JavaScript, CSS, imagenes, historial, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.9"
+TOOL_VERSION = "2.0.10"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -82,14 +83,35 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
             webview_hwnd = 0
             deadline = time.monotonic() + 10.0
 
+            renderer = "edgechromium" if os.name == "nt" else "qt"
+
             while state["alive"] and time.monotonic() < deadline:
                 try:
                     native = window.native
                     if native is not None:
-                        form_hwnd = int(native.Handle.ToInt32())
-                        native_webview = getattr(native, "webview", None)
-                        if native_webview is not None:
-                            webview_hwnd = int(native_webview.Handle.ToInt32())
+                        if os.name == "nt":
+                            form_hwnd = int(native.Handle.ToInt32())
+                            native_webview = getattr(native, "webview", None)
+                            if native_webview is not None:
+                                webview_hwnd = int(
+                                    native_webview.Handle.ToInt32()
+                                )
+                        else:
+                            # Qt expone QMainWindow; winId() devuelve el XID
+                            # que X11 puede reparentar dentro del Frame Tk.
+                            win_id = getattr(native, "winId", None)
+                            if callable(win_id):
+                                form_hwnd = int(win_id())
+
+                            native_webview = getattr(native, "webview", None)
+                            child_win_id = getattr(
+                                native_webview,
+                                "winId",
+                                None,
+                            )
+                            if callable(child_win_id):
+                                webview_hwnd = int(child_win_id())
+
                         if form_hwnd:
                             break
                 except Exception:
@@ -100,7 +122,7 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
                 conn,
                 {
                     "type": "ready",
-                    "renderer": "edgechromium",
+                    "renderer": renderer,
                     "title": window_title,
                     "form_hwnd": form_hwnd,
                     "webview_hwnd": webview_hwnd,
@@ -490,20 +512,26 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
                     time.sleep(0.12)
 
         try:
+            gui_backend = "edgechromium" if os.name == "nt" else "qt"
             webview.start(
                 func=browser_loop,
-                gui="edgechromium",
+                gui=gui_backend,
                 debug=False,
                 private_mode=False,
                 storage_path=storage_dir,
             )
         except Exception as exc:
+            engine_name = (
+                "Edge WebView2"
+                if os.name == "nt"
+                else "Qt WebEngine"
+            )
             _child_send(
                 conn,
                 {
                     "type": "error",
                     "message": (
-                        "No se pudo iniciar Edge WebView2. "
+                        f"No se pudo iniciar {engine_name}. "
                         + str(exc)
                     ),
                 },
@@ -535,7 +563,7 @@ class WebViewerTool(ttk.Frame):
         self.app = app
 
         self.address_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="Preparando Edge WebView2...")
+        self.status_var = tk.StringVar(value=("Preparando Edge WebView2..." if os.name == "nt" else "Preparando Qt WebEngine..."))
         self.title_var = tk.StringVar(value="Visor Web")
         self.zoom_var = tk.StringVar(value="100%")
 
@@ -852,18 +880,17 @@ class WebViewerTool(ttk.Frame):
         if not self._alive:
             return
 
-        if os.name != "nt":
-            self._show_browser_error(
-                "Visor Web 2.0 requiere Windows y Microsoft Edge WebView2."
-            )
-            return
-
         if self._process is not None and self._process.poll() is None:
             return
 
-        self.status_var.set("Iniciando Edge WebView2...")
+        engine_name = (
+            "Edge WebView2"
+            if os.name == "nt"
+            else "Qt WebEngine"
+        )
+        self.status_var.set(f"Iniciando {engine_name}...")
         self.placeholder_status.configure(
-            text="Iniciando Edge WebView2..."
+            text=f"Iniciando {engine_name}..."
         )
         self.retry_btn.pack_forget()
         self.placeholder.place(
@@ -912,7 +939,7 @@ class WebViewerTool(ttk.Frame):
 
         except Exception as exc:
             self._show_browser_error(
-                "No se pudo iniciar el proceso WebView2: " + str(exc)
+                "No se pudo iniciar el proceso del navegador: " + str(exc)
             )
 
     def _accept_child(self):
@@ -1004,12 +1031,12 @@ class WebViewerTool(ttk.Frame):
             ):
                 if was_embedded:
                     message = (
-                        "El proceso Edge WebView2 se cerró. "
+                        "El proceso del navegador se cerró. "
                         "PTM continúa funcionando."
                     )
                 else:
                     message = (
-                        "Edge WebView2 no pudo iniciar "
+                        "El motor web no pudo iniciar "
                         f"(código {exit_code}). PTM continúa funcionando."
                     )
                 self._show_browser_error(message)
@@ -1023,7 +1050,12 @@ class WebViewerTool(ttk.Frame):
         kind = str(message.get("type", ""))
 
         if kind == "starting":
-            self.status_var.set("Cargando motor Edge WebView2...")
+            engine_name = (
+                "Edge WebView2"
+                if os.name == "nt"
+                else "Qt WebEngine"
+            )
+            self.status_var.set(f"Cargando motor {engine_name}...")
 
         elif kind == "ready":
             try:
@@ -1035,7 +1067,13 @@ class WebViewerTool(ttk.Frame):
             except Exception:
                 self._webview_hwnd = 0
 
-            self.status_var.set("Integrando Edge WebView2 en PTM...")
+            renderer = str(message.get("renderer", "") or "")
+            engine_name = (
+                "Edge WebView2"
+                if renderer == "edgechromium"
+                else "Qt WebEngine"
+            )
+            self.status_var.set(f"Integrando {engine_name} en PTM...")
             self._embed_attempts = 0
             self.after(20, self._attempt_embed)
 
@@ -1085,7 +1123,7 @@ class WebViewerTool(ttk.Frame):
                 str(
                     message.get(
                         "message",
-                        "No se pudo iniciar Edge WebView2.",
+                        "No se pudo iniciar el motor web.",
                     )
                 )
             )
@@ -1247,12 +1285,122 @@ class WebViewerTool(ttk.Frame):
             return int(self._webview_hwnd or self._child_hwnd)
 
     def _refresh_webview_focus_hwnd(self):
-        if not self._embedded:
+        if not self._embedded or os.name != "nt":
             return
         self._render_hwnd = self._find_webview_focus_hwnd()
 
+    def _x11_api(self):
+        """Carga libX11 para incrustar el QMainWindow de Qt dentro de Tk."""
+        library = ctypes.util.find_library("X11") or "libX11.so.6"
+        x11 = ctypes.CDLL(library)
+
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.restype = ctypes.c_int
+        x11.XReparentWindow.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        x11.XReparentWindow.restype = ctypes.c_int
+        x11.XMapWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x11.XMapWindow.restype = ctypes.c_int
+        x11.XUnmapWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x11.XUnmapWindow.restype = ctypes.c_int
+        x11.XResizeWindow.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_uint,
+            ctypes.c_uint,
+        ]
+        x11.XResizeWindow.restype = ctypes.c_int
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XFlush.restype = ctypes.c_int
+        return x11
+
+    def _with_x11_display(self, callback):
+        x11 = self._x11_api()
+        display = x11.XOpenDisplay(None)
+        if not display:
+            raise RuntimeError(
+                "No se pudo abrir DISPLAY de X11. "
+                "Qt WebEngine necesita una sesión gráfica X11."
+            )
+        try:
+            return callback(x11, display)
+        finally:
+            try:
+                x11.XCloseDisplay(display)
+            except Exception:
+                pass
+
+    def _attempt_embed_x11(self):
+        if not self._alive:
+            return
+
+        xid = int(self._child_hwnd or 0)
+        if not xid:
+            self._embed_attempts += 1
+            if self._embed_attempts < 120:
+                self.after(50, self._attempt_embed)
+            else:
+                self._show_browser_error(
+                    "Qt WebEngine inició, pero PTM no obtuvo su ventana X11."
+                )
+            return
+
+        try:
+            self.browser_host.update_idletasks()
+            parent_xid = int(self.browser_host.winfo_id())
+            width = max(1, int(self.browser_host.winfo_width()))
+            height = max(1, int(self.browser_host.winfo_height()))
+
+            def embed(x11, display):
+                x11.XReparentWindow(
+                    display,
+                    ctypes.c_ulong(xid),
+                    ctypes.c_ulong(parent_xid),
+                    0,
+                    0,
+                )
+                x11.XResizeWindow(
+                    display,
+                    ctypes.c_ulong(xid),
+                    width,
+                    height,
+                )
+                x11.XMapWindow(display, ctypes.c_ulong(xid))
+                x11.XFlush(display)
+
+            self._with_x11_display(embed)
+
+            self._child_hwnd = xid
+            self._embedded = True
+            self.placeholder.place_forget()
+            self.status_var.set("Listo")
+            self._resize_embedded(force=True)
+
+            self._send(
+                {
+                    "cmd": "zoom",
+                    "factor": self.zoom_level,
+                }
+            )
+
+        except Exception as exc:
+            self._show_browser_error(
+                "No se pudo incrustar Qt WebEngine en X11: " + str(exc)
+            )
+
     def _attempt_embed(self):
-        if not self._alive or os.name != "nt":
+        if not self._alive:
+            return
+
+        if os.name != "nt":
+            self._attempt_embed_x11()
             return
 
         try:
@@ -1375,6 +1523,21 @@ class WebViewerTool(ttk.Frame):
             width = max(1, int(self.browser_host.winfo_width()))
             height = max(1, int(self.browser_host.winfo_height()))
 
+            if os.name != "nt":
+                xid = int(self._child_hwnd)
+
+                def resize_x11(x11, display):
+                    x11.XResizeWindow(
+                        display,
+                        ctypes.c_ulong(xid),
+                        width,
+                        height,
+                    )
+                    x11.XFlush(display)
+
+                self._with_x11_display(resize_x11)
+                return
+
             user32, _get_long, _set_long = self._win_api()
             SWP_NOZORDER = 0x0004
             SWP_NOACTIVATE = 0x0010
@@ -1402,10 +1565,23 @@ class WebViewerTool(ttk.Frame):
             pass
 
     def _set_embedded_visible(self, visible):
-        if not self._child_hwnd or os.name != "nt":
+        if not self._child_hwnd:
             return
 
         try:
+            if os.name != "nt":
+                xid = int(self._child_hwnd)
+
+                def set_x11_visible(x11, display):
+                    if visible:
+                        x11.XMapWindow(display, ctypes.c_ulong(xid))
+                    else:
+                        x11.XUnmapWindow(display, ctypes.c_ulong(xid))
+                    x11.XFlush(display)
+
+                self._with_x11_display(set_x11_visible)
+                return
+
             user32, _get_long, _set_long = self._win_api()
             user32.ShowWindow(
                 int(self._child_hwnd),
