@@ -2,6 +2,7 @@
 import ast
 import base64
 import csv
+import hashlib
 import importlib.util
 import importlib.metadata
 import io
@@ -23,9 +24,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.31"
+APP_VERSION = "1.0.32"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:52"
+APP_UPDATE_TIME = "21:55"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1039,6 +1040,19 @@ class PTMApp(tk.Tk):
             == str(remote_meta.get("guide_sha", "")).strip()
         )
 
+    def _local_guide_git_sha(self):
+        """Calcula el SHA Git real del guide.csv local, normalizando saltos."""
+        if not self.guide_path.is_file():
+            return ""
+        try:
+            text = self.guide_path.read_text(encoding="utf-8-sig")
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+            data = text.encode("utf-8")
+            header = f"blob {len(data)}\0".encode("ascii")
+            return hashlib.sha1(header + data).hexdigest()
+        except Exception:
+            return ""
+
     def _download_guide_text(self):
         """Descarga guide.csv únicamente cuando la metadata indica un cambio."""
         last_error = None
@@ -1076,24 +1090,37 @@ class PTMApp(tk.Tk):
         raise RuntimeError(f"No se pudo descargar guide.csv ({last_error})")
 
     def _sync_guide_if_needed(self):
-        """Compara metadata remota/local y devuelve True si actualizó guide.csv."""
+        """Valida metadata Y contenido real antes de dar guide.csv por vigente."""
         remote_meta = self._fetch_remote_guide_meta()
         local_meta = self._read_local_guide_meta()
+        remote_sha = str(remote_meta.get("guide_sha", "")).strip()
+        local_guide_sha = self._local_guide_git_sha()
 
         needs_update = (
             not self.guide_path.is_file()
             or not self._guide_meta_matches(local_meta, remote_meta)
+            or not remote_sha
+            or local_guide_sha != remote_sha
         )
 
         if not needs_update:
             return False
 
         text = self._download_guide_text()
-        self.guide_path.write_text(text, encoding="utf-8")
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        self.guide_path.write_bytes(normalized.encode("utf-8"))
         self.guide_meta_path.write_text(
             json.dumps(remote_meta, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+        # No aceptar una descarga si no coincide con el SHA publicado.
+        downloaded_sha = self._local_guide_git_sha()
+        if remote_sha and downloaded_sha != remote_sha:
+            raise RuntimeError(
+                "El guide.csv descargado no coincide con el SHA publicado."
+            )
+
         return True
 
     def _check_guide_on_search_async(self):
@@ -1183,11 +1210,6 @@ class PTMApp(tk.Tk):
                         0, self._catalog_search_inflight - 1
                     )
 
-                    if changed:
-                        # Actualizar self.tools sin dibujar todavía. La búsqueda
-                        # debe calcularse únicamente después de cargar el guide nuevo.
-                        self.reload_tools(local_only=True, refresh=False)
-
                     # Solo la petición más reciente decide qué se muestra.
                     if request_id != self._catalog_search_request_id:
                         continue
@@ -1201,6 +1223,11 @@ class PTMApp(tk.Tk):
                             )
                         )
                         continue
+
+                    # Siempre reconstruir self.tools desde el guide verificado,
+                    # incluso si GitHub reportó "sin cambios". Esto elimina
+                    # cualquier registro viejo que haya quedado solo en memoria.
+                    self.reload_tools(local_only=True, refresh=False)
 
                     # Si el texto cambió mientras se consultaba, usar el texto
                     # actual pero siempre contra el catálogo ya verificado.
