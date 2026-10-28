@@ -1,5 +1,6 @@
 # ARGUMENTOS: amdev archmomadev launcher apps aplicaciones catalogo remoto github
 import base64
+import ctypes
 import json
 import os
 import re
@@ -13,9 +14,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.10"
-APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:17"
+APP_VERSION = "1.0.11"
+APP_UPDATE_DATE = "28/10/2026"
+APP_UPDATE_TIME = "04:32"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -337,6 +338,11 @@ class AMDEVApp(tk.Tk):
         self.apps = []
         self.selected_app = None
         self.running_processes = {}
+
+        # La consola es opcional. AMDEV normalmente corre con pythonw.exe,
+        # por lo que se crea únicamente cuando el usuario la solicita.
+        self._console_created_by_amdev = False
+
         self._build_ui()
         self.load_apps()
 
@@ -413,6 +419,16 @@ class AMDEVApp(tk.Tk):
             bg=BG, fg=MUTED_FG,
             font=("Segoe UI", 7), justify="right"
         ).pack(side="right", padx=4)
+
+        # El clic derecho funciona también sobre el panel principal de AMDEV.
+        for widget in (self, self.outer, top, body, footer):
+            widget.bind(
+                "<Button-3>",
+                lambda event: self.show_app_menu(
+                    event.x_root,
+                    event.y_root,
+                ),
+            )
 
     def _start_move(self, event):
         self._move_offset = (event.x_root - self.winfo_x(), event.y_root - self.winfo_y())
@@ -753,6 +769,153 @@ class AMDEVApp(tk.Tk):
             messagebox.showerror(APP_SHORT, f"No se pudo iniciar la aplicación:\n\n{exc}")
             self.status.configure(text=f"Error: {exc}")
 
+    # ---------- Consola opcional ----------
+    def _console_hwnd(self):
+        if os.name != "nt":
+            return 0
+        try:
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetConsoleWindow.restype = ctypes.c_void_p
+            return int(kernel32.GetConsoleWindow() or 0)
+        except Exception:
+            return 0
+
+    def _console_is_visible(self):
+        hwnd = self._console_hwnd()
+        if not hwnd or os.name != "nt":
+            return False
+        try:
+            user32 = ctypes.windll.user32
+            user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+            user32.IsWindowVisible.restype = ctypes.c_int
+            return bool(user32.IsWindowVisible(hwnd))
+        except Exception:
+            return False
+
+    def _redirect_console_streams(self):
+        """Conecta stdout/stderr/stdin a la consola creada desde pythonw.exe."""
+        if os.name != "nt":
+            return
+
+        try:
+            sys.stdout = open(
+                "CONOUT$",
+                "w",
+                encoding="utf-8",
+                buffering=1,
+            )
+        except Exception:
+            pass
+
+        try:
+            sys.stderr = open(
+                "CONOUT$",
+                "w",
+                encoding="utf-8",
+                buffering=1,
+            )
+        except Exception:
+            pass
+
+        try:
+            sys.stdin = open(
+                "CONIN$",
+                "r",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def show_console(self):
+        if os.name != "nt":
+            self.status.configure(
+                text="La consola visible está disponible únicamente en Windows."
+            )
+            return
+
+        hwnd = self._console_hwnd()
+
+        if not hwnd:
+            try:
+                kernel32 = ctypes.windll.kernel32
+                kernel32.AllocConsole.restype = ctypes.c_int
+
+                if not kernel32.AllocConsole():
+                    self.status.configure(text="No se pudo crear la consola.")
+                    return
+
+                self._console_created_by_amdev = True
+                kernel32.SetConsoleTitleW(
+                    ctypes.c_wchar_p(f"{APP_NAME} · Consola")
+                )
+                self._redirect_console_streams()
+                hwnd = self._console_hwnd()
+
+                try:
+                    print(
+                        f"{APP_NAME} ({APP_SHORT}) v{APP_VERSION}",
+                        flush=True,
+                    )
+                    print(
+                        "Consola de AMDEV activa. Puedes ocultarla desde "
+                        "el menú de clic derecho.",
+                        flush=True,
+                    )
+                    print("-" * 58, flush=True)
+                except Exception:
+                    pass
+            except Exception as exc:
+                self.status.configure(
+                    text=f"No se pudo crear la consola: {exc}"
+                )
+                return
+
+        if hwnd:
+            try:
+                user32 = ctypes.windll.user32
+                user32.ShowWindow.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                ]
+                user32.ShowWindow.restype = ctypes.c_int
+                user32.ShowWindow(
+                    ctypes.c_void_p(hwnd),
+                    5,
+                )
+                self.status.configure(text="Consola visible.")
+            except Exception as exc:
+                self.status.configure(
+                    text=f"No se pudo mostrar la consola: {exc}"
+                )
+
+    def hide_console(self):
+        hwnd = self._console_hwnd()
+        if not hwnd or os.name != "nt":
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+            user32.ShowWindow.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            user32.ShowWindow.restype = ctypes.c_int
+            user32.ShowWindow(
+                ctypes.c_void_p(hwnd),
+                0,
+            )
+            self.status.configure(text="Consola oculta.")
+        except Exception as exc:
+            self.status.configure(
+                text=f"No se pudo ocultar la consola: {exc}"
+            )
+
+    def toggle_console(self):
+        if self._console_is_visible():
+            self.hide_console()
+        else:
+            self.show_console()
+
     def show_app_menu(self, x=None, y=None):
         """Muestra una lista pequeña nativa, igual a un menú de clic derecho."""
         self.load_apps()
@@ -787,6 +950,17 @@ class AMDEVApp(tk.Tk):
         menu.add_separator()
         menu.add_command(label="Recargar aplicaciones", command=self.load_apps)
         menu.add_command(label="Abrir AMDEV", command=self.show_main)
+
+        console_label = (
+            "Ocultar consola"
+            if self._console_is_visible()
+            else "Ver consola"
+        )
+        menu.add_command(
+            label=console_label,
+            command=self.toggle_console,
+        )
+
         menu.add_separator()
         menu.add_command(label="Salir", command=self.exit_app)
 
