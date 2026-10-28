@@ -9,8 +9,8 @@ import tkinter as tk
 import urllib.request
 from pathlib import Path
 
-APP_NAME = "PYRION"
-APP_VERSION = "0.1.2"
+APP_NAME = "PYRION OS"
+APP_VERSION = "0.1.3"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -157,12 +157,11 @@ class PyrionApp(tk.Tk):
         self.title(APP_NAME)
         self.configure(bg="#101218")
 
-        # PYRION ocupa toda la pantalla desde el arranque.
         self.attributes("-fullscreen", True)
 
         tk.Label(
             self,
-            text="PYRION",
+            text="PYRION OS",
             bg="#101218",
             fg="#FFFFFF",
             font=("Segoe UI", 28, "bold"),
