@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.5"
+TOOL_VERSION = "2.0.6"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -339,6 +339,7 @@ class WebViewerTool(ttk.Frame):
 
         self._child_hwnd = 0
         self._webview_hwnd = 0
+        self._render_hwnd = 0
         self._embedded = False
         self._embed_attempts = 0
         self._resize_job = None
@@ -815,6 +816,7 @@ class WebViewerTool(ttk.Frame):
                 self.title_var.set(title[:100])
             if self._embedded:
                 self.status_var.set("Listo")
+                self.after(100, self._refresh_webview_focus_hwnd)
             self._update_favorite_button()
             self._save_state()
 
@@ -933,7 +935,87 @@ class WebViewerTool(ttk.Frame):
         user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
         user32.GetAsyncKeyState.restype = ctypes.c_short
 
+        user32.GetClassNameW.argtypes = [
+            HWND,
+            ctypes.c_wchar_p,
+            ctypes.c_int,
+        ]
+        user32.GetClassNameW.restype = ctypes.c_int
+
+        user32.IsWindowVisible.argtypes = [HWND]
+        user32.IsWindowVisible.restype = BOOL
+
         return user32, get_long, set_long
+
+    def _find_webview_focus_hwnd(self):
+        """Encuentra el HWND Chromium que recibe el teclado del contenido web."""
+        if os.name != "nt" or not self._child_hwnd:
+            return 0
+
+        try:
+            user32, _get_long, _set_long = self._win_api()
+            candidates = []
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(
+                ctypes.c_bool,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+            )
+
+            def enum_proc(hwnd, _lparam):
+                try:
+                    handle = int(hwnd or 0)
+                    if not handle:
+                        return True
+
+                    buffer = ctypes.create_unicode_buffer(256)
+                    if user32.GetClassNameW(
+                        handle,
+                        buffer,
+                        len(buffer),
+                    ) <= 0:
+                        return True
+
+                    name = buffer.value or ""
+                    visible = bool(user32.IsWindowVisible(handle))
+
+                    score = 0
+                    if name == "Chrome_RenderWidgetHostHWND":
+                        score = 100
+                    elif name == "Chrome_WidgetWin_0":
+                        score = 90
+                    elif name == "Chrome_WidgetWin_1":
+                        score = 80
+                    elif "Chrome" in name:
+                        score = 60
+
+                    if score:
+                        if visible:
+                            score += 5
+                        candidates.append((score, handle, name))
+                except Exception:
+                    pass
+                return True
+
+            callback = WNDENUMPROC(enum_proc)
+            user32.EnumChildWindows(
+                int(self._child_hwnd),
+                callback,
+                0,
+            )
+
+            if not candidates:
+                return int(self._webview_hwnd or self._child_hwnd)
+
+            candidates.sort(reverse=True)
+            return int(candidates[0][1])
+        except Exception:
+            return int(self._webview_hwnd or self._child_hwnd)
+
+    def _refresh_webview_focus_hwnd(self):
+        if not self._embedded:
+            return
+        self._render_hwnd = self._find_webview_focus_hwnd()
 
     def _attempt_embed(self):
         if not self._alive or os.name != "nt":
@@ -1027,7 +1109,8 @@ class WebViewerTool(ttk.Frame):
                     "factor": self.zoom_level,
                 }
             )
-            self.after(80, self._focus_embedded_browser)
+            self.after(180, self._refresh_webview_focus_hwnd)
+            self.after(240, self._focus_embedded_browser)
 
         except Exception as exc:
             self._show_browser_error(
@@ -1148,7 +1231,17 @@ class WebViewerTool(ttk.Frame):
             user32, _get_long, _set_long = self._win_api()
             kernel32 = ctypes.windll.kernel32
 
-            target_hwnd = int(self._webview_hwnd or self._child_hwnd)
+            # El HWND del renderer puede cambiar al navegar. Resolverlo
+            # justo antes de enfocar garantiza que el teclado vaya al DOM.
+            render_hwnd = self._find_webview_focus_hwnd()
+            if render_hwnd:
+                self._render_hwnd = render_hwnd
+
+            target_hwnd = int(
+                self._render_hwnd
+                or self._webview_hwnd
+                or self._child_hwnd
+            )
             parent_hwnd = int(self.winfo_toplevel().winfo_id())
 
             parent_pid = ctypes.c_ulong(0)
@@ -1191,9 +1284,18 @@ class WebViewerTool(ttk.Frame):
                 except Exception:
                     pass
 
+                # La ventana PTM sigue siendo la foreground, pero el foco
+                # efectivo se entrega al renderer Chromium.
                 try:
                     user32.SetActiveWindow(
-                        parent_hwnd
+                        int(self._child_hwnd)
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    user32.SetFocus(
+                        int(self._webview_hwnd or self._child_hwnd)
                     )
                 except Exception:
                     pass
@@ -1427,6 +1529,7 @@ class WebViewerTool(ttk.Frame):
         self._process = None
         self._child_hwnd = 0
         self._webview_hwnd = 0
+        self._render_hwnd = 0
         self._embedded = False
         self._embed_attempts = 0
         self.after(120, self._start_browser_process)
@@ -1463,6 +1566,7 @@ class WebViewerTool(ttk.Frame):
         self._process = None
         self._child_hwnd = 0
         self._webview_hwnd = 0
+        self._render_hwnd = 0
         self._embedded = False
 
     # ---------- Ciclo PTM ----------
