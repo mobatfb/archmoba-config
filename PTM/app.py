@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.64"
+APP_VERSION = "1.0.65"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "05:48"
+APP_UPDATE_TIME = "05:58"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -558,6 +558,10 @@ class PTMApp(tk.Tk):
         self.title(APP_TITLE)
         self.dark_mode = DARK_MODE
         self.configure(bg=WHITE)
+
+        if os.name != "nt":
+            self._configure_linux_widget_theme()
+
         self.base_dir = Path(__file__).resolve().parent
         self.tools_dir = self.base_dir / "tools"
         self.tools_dir.mkdir(exist_ok=True)
@@ -672,6 +676,68 @@ class PTMApp(tk.Tk):
             self.after(500, self._poll_self_update_events)
         except tk.TclError:
             return
+
+    def _configure_linux_widget_theme(self):
+        """Normaliza Entry/Combobox/Spinbox en Tk/X11 para MiniLinux."""
+        try:
+            style = ttk.Style(self)
+            themes = set(style.theme_names())
+            if "clam" in themes:
+                style.theme_use("clam")
+
+            style.configure(
+                "TEntry",
+                padding=(6, 5),
+                relief="solid",
+                borderwidth=1,
+                fieldbackground=WHITE,
+                foreground=BLACK,
+            )
+            style.map(
+                "TEntry",
+                fieldbackground=[
+                    ("disabled", "#EFEFEF"),
+                    ("readonly", "#F7F7F7"),
+                ],
+                foreground=[
+                    ("disabled", "#8A8A8A"),
+                ],
+            )
+
+            style.configure(
+                "TCombobox",
+                padding=(6, 4),
+                relief="solid",
+                borderwidth=1,
+                fieldbackground=WHITE,
+                foreground=BLACK,
+                arrowsize=14,
+            )
+            style.configure(
+                "TSpinbox",
+                padding=(6, 4),
+                relief="solid",
+                borderwidth=1,
+                fieldbackground=WHITE,
+                foreground=BLACK,
+                arrowsize=14,
+            )
+        except Exception:
+            pass
+
+        # Widgets tk.Entry clásicos también cambian bastante entre Windows/X11.
+        # Estos defaults afectan a tools integradas creadas después.
+        for pattern, value in (
+            ("*Entry.borderWidth", 1),
+            ("*Entry.highlightThickness", 0),
+            ("*Entry.insertWidth", 2),
+            ("*Spinbox.borderWidth", 1),
+            ("*Spinbox.highlightThickness", 0),
+        ):
+            try:
+                self.option_add(pattern, value)
+            except Exception:
+                pass
 
     # ---------- Ventana / proporción ----------
     def _apply_responsive_geometry(self):
@@ -1018,6 +1084,8 @@ class PTMApp(tk.Tk):
             textvariable=self.query,
             relief="flat",
             bd=0,
+            highlightthickness=0,
+            selectborderwidth=0,
             font=self.search_entry_font,
             fg=BLACK,
             bg=WHITE,
@@ -1406,15 +1474,24 @@ class PTMApp(tk.Tk):
         except tk.TclError:
             return
 
-        # El Entry solo ocupa lo necesario para mostrar el texto/cursor.
+        # En Windows se conserva el diseño compacto original. En X11 un
+        # Entry de 18 px se dibuja como un pequeño recuadro visible; por eso en
+        # Linux ocupa el ancho real del área de búsqueda.
         text_width = self.search_entry_font.measure(value)
-        entry_width = max(18, text_width + 7)
+
+        if os.name != "nt":
+            entry_width = max(80, area_width - (22 if value else 0))
+        else:
+            entry_width = max(18, text_width + 7)
 
         if value:
-            # Reservar espacio para la X, manteniendola junto al texto.
-            max_entry = max(18, area_width - 22)
-            entry_width = min(entry_width, max_entry)
-            clear_x = min(entry_width + 1, area_width - 18)
+            if os.name != "nt":
+                clear_x = max(0, area_width - 18)
+            else:
+                # Reservar espacio para la X, manteniendola junto al texto.
+                max_entry = max(18, area_width - 22)
+                entry_width = min(entry_width, max_entry)
+                clear_x = min(entry_width + 1, area_width - 18)
             try:
                 self.search_clear.place(
                     x=clear_x,
@@ -1433,7 +1510,7 @@ class PTMApp(tk.Tk):
 
         try:
             self.search_entry.place_configure(
-                width=max(18, entry_width),
+                width=max(80 if os.name != "nt" else 18, entry_width),
                 height=28,
             )
         except tk.TclError:
