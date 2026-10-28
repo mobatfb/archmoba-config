@@ -11,9 +11,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:02"
+APP_UPDATE_TIME = "19:05"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main"
 APPS_URL = f"{REPO_RAW_BASE}/apps.json"
@@ -79,6 +79,7 @@ class FloatingAMDEV(tk.Toplevel):
 
         self._dragging = False
         self._press_xy = (0, 0)
+        self._loading = False
         self._place_default()
 
     def _draw(self):
@@ -116,7 +117,68 @@ class FloatingAMDEV(tk.Toplevel):
 
     def _up(self, _event):
         if not self._dragging:
-            self.app.run_selected_app()
+            if self.app.selected_app:
+                self.start_loading_sweep()
+            else:
+                self.app.run_selected_app()
+
+    def start_loading_sweep(self):
+        if self._loading:
+            return
+        self._loading = True
+        self._loading_step = -32
+        self._animate_loading_sweep()
+
+    def _animate_loading_sweep(self):
+        if not self._loading:
+            return
+
+        self._draw()
+
+        x = self._loading_step
+        band_w = 34
+
+        # Barrido luminoso diagonal de izquierda a derecha.
+        self.canvas.create_polygon(
+            x, 2,
+            x + band_w, 2,
+            x + band_w - 12, self.h - 2,
+            x - 12, self.h - 2,
+            fill="#6FC9E8",
+            outline="",
+        )
+        self.canvas.create_polygon(
+            x + 8, 2,
+            x + band_w - 7, 2,
+            x + band_w - 19, self.h - 2,
+            x - 4, self.h - 2,
+            fill="#DDF7FF",
+            outline="",
+        )
+
+        # Redibujar texto encima del brillo.
+        self.canvas.create_text(
+            self.w / 2, 20,
+            text=APP_SHORT,
+            fill=WHITE,
+            font=("Segoe UI", 18, "bold"),
+        )
+        selected_name = self.app.get_selected_app_name()
+        footer_text = selected_name if selected_name else "Sin selección"
+        self.canvas.create_text(
+            self.w / 2, self.h - 6,
+            text=footer_text,
+            fill=WHITE,
+            font=("Segoe UI", 6, "bold"),
+        )
+
+        self._loading_step += 14
+        if self._loading_step <= self.w + 32:
+            self.after(28, self._animate_loading_sweep)
+        else:
+            self._loading = False
+            self._draw()
+            self.after(40, self.app.run_selected_app)
 
     def _menu(self, _event):
         self.app.show_app_menu(self.winfo_pointerx(), self.winfo_pointery())
