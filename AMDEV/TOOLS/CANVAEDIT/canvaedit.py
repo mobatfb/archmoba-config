@@ -19,30 +19,38 @@ except Exception:
     PIL_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
-PROJECTS_DIR = BASE_DIR / "projects"
 DEFAULT_PROJECT = "pyrion_desing"
 
-PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+REPO_OWNER = "mobatfb"
+REPO_NAME = "archmoba-config"
+REPO_BRANCH = "main"
+REPO_PROJECTS_PATH = "AMDEV/TOOLS/CANVAEDIT/projects"
+REPO_API_PROJECTS = (
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
+    f"{REPO_PROJECTS_PATH}?ref={REPO_BRANCH}"
+)
+REPO_RAW_BASE = (
+    f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/"
+    f"{REPO_BRANCH}/{REPO_PROJECTS_PATH}"
+)
 
 
-def get_project_dir(project_name=DEFAULT_PROJECT):
-    return PROJECTS_DIR / project_name
-
-
-def get_project_file(project_name=DEFAULT_PROJECT):
-    return get_project_dir(project_name) / "layers.json"
-
-
-def get_assets_dir(project_name=DEFAULT_PROJECT):
-    return get_project_dir(project_name) / "assets"
+def project_layers_url(project_name=DEFAULT_PROJECT):
+    return f"{REPO_RAW_BASE}/{project_name}/layers.json"
 
 
 def list_projects():
-    if not PROJECTS_DIR.is_dir():
-        return []
+    request = urllib.request.Request(
+        REPO_API_PROJECTS,
+        headers={"User-Agent": "CANVAEDIT/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
     return sorted(
-        p.name for p in PROJECTS_DIR.iterdir()
-        if p.is_dir() and (p / "layers.json").is_file()
+        item["name"]
+        for item in data
+        if item.get("type") == "dir"
     )
 
 
@@ -69,9 +77,7 @@ class Layer:
 class LayerManager:
     def __init__(self, project_name=DEFAULT_PROJECT):
         self.project_name = project_name
-        self.project_dir = get_project_dir(project_name)
-        self.project_file = get_project_file(project_name)
-        self.assets_dir = get_assets_dir(project_name)
+        self.project_file = project_layers_url(project_name)
         self.layers = []
 
     def add(self, layer):
@@ -126,29 +132,24 @@ class LayerManager:
             layer.z_index = i
 
     def save(self, path=None):
-        target = Path(path) if path else self.project_file
-        target.parent.mkdir(parents=True, exist_ok=True)
-        self.assets_dir.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "format": "CANVAEDIT",
-            "version": 1,
-            "project": self.project_name,
-            "layers": [asdict(x) for x in self.layers],
-        }
-        target.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        # Los proyectos se cargan directamente desde GitHub.
+        # La escritura remota se implementara por separado cuando se necesite.
+        return False
 
     def load(self, path=None):
-        target = Path(path) if path else self.project_file
-        if not target.is_file():
+        url = path or project_layers_url(self.project_name)
+        try:
+            request = urllib.request.Request(
+                str(url),
+                headers={"User-Agent": "CANVAEDIT/1.0"},
+            )
+            with urllib.request.urlopen(request, timeout=15) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception:
             return False
-        data = json.loads(target.read_text(encoding="utf-8"))
+
         self.project_name = data.get("project", self.project_name)
-        self.project_dir = get_project_dir(self.project_name)
-        self.project_file = get_project_file(self.project_name)
-        self.assets_dir = get_assets_dir(self.project_name)
+        self.project_file = project_layers_url(self.project_name)
         self.layers = [Layer(**item) for item in data.get("layers", [])]
         self._normalize()
         return True
@@ -370,7 +371,6 @@ class CanvaEditFrame(tk.Frame):
                 target = self.manager.get(layer_id)
                 if target:
                     target.visible = var.get()
-                    self.manager.save()
                     self.render_layers()
 
             tk.Checkbutton(
@@ -527,14 +527,9 @@ class CanvaEditApp(tk.Tk):
 
 
 def create_project(project_name):
-    project_dir = get_project_dir(project_name)
-    assets_dir = get_assets_dir(project_name)
-    project_dir.mkdir(parents=True, exist_ok=True)
-    assets_dir.mkdir(parents=True, exist_ok=True)
-
-    manager = LayerManager(project_name)
-    manager.save()
-    return manager
+    raise RuntimeError(
+        "Los proyectos se administran desde la carpeta projects del repositorio."
+    )
 
 
 def main():
