@@ -17,9 +17,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:15"
+APP_UPDATE_TIME = "19:20"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
@@ -564,7 +564,7 @@ class PTMApp(tk.Tk):
         )
         self.search_btn.pack(side="left", padx=(2, 2))
         self.search_btn.create_oval(4, 4, 28, 28, fill=RED, outline=BLACK, width=1)
-        self.search_btn.bind("<Button-1>", lambda _e: self.open_first_result())
+        self.search_btn.bind("<Button-1>", self._show_all_search_results)
 
         self.import_btn = tk.Canvas(
             self.search_inner,
