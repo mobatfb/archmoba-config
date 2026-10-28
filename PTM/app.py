@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.67"
+APP_VERSION = "1.0.68"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "18:30"
+APP_UPDATE_TIME = "18:40"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -2785,6 +2785,15 @@ class PTMApp(tk.Tk):
         if not name:
             return True
 
+        if lower == "pyfatfs":
+            # Los metadatos pueden existir aunque falle el import real por
+            # faltar fs u otra dependencia transitiva.
+            try:
+                from pyfatfs.PyFatFS import PyFatFS
+                return callable(PyFatFS)
+            except Exception:
+                return False
+
         if lower == "pygame":
             # Tanto pygame como pygame-ce proporcionan el módulo pygame.
             if self._module_available("pygame"):
@@ -3049,7 +3058,10 @@ class PTMApp(tk.Tk):
             try:
                 pip_env = self._ensure_pip_runtime(key, tool)
 
-                if os.name != "nt":
+                if os.name != "nt" or any(
+                    self._normalize_distribution_name(p).lower() == "pyfatfs"
+                    for p in missing
+                ):
                     PTM_DEPS_LIB.mkdir(parents=True, exist_ok=True)
                     _activate_ptm_python_paths()
                     pip_env = _ptm_python_env()
@@ -3079,9 +3091,14 @@ class PTMApp(tk.Tk):
                         "--prefer-binary",
                     ]
 
-                    if os.name != "nt":
-                        # Nunca escribir dependencias de tools dentro del Python
-                        # del sistema de MiniLinux. Se almacenan en PTM.
+                    if (
+                        os.name != "nt"
+                        or self._normalize_distribution_name(package).lower()
+                        == "pyfatfs"
+                    ):
+                        # pyfatfs tambien se repara de forma aislada en Windows:
+                        # pip debe reinstalar sus dependencias transitivas aunque
+                        # ya haya metadatos de una instalacion incompleta.
                         cmd.extend(
                             [
                                 "--upgrade",
@@ -3215,6 +3232,19 @@ class PTMApp(tk.Tk):
 
                     if lower == "pygame":
                         if not self._module_available("pygame"):
+                            still_missing.append(package)
+                        continue
+
+                    if lower == "pyfatfs":
+                        if not self._dependency_satisfied(package):
+                            try:
+                                from pyfatfs.PyFatFS import PyFatFS
+                            except Exception as verify_error:
+                                raise RuntimeError(
+                                    "pyfatfs se instaló, pero no se puede "
+                                    f"importar: {type(verify_error).__name__}: "
+                                    f"{verify_error}"
+                                ) from verify_error
                             still_missing.append(package)
                         continue
 
