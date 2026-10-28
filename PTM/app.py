@@ -1,5 +1,6 @@
 # ARGUMENTOS: ptm launcher lanzador buscador ejecutor py python herramientas scripts pestañas icono flotante
 import ast
+import base64
 import csv
 import importlib.util
 import importlib.metadata
@@ -30,6 +31,9 @@ REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
 REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
 SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
+SELF_CONFIG_API_URL = (
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/config.json?ref=main"
+)
 
 def _version_tuple(value):
     """Convierte 1.2.3 en una tupla comparable sin depender de librerías externas."""
@@ -45,15 +49,38 @@ def _version_tuple(value):
 def check_self_update():
     """Busca una versión nueva de PTM, reemplaza app.py y reinicia el proceso."""
     try:
-        config_request = urllib.request.Request(
-            f"{SELF_CONFIG_URL}?v={time.time_ns()}",
-            headers={
-                "User-Agent": f"PTM/{APP_VERSION}",
-                "Cache-Control": "no-cache",
-            },
-        )
-        with urllib.request.urlopen(config_request, timeout=8) as response:
-            remote_config = json.loads(response.read().decode("utf-8-sig"))
+        remote_config = None
+
+        # Preferir la API de GitHub para leer el HEAD actual de main.
+        try:
+            api_request = urllib.request.Request(
+                SELF_CONFIG_API_URL,
+                headers={
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Accept": "application/vnd.github+json",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(api_request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            encoded = str(payload.get("content", "")).replace("\n", "")
+            remote_config = json.loads(
+                base64.b64decode(encoded).decode("utf-8-sig")
+            )
+        except Exception:
+            remote_config = None
+
+        # Respaldo: RAW tradicional.
+        if remote_config is None:
+            config_request = urllib.request.Request(
+                f"{SELF_CONFIG_URL}?v={time.time_ns()}",
+                headers={
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(config_request, timeout=8) as response:
+                remote_config = json.loads(response.read().decode("utf-8-sig"))
 
         remote_version = str(remote_config.get("version", "")).strip()
         if not remote_version:
