@@ -1,5 +1,6 @@
 # ARGUMENTOS: explorador archivos carpetas windows 11 pestañas tabs copiar pegar cortar dispositivos hdd ssd usb cd dvd unidades discos
 import ctypes
+import fnmatch
 import datetime as _dt
 import json
 import os
@@ -14,10 +15,11 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 TOOL_NAME = "Explorador de Archivos"
 TOOL_DESCRIPTION = (
-    "Explorador de archivos tipo Windows 11 con pestañas, copiar/cortar/pegar, "
-    "navegacion y panel lateral de HDD, SSD, USB, CD/DVD y unidades de red."
+    "Explorador de archivos tipo Windows 11 con pestañas, buscador integrado, "
+    "copiar/cortar/pegar, navegacion y panel lateral de HDD, SSD, USB, CD/DVD "
+    "y unidades de red."
 )
-TOOL_VERSION = "1.0.1"
+TOOL_VERSION = "1.0.2"
 
 
 class ExplorerTab(ttk.Frame):
@@ -257,6 +259,464 @@ class ExplorerTab(ttk.Frame):
         self.refresh_view()
 
 
+def _search_name_matches(name, pattern):
+    pattern = str(pattern or "").strip().lower()
+    if not pattern:
+        return True
+    pattern = pattern.replace("%", "*").replace("_", "?")
+    if "*" in pattern or "?" in pattern:
+        return fnmatch.fnmatch(name.lower(), pattern)
+    return pattern in name.lower()
+
+
+class SearchTab(ttk.Frame):
+    """Pestaña fija de búsqueda integrada visualmente en el Explorador."""
+
+    EXTENSIONS = (
+        "Todas",
+        ".xlsx", ".xls", ".xlsm", ".csv",
+        ".pdf", ".docx", ".doc", ".txt", ".pptx", ".py",
+        ".jpg", ".jpeg", ".png", ".gif", ".webp",
+        ".mp3", ".wav", ".flac", ".mp4", ".mkv", ".avi",
+        ".zip", ".rar", ".7z",
+    )
+
+    def __init__(self, parent, owner):
+        super().__init__(parent)
+        self.owner = owner
+        self.scope_var = tk.StringVar(value=str(owner.default_start_path()))
+        self.pattern_var = tk.StringVar()
+        self.extension_var = tk.StringVar(value="Todas")
+        self.info_var = tk.StringVar(
+            value="Escribe un nombre o patrón y pulsa Buscar."
+        )
+        self.results = []
+        self._queue = queue.Queue()
+        self._stop_event = threading.Event()
+        self._searching = False
+        self._folders_scanned = 0
+        self._files_scanned = 0
+
+        self._build_ui()
+        self.after(70, self._process_queue)
+
+    def _build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(3, weight=1)
+
+        head = ttk.Frame(self, padding=(6, 5, 6, 4))
+        head.grid(row=0, column=0, sticky="ew")
+        head.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            head,
+            text="Buscar archivos",
+            font=("Segoe UI", 12, "bold"),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 12))
+
+        ttk.Label(
+            head,
+            text="Busca en una carpeta, unidad o dispositivo sin salir del Explorador",
+            style="ExplorerMuted.TLabel",
+        ).grid(row=0, column=1, sticky="w")
+
+        scope = ttk.Frame(self, padding=(6, 2, 6, 3))
+        scope.grid(row=1, column=0, sticky="ew")
+        scope.columnconfigure(1, weight=1)
+
+        ttk.Label(scope, text="Buscar en:").grid(
+            row=0, column=0, sticky="w"
+        )
+        self.scope_entry = ttk.Entry(
+            scope,
+            textvariable=self.scope_var,
+        )
+        self.scope_entry.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(7, 5),
+        )
+        self.scope_entry.bind("<Return>", lambda _e: self.start_search())
+
+        ttk.Button(
+            scope,
+            text="Examinar...",
+            command=self.choose_scope,
+        ).grid(row=0, column=2, padx=(0, 4))
+
+        ttk.Button(
+            scope,
+            text="Pestaña actual",
+            command=self.use_current_folder,
+        ).grid(row=0, column=3)
+
+        criteria = ttk.Frame(self, padding=(6, 3, 6, 5))
+        criteria.grid(row=2, column=0, sticky="ew")
+        criteria.columnconfigure(1, weight=1)
+
+        ttk.Label(criteria, text="Nombre o patrón:").grid(
+            row=0, column=0, sticky="w"
+        )
+
+        self.pattern_entry = ttk.Entry(
+            criteria,
+            textvariable=self.pattern_var,
+        )
+        self.pattern_entry.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(7, 6),
+        )
+        self.pattern_entry.bind("<Return>", lambda _e: self.start_search())
+
+        ttk.Label(criteria, text="Extensión:").grid(
+            row=0, column=2, sticky="e", padx=(4, 4)
+        )
+
+        self.extension_combo = ttk.Combobox(
+            criteria,
+            textvariable=self.extension_var,
+            values=self.EXTENSIONS,
+            state="normal",
+            width=10,
+        )
+        self.extension_combo.grid(row=0, column=3, padx=(0, 6))
+
+        self.search_button = ttk.Button(
+            criteria,
+            text="Buscar",
+            command=self.start_search,
+        )
+        self.search_button.grid(row=0, column=4, padx=(0, 4))
+
+        self.stop_button = ttk.Button(
+            criteria,
+            text="Detener",
+            command=self.stop_search,
+            state="disabled",
+        )
+        self.stop_button.grid(row=0, column=5)
+
+        ttk.Label(
+            criteria,
+            text=(
+                "Admite texto, %, _, * y ?. Ej.: maest, maest%.xlsx o "
+                "%informe%.pdf"
+            ),
+            style="ExplorerMuted.TLabel",
+        ).grid(
+            row=1,
+            column=0,
+            columnspan=6,
+            sticky="w",
+            pady=(5, 0),
+        )
+
+        table_wrap = ttk.Frame(self, padding=(6, 0, 6, 0))
+        table_wrap.grid(row=3, column=0, sticky="nsew")
+        table_wrap.columnconfigure(0, weight=1)
+        table_wrap.rowconfigure(0, weight=1)
+
+        self.tree = ttk.Treeview(
+            table_wrap,
+            columns=("name", "type", "location", "modified"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.tree.grid(row=0, column=0, sticky="nsew")
+
+        self.tree.heading("name", text="Nombre")
+        self.tree.heading("type", text="Tipo")
+        self.tree.heading("location", text="Ubicación")
+        self.tree.heading("modified", text="Fecha de modificación")
+
+        self.tree.column("name", width=285, minwidth=150, anchor="w")
+        self.tree.column("type", width=145, minwidth=90, anchor="w")
+        self.tree.column("location", width=420, minwidth=180, anchor="w")
+        self.tree.column("modified", width=150, minwidth=120, anchor="w")
+
+        vbar = ttk.Scrollbar(
+            table_wrap,
+            orient="vertical",
+            command=self.tree.yview,
+        )
+        vbar.grid(row=0, column=1, sticky="ns")
+
+        hbar = ttk.Scrollbar(
+            table_wrap,
+            orient="horizontal",
+            command=self.tree.xview,
+        )
+        hbar.grid(row=1, column=0, sticky="ew")
+
+        self.tree.configure(
+            yscrollcommand=vbar.set,
+            xscrollcommand=hbar.set,
+        )
+        self.tree.bind("<Double-Button-1>", self.open_selected)
+        self.tree.bind("<Return>", self.open_selected)
+
+        bottom = ttk.Frame(self, padding=(6, 5, 6, 5))
+        bottom.grid(row=4, column=0, sticky="ew")
+        bottom.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            bottom,
+            textvariable=self.info_var,
+            style="ExplorerMuted.TLabel",
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        actions = ttk.Frame(bottom)
+        actions.grid(row=0, column=1, sticky="e", padx=(8, 0))
+
+        ttk.Button(
+            actions,
+            text="Abrir archivo",
+            command=self.open_selected,
+        ).pack(side="left")
+
+        ttk.Button(
+            actions,
+            text="Abrir carpeta",
+            command=self.open_location,
+        ).pack(side="left", padx=(5, 0))
+
+    def set_scope(self, path):
+        path = Path(path)
+        if path.is_dir():
+            self.scope_var.set(str(path))
+            self.info_var.set(f"Buscar en {path}")
+            self.owner.status_var.set(f"Buscar en {path}")
+
+    def choose_scope(self):
+        folder = filedialog.askdirectory(
+            initialdir=self.scope_var.get() or str(Path.home()),
+            parent=self.winfo_toplevel(),
+        )
+        if folder:
+            self.set_scope(folder)
+
+    def use_current_folder(self):
+        folder = self.owner.last_folder_path()
+        if folder is None:
+            folder = self.owner.default_start_path()
+        self.set_scope(folder)
+
+    def start_search(self):
+        if self._searching:
+            return
+
+        raw_scope = os.path.expandvars(
+            os.path.expanduser(self.scope_var.get().strip().strip('"'))
+        )
+        base = Path(raw_scope)
+        if not base.is_dir():
+            messagebox.showerror(
+                "Carpeta inválida",
+                "Selecciona una carpeta o unidad existente.",
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        pattern = self.pattern_var.get()
+        extension = self.extension_var.get().strip().lower()
+        if extension and extension != "todas" and not extension.startswith("."):
+            extension = "." + extension
+
+        self.tree.delete(*self.tree.get_children(""))
+        self.results.clear()
+        self._folders_scanned = 0
+        self._files_scanned = 0
+        self._queue = queue.Queue()
+        self._stop_event = threading.Event()
+        self._searching = True
+
+        self.search_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
+        self.info_var.set("Buscando... las coincidencias aparecen en tiempo real.")
+        self.owner.status_var.set(f"Buscando en {base}...")
+
+        def worker():
+            folders = 0
+            files = 0
+            try:
+                for folder, _subfolders, names in os.walk(
+                    base,
+                    onerror=lambda _error: None,
+                ):
+                    if self._stop_event.is_set():
+                        break
+
+                    folders += 1
+
+                    for name in names:
+                        if self._stop_event.is_set():
+                            break
+
+                        files += 1
+                        lower = name.lower()
+
+                        if not _search_name_matches(name, pattern):
+                            continue
+                        if extension not in ("", "todas") and not lower.endswith(extension):
+                            continue
+
+                        path = Path(folder) / name
+                        try:
+                            stat = path.stat()
+                            modified = float(stat.st_mtime)
+                        except Exception:
+                            modified = 0.0
+
+                        self._queue.put(
+                            (
+                                "file",
+                                str(path),
+                                name,
+                                folder,
+                                modified,
+                            )
+                        )
+
+                    if folders % 20 == 0:
+                        self._queue.put(("progress", folders, files))
+
+                self._queue.put(
+                    (
+                        "done",
+                        folders,
+                        files,
+                        self._stop_event.is_set(),
+                        None,
+                    )
+                )
+            except Exception as exc:
+                self._queue.put(
+                    (
+                        "done",
+                        folders,
+                        files,
+                        self._stop_event.is_set(),
+                        str(exc),
+                    )
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _process_queue(self):
+        if not self.winfo_exists():
+            return
+
+        for _ in range(250):
+            try:
+                event = self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+            kind = event[0]
+
+            if kind == "file":
+                _, raw_path, name, folder, modified = event
+                path = Path(raw_path)
+                index = len(self.results)
+                self.results.append(path)
+
+                self.tree.insert(
+                    "",
+                    "end",
+                    iid=f"r{index}",
+                    values=(
+                        "📄 " + name,
+                        self.owner.describe_type(name, False),
+                        folder,
+                        self.owner.format_time(modified),
+                    ),
+                )
+
+            elif kind == "progress":
+                _, self._folders_scanned, self._files_scanned = event
+
+            elif kind == "done":
+                (
+                    _,
+                    self._folders_scanned,
+                    self._files_scanned,
+                    cancelled,
+                    error,
+                ) = event
+
+                self._searching = False
+                self.search_button.configure(state="normal")
+                self.stop_button.configure(state="disabled")
+
+                message = "Búsqueda detenida" if cancelled else "Búsqueda finalizada"
+                if error:
+                    message += ": " + error
+
+                summary = (
+                    f"{message}. {len(self.results)} coincidencia(s); "
+                    f"{self._files_scanned} archivo(s) examinados en "
+                    f"{self._folders_scanned} carpeta(s)."
+                )
+                self.info_var.set(summary)
+                self.owner.status_var.set(summary)
+
+        if self._searching:
+            summary = (
+                f"Buscando... {len(self.results)} coincidencia(s) · "
+                f"{self._files_scanned} archivo(s) · "
+                f"{self._folders_scanned} carpeta(s)"
+            )
+            self.info_var.set(summary)
+            self.owner.status_var.set(summary)
+
+        try:
+            self.after(70, self._process_queue)
+        except tk.TclError:
+            pass
+
+    def stop_search(self):
+        if not self._searching:
+            return
+        self._stop_event.set()
+        self.stop_button.configure(state="disabled")
+        self.info_var.set(
+            f"Deteniendo búsqueda... {len(self.results)} coincidencia(s)"
+        )
+
+    def selected_path(self):
+        selection = self.tree.selection()
+        if not selection:
+            return None
+
+        iid = selection[0]
+        if not iid.startswith("r"):
+            return None
+
+        try:
+            return self.results[int(iid[1:])]
+        except (ValueError, IndexError):
+            return None
+
+    def open_selected(self, _event=None):
+        path = self.selected_path()
+        if path is not None:
+            self.owner.open_external_path(path)
+        return "break"
+
+    def open_location(self):
+        path = self.selected_path()
+        if path is None:
+            return
+        self.owner.new_tab(path.parent)
+
+    def on_close(self):
+        self._stop_event.set()
+
+
 class FileExplorerTool(ttk.Frame):
     def __init__(self, parent, app=None):
         super().__init__(parent)
@@ -266,6 +726,9 @@ class FileExplorerTool(ttk.Frame):
         self._tabs = []
         self._active_tab_id = None
         self._next_tab_id = 1
+        self._search_tab_id = "search"
+        self._search_page = None
+        self._last_folder_path = None
         self._clipboard_paths = []
         self._clipboard_cut = False
         self._devices = {}
@@ -277,6 +740,7 @@ class FileExplorerTool(ttk.Frame):
 
         self._build_ui()
         self._build_context_menu()
+        self._build_search_tab()
         self.new_tab(self.default_start_path())
         self.refresh_devices()
         self.after(80, self._poll_ui_queue)
@@ -321,18 +785,28 @@ class FileExplorerTool(ttk.Frame):
         toolbar.grid(row=1, column=0, sticky="ew")
         toolbar.columnconfigure(6, weight=1)
 
-        ttk.Button(toolbar, text="←", width=3, command=self.go_back).grid(row=0, column=0, padx=2)
-        ttk.Button(toolbar, text="→", width=3, command=self.go_forward).grid(row=0, column=1, padx=2)
-        ttk.Button(toolbar, text="↑", width=3, command=self.go_up).grid(row=0, column=2, padx=2)
-        ttk.Button(toolbar, text="⟳", width=3, command=self.refresh_active).grid(row=0, column=3, padx=2)
-        ttk.Button(toolbar, text="Nueva carpeta", command=self.new_folder).grid(row=0, column=4, padx=(7, 3))
+        self.back_btn = ttk.Button(toolbar, text="←", width=3, command=self.go_back)
+        self.back_btn.grid(row=0, column=0, padx=2)
+
+        self.forward_btn = ttk.Button(toolbar, text="→", width=3, command=self.go_forward)
+        self.forward_btn.grid(row=0, column=1, padx=2)
+
+        self.up_btn = ttk.Button(toolbar, text="↑", width=3, command=self.go_up)
+        self.up_btn.grid(row=0, column=2, padx=2)
+
+        self.refresh_btn = ttk.Button(toolbar, text="⟳", width=3, command=self.refresh_active)
+        self.refresh_btn.grid(row=0, column=3, padx=2)
+
+        self.new_folder_btn = ttk.Button(toolbar, text="Nueva carpeta", command=self.new_folder)
+        self.new_folder_btn.grid(row=0, column=4, padx=(7, 3))
 
         self.address_entry = ttk.Entry(toolbar, textvariable=self.address_var)
         self.address_entry.grid(row=0, column=6, sticky="ew", padx=(8, 3))
         self.address_entry.bind("<Return>", self._go_address)
         self.address_entry.bind("<Escape>", lambda _e: self._sync_address())
 
-        ttk.Button(toolbar, text="Ir", width=4, command=self._go_address).grid(row=0, column=7, padx=(0, 7))
+        self.go_btn = ttk.Button(toolbar, text="Ir", width=4, command=self._go_address)
+        self.go_btn.grid(row=0, column=7, padx=(0, 7))
 
         self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=22)
         self.search_entry.grid(row=0, column=8, sticky="e")
@@ -418,6 +892,70 @@ class FileExplorerTool(ttk.Frame):
             self.context_menu.grab_release()
 
     # ---------- Pestañas ----------
+    def _build_search_tab(self):
+        page = SearchTab(self.content_stack, self)
+        page.grid(row=0, column=0, sticky="nsew")
+        self._search_page = page
+
+        header = tk.Frame(self.tab_inner, bg="#f3f3f3", bd=0)
+        button = tk.Button(
+            header,
+            text="Buscar",
+            width=13,
+            anchor="center",
+            relief="flat",
+            bd=0,
+            padx=9,
+            bg="#e9e9e9",
+            activebackground="#ffffff",
+            command=lambda: self.activate_tab(self._search_tab_id),
+        )
+        button.pack(side="left", fill="y")
+        header.pack(side="left", padx=(0, 2), fill="y")
+
+        self._tabs.append(
+            {
+                "id": self._search_tab_id,
+                "kind": "search",
+                "page": page,
+                "header": header,
+                "button": button,
+                "close": None,
+            }
+        )
+
+    def _set_search_mode(self, enabled):
+        state = "disabled" if enabled else "normal"
+
+        for widget in (
+            self.back_btn,
+            self.forward_btn,
+            self.up_btn,
+            self.refresh_btn,
+            self.new_folder_btn,
+            self.go_btn,
+        ):
+            try:
+                widget.configure(state=state)
+            except Exception:
+                pass
+
+        try:
+            self.address_entry.configure(state=state)
+        except Exception:
+            pass
+
+        try:
+            self.search_entry.configure(state=state)
+        except Exception:
+            pass
+
+        if enabled:
+            self.search_var.set("")
+            self.address_var.set("Buscar archivos")
+        else:
+            self._sync_address()
+
     def new_tab(self, path=None):
         path = Path(path or self.default_start_path())
         if not path.is_dir():
@@ -459,6 +997,7 @@ class FileExplorerTool(ttk.Frame):
 
         meta = {
             "id": tab_id,
+            "kind": "folder",
             "page": page,
             "header": header,
             "button": button,
@@ -472,6 +1011,7 @@ class FileExplorerTool(ttk.Frame):
         meta = self._meta_for_tab(tab_id)
         if not meta:
             return
+
         self._active_tab_id = tab_id
         meta["page"].tkraise()
 
@@ -479,15 +1019,24 @@ class FileExplorerTool(ttk.Frame):
             active = item["id"] == tab_id
             bg = "#ffffff" if active else "#e9e9e9"
             item["button"].configure(bg=bg)
-            item["close"].configure(bg=bg)
 
-        self._sync_address()
-        self.search_var.set("")
-        self.status_var.set(str(meta["page"].path))
+            close = item.get("close")
+            if close is not None:
+                close.configure(bg=bg)
+
+        is_search = meta.get("kind") == "search"
+        self._set_search_mode(is_search)
+
+        if is_search:
+            self.status_var.set(meta["page"].info_var.get())
+        else:
+            self._last_folder_path = Path(meta["page"].path)
+            self.search_var.set("")
+            self.status_var.set(str(meta["page"].path))
 
     def close_tab(self, tab_id):
         meta = self._meta_for_tab(tab_id)
-        if not meta:
+        if not meta or meta.get("kind") == "search":
             return
         index = self._tabs.index(meta)
         meta["page"].destroy()
@@ -511,17 +1060,29 @@ class FileExplorerTool(ttk.Frame):
 
     def active_tab(self):
         meta = self._meta_for_tab(self._active_tab_id)
-        return meta["page"] if meta else None
+        if not meta or meta.get("kind") != "folder":
+            return None
+        return meta["page"]
 
     def active_path(self):
         tab = self.active_tab()
         return tab.path if tab else None
+
+    def last_folder_path(self):
+        tab = self.active_tab()
+        if tab is not None:
+            self._last_folder_path = Path(tab.path)
+            return self._last_folder_path
+        if self._last_folder_path is not None:
+            return Path(self._last_folder_path)
+        return None
 
     def _tab_path_changed(self, tab):
         meta = self._meta_for_tab(tab.tab_id)
         if meta:
             meta["button"].configure(text=self.tab_title(tab.path))
         if tab.tab_id == self._active_tab_id:
+            self._last_folder_path = Path(tab.path)
             self._sync_address()
             self.search_var.set("")
 
@@ -595,14 +1156,9 @@ class FileExplorerTool(ttk.Frame):
             tab.refresh_view()
 
     # ---------- Apertura ----------
-    def open_path(self, path):
+    def open_external_path(self, path):
         path = Path(path)
         try:
-            if path.is_dir():
-                tab = self.active_tab()
-                if tab:
-                    tab.navigate(path)
-                return
             if os.name == "nt":
                 os.startfile(str(path))
             elif sys.platform == "darwin":
@@ -611,6 +1167,17 @@ class FileExplorerTool(ttk.Frame):
                 subprocess.Popen(["xdg-open", str(path)])
         except Exception as exc:
             self.status_var.set(f"No se pudo abrir: {exc}")
+
+    def open_path(self, path):
+        path = Path(path)
+        if path.is_dir():
+            tab = self.active_tab()
+            if tab:
+                tab.navigate(path)
+            else:
+                self.new_tab(path)
+            return
+        self.open_external_path(path)
 
     def open_selected(self):
         tab = self.active_tab()
@@ -1014,6 +1581,14 @@ class FileExplorerTool(ttk.Frame):
         if not raw:
             return
         path = Path(raw)
+
+        if self._active_tab_id == self._search_tab_id:
+            if path.is_dir() and self._search_page is not None:
+                self._search_page.set_scope(path)
+            elif info.get("kind") == "CD / DVD":
+                self.status_var.set("No hay medio disponible en la unidad óptica")
+            return
+
         tab = self.active_tab()
         if tab and path.is_dir():
             tab.navigate(path)
@@ -1137,6 +1712,8 @@ class FileExplorerTool(ttk.Frame):
 
     def on_close(self):
         self._alive = False
+        if self._search_page is not None:
+            self._search_page.on_close()
 
 
 App = FileExplorerTool
