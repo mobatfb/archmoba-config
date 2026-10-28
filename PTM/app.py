@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.52"
+APP_VERSION = "1.0.53"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "01:08"
+APP_UPDATE_TIME = "01:17"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -535,8 +535,7 @@ class PTMApp(tk.Tk):
         self._command_cache = {}
         self._self_update_events = queue.Queue()
         self._self_update_check_running = False
-        self._tool_autofit_jobs = {}
-        self._tool_autofit_state = {}
+        self._tool_viewport_jobs = {}
         self.pinned = False
         self._outside_click_count = 0
         self._outside_click_last = 0.0
@@ -3347,8 +3346,144 @@ class PTMApp(tk.Tk):
 
         return roots, TkProxy()
 
-    def _iter_tool_widgets(self, root):
-        """Recorre widgets de una herramienta sin modificar su logica de scroll."""
+    def _prepare_tool_viewport(self, key):
+        """Crea un viewport neutro que no modifica los widgets de la herramienta."""
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return None
+
+        frame = meta["frame"]
+        self._clear_tool_frame(frame)
+
+        shell = tk.Frame(frame, bg=WHITE)
+        shell.pack(fill="both", expand=True)
+        shell.grid_rowconfigure(0, weight=1)
+        shell.grid_columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(
+            shell,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+        )
+        vbar = tk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        hbar = tk.Scrollbar(shell, orient="horizontal", command=canvas.xview)
+
+        canvas.configure(
+            xscrollcommand=hbar.set,
+            yscrollcommand=vbar.set,
+        )
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vbar.grid(row=0, column=1, sticky="ns")
+        hbar.grid(row=1, column=0, sticky="ew")
+        vbar.grid_remove()
+        hbar.grid_remove()
+
+        host = tk.Frame(canvas, bg=WHITE)
+        window_id = canvas.create_window(
+            0, 0,
+            window=host,
+            anchor="nw",
+        )
+
+        meta["viewport_shell"] = shell
+        meta["viewport_canvas"] = canvas
+        meta["viewport_vbar"] = vbar
+        meta["viewport_hbar"] = hbar
+        meta["tool_host"] = host
+        meta["viewport_window_id"] = window_id
+        meta["tool_widget"] = None
+
+        def changed(_event=None, k=key):
+            self._schedule_tool_viewport(k, delay=45, allow_grow=False)
+
+        host.bind("<Configure>", changed, add="+")
+        canvas.bind("<Configure>", changed, add="+")
+        return host
+
+    def _cancel_tool_viewport_job(self, key):
+        job = self._tool_viewport_jobs.pop(key, None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+
+    def _schedule_tool_viewport(self, key, delay=60, allow_grow=False):
+        self._cancel_tool_viewport_job(key)
+
+        def run():
+            self._tool_viewport_jobs.pop(key, None)
+            self._refresh_tool_viewport(key, allow_grow=allow_grow)
+
+        try:
+            self._tool_viewport_jobs[key] = self.after(delay, run)
+        except tk.TclError:
+            pass
+
+    def _grow_window_for_tool(self, requested_w, requested_h):
+        """Amplia PTM hasta el limite de pantalla, sin deformar la herramienta."""
+        try:
+            self.update_idletasks()
+
+            current_w = max(1, self.winfo_width())
+            current_h = max(1, self.winfo_height())
+            content_w = max(1, self.content.winfo_width())
+            content_h = max(1, self.content.winfo_height())
+
+            chrome_w = max(0, current_w - content_w)
+            chrome_h = max(0, current_h - content_h)
+
+            desired_w = max(current_w, int(requested_w + chrome_w + 12))
+            desired_h = max(current_h, int(requested_h + chrome_h + 12))
+
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            max_w = max(520, sw - 40)
+            max_h = max(420, sh - 80)
+
+            new_w = min(desired_w, max_w)
+            new_h = min(desired_h, max_h)
+
+            if new_w <= current_w + 4 and new_h <= current_h + 4:
+                return False
+
+            x = self.winfo_x()
+            y = self.winfo_y()
+
+            # Mantener la ventana visible incluso al crecer cerca de los bordes.
+            x = max(10, min(x, sw - new_w - 10))
+            y = max(10, min(y, sh - new_h - 45))
+
+            self.geometry(f"{new_w}x{new_h}+{x}+{y}")
+            self.update_idletasks()
+            return True
+        except Exception:
+            return False
+
+    def _tool_has_internal_scroll(self, root, axis):
+        """Detecta scroll propio solo como informacion; nunca lo modifica."""
+        for widget in self._iter_viewport_widgets(root):
+            try:
+                if isinstance(widget, tk.Scrollbar):
+                    orient = str(widget.cget("orient")).lower()
+                    if axis == "x" and orient.startswith("h"):
+                        return True
+                    if axis == "y" and orient.startswith("v"):
+                        return True
+
+                keys = widget.keys()
+                if axis == "x" and "xscrollcommand" in keys:
+                    if str(widget.cget("xscrollcommand")).strip():
+                        return True
+                if axis == "y" and "yscrollcommand" in keys:
+                    if str(widget.cget("yscrollcommand")).strip():
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def _iter_viewport_widgets(self, root):
         stack = [root]
         while stack:
             widget = stack.pop()
@@ -3358,406 +3493,104 @@ class PTMApp(tk.Tk):
             except Exception:
                 pass
 
-    def _remember_tool_widget_style(self, widget, state):
-        if widget in state["widgets"]:
-            return
-
-        info = {
-            "font": None,
-            "manager": None,
-            "manager_info": {},
-            "place": None,
-        }
-
-        try:
-            if "font" in widget.keys():
-                font_value = widget.cget("font")
-                if font_value:
-                    f = tkfont.Font(font=font_value)
-                    actual = f.actual()
-                    info["font"] = {
-                        "family": actual.get("family", "Segoe UI"),
-                        "size": int(actual.get("size", 9) or 9),
-                        "weight": actual.get("weight", "normal"),
-                        "slant": actual.get("slant", "roman"),
-                        "underline": int(actual.get("underline", 0) or 0),
-                        "overstrike": int(actual.get("overstrike", 0) or 0),
-                    }
-        except Exception:
-            pass
-
-        try:
-            manager = widget.winfo_manager()
-            info["manager"] = manager
-            if manager == "pack":
-                info["manager_info"] = dict(widget.pack_info())
-            elif manager == "grid":
-                info["manager_info"] = dict(widget.grid_info())
-            elif manager == "place":
-                p = dict(widget.place_info())
-                info["manager_info"] = p
-                info["place"] = p
-        except Exception:
-            pass
-
-        state["widgets"][widget] = info
-
-    @staticmethod
-    def _scale_pad_value(value, scale):
-        try:
-            if isinstance(value, (tuple, list)):
-                return tuple(max(0, int(float(v) * scale)) for v in value)
-            text = str(value).strip()
-            if not text:
-                return value
-            parts = text.split()
-            if len(parts) > 1:
-                return tuple(max(0, int(float(v) * scale)) for v in parts)
-            return max(0, int(float(text) * scale))
-        except Exception:
-            return value
-
-    def _restore_tool_autofit(self, root, state):
-        for widget in self._iter_tool_widgets(root):
-            self._remember_tool_widget_style(widget, state)
-            info = state["widgets"].get(widget, {})
-
-            font = info.get("font")
-            if font:
-                try:
-                    widget.configure(
-                        font=(
-                            font["family"],
-                            font["size"],
-                            font["weight"],
-                            font["slant"],
-                        )
-                    )
-                except Exception:
-                    pass
-
-            manager = info.get("manager")
-            opts = dict(info.get("manager_info") or {})
-            try:
-                if manager == "pack" and widget.winfo_manager() == "pack":
-                    clean = {
-                        k: v for k, v in opts.items()
-                        if k in {"side", "fill", "expand", "anchor", "padx", "pady", "ipadx", "ipady"}
-                    }
-                    widget.pack_configure(**clean)
-                elif manager == "grid" and widget.winfo_manager() == "grid":
-                    clean = {
-                        k: v for k, v in opts.items()
-                        if k in {"row", "column", "rowspan", "columnspan", "sticky", "padx", "pady", "ipadx", "ipady"}
-                    }
-                    widget.grid_configure(**clean)
-                elif manager == "place" and widget.winfo_manager() == "place":
-                    clean = {
-                        k: v for k, v in opts.items()
-                        if k in {"x", "y", "width", "height", "relx", "rely", "relwidth", "relheight", "anchor", "bordermode"}
-                    }
-                    widget.place_configure(**clean)
-            except Exception:
-                pass
-
-    def _apply_tool_autofit_scale(self, root, state, scale):
-        protected = (tk.Canvas, tk.Text, tk.Listbox, tk.Scrollbar, ttk.Scrollbar)
-
-        for widget in self._iter_tool_widgets(root):
-            self._remember_tool_widget_style(widget, state)
-            info = state["widgets"].get(widget, {})
-
-            font = info.get("font")
-            if font:
-                try:
-                    size = int(font["size"])
-                    sign = -1 if size < 0 else 1
-                    new_size = sign * max(6, int(abs(size) * scale))
-                    widget.configure(
-                        font=(
-                            font["family"],
-                            new_size,
-                            font["weight"],
-                            font["slant"],
-                        )
-                    )
-                except Exception:
-                    pass
-
-            # Algunos controles ttk conservan un ancho minimo impuesto por
-            # el tema aunque la fuente ya haya sido reducida. Cuando el widget
-            # esta realmente comprimido, liberar ese minimo deja que grid/pack
-            # repartan el espacio disponible sin cortar el ultimo control.
-            if not isinstance(widget, protected):
-                try:
-                    keys = widget.keys()
-                    actual_w = max(1, widget.winfo_width())
-                    req_w = max(1, widget.winfo_reqwidth())
-                    actual_h = max(1, widget.winfo_height())
-                    req_h = max(1, widget.winfo_reqheight())
-
-                    if "width" in keys:
-                        raw_width = widget.cget("width")
-                        try:
-                            width_value = int(float(raw_width or 0))
-                        except Exception:
-                            width_value = 0
-
-                        if isinstance(widget, (ttk.Button, ttk.Entry, ttk.Combobox)):
-                            if req_w > actual_w + 6:
-                                widget.configure(width=1)
-                            elif width_value > 1:
-                                widget.configure(
-                                    width=max(1, int(width_value * scale))
-                                )
-                        elif width_value > 1:
-                            widget.configure(
-                                width=max(1, int(width_value * scale))
-                            )
-
-                    if "height" in keys:
-                        raw_height = widget.cget("height")
-                        try:
-                            height_value = int(float(raw_height or 0))
-                        except Exception:
-                            height_value = 0
-                        if req_h > actual_h + 4 and height_value > 1:
-                            widget.configure(
-                                height=max(1, int(height_value * scale))
-                            )
-                except Exception:
-                    pass
-
-            manager = info.get("manager")
-            opts = dict(info.get("manager_info") or {})
-
-            # Los widgets que gestionan scroll conservan intacta su geometria y
-            # sus comandos de desplazamiento.
-            if isinstance(widget, protected):
-                continue
-
-            try:
-                if manager == "pack" and widget.winfo_manager() == "pack":
-                    changes = {}
-                    for key_name in ("padx", "pady", "ipadx", "ipady"):
-                        if key_name in opts:
-                            changes[key_name] = self._scale_pad_value(opts[key_name], scale)
-                    if changes:
-                        widget.pack_configure(**changes)
-
-                elif manager == "grid" and widget.winfo_manager() == "grid":
-                    changes = {}
-                    for key_name in ("padx", "pady", "ipadx", "ipady"):
-                        if key_name in opts:
-                            changes[key_name] = self._scale_pad_value(opts[key_name], scale)
-                    if changes:
-                        widget.grid_configure(**changes)
-
-                elif manager == "place" and widget.winfo_manager() == "place":
-                    changes = {}
-                    for key_name in ("x", "y", "width", "height"):
-                        value = opts.get(key_name)
-                        if str(value).strip():
-                            try:
-                                changes[key_name] = int(float(value) * scale)
-                            except Exception:
-                                pass
-                    if changes:
-                        widget.place_configure(**changes)
-            except Exception:
-                pass
-
-    def _tool_leaf_fit_ratio(self, root):
-        """Detecta controles visibles comprimidos aunque el root diga que cabe."""
-        protected = (tk.Canvas, tk.Text, tk.Listbox, tk.Scrollbar, ttk.Scrollbar)
-        ratios = []
-
-        try:
-            root.update_idletasks()
-        except Exception:
-            return 1.0
-
-        for widget in self._iter_tool_widgets(root):
-            if widget is root or isinstance(widget, protected):
-                continue
-
-            try:
-                if not widget.winfo_ismapped():
-                    continue
-
-                # Los contenedores pueden encogerse legitimamente; interesa
-                # medir controles/labels hoja que muestran contenido real.
-                if widget.winfo_children():
-                    continue
-
-                actual_w = max(1, widget.winfo_width())
-                actual_h = max(1, widget.winfo_height())
-                req_w = max(1, widget.winfo_reqwidth())
-                req_h = max(1, widget.winfo_reqheight())
-
-                # Ignorar diferencias pequeñas propias del tema ttk.
-                if req_w > actual_w + 8:
-                    ratios.append(actual_w / req_w)
-                if req_h > actual_h + 6:
-                    ratios.append(actual_h / req_h)
-            except Exception:
-                continue
-
-        if not ratios:
-            return 1.0
-
-        # El control mas comprimido marca cuanto hay que reducir.
-        return max(0.45, min(1.0, min(ratios)))
-
-    def _tool_content_bounds_ratio(self, frame, root):
-        """Comprueba si algun widget visible rebasa los limites de la pestaña."""
-        protected = (tk.Canvas, tk.Text, tk.Listbox, tk.Scrollbar, ttk.Scrollbar)
-        ratio = 1.0
-
-        try:
-            frame.update_idletasks()
-            fx = frame.winfo_rootx()
-            fy = frame.winfo_rooty()
-            fw = max(1, frame.winfo_width())
-            fh = max(1, frame.winfo_height())
-        except Exception:
-            return 1.0
-
-        for widget in self._iter_tool_widgets(root):
-            if isinstance(widget, protected):
-                continue
-            try:
-                if not widget.winfo_ismapped():
-                    continue
-                wx = widget.winfo_rootx() - fx
-                wy = widget.winfo_rooty() - fy
-                ww = max(1, widget.winfo_width())
-                wh = max(1, widget.winfo_height())
-
-                right = wx + ww
-                bottom = wy + wh
-                if right > fw and right > 0:
-                    ratio = min(ratio, fw / right)
-                if bottom > fh and bottom > 0:
-                    ratio = min(ratio, fh / bottom)
-            except Exception:
-                continue
-
-        return max(0.45, min(1.0, ratio))
-
-    def _apply_tool_autofit(self, key):
+    def _refresh_tool_viewport(self, key, allow_grow=False):
+        """Ajusta PTM al contenido y usa scroll externo solo si aun no cabe."""
         meta = self.open_tabs.get(key)
         if not meta or meta.get("state") not in {"ready", "processing"}:
             return
 
-        frame = meta.get("frame")
-        root = meta.get("autofit_root")
-        if frame is None or root is None:
+        canvas = meta.get("viewport_canvas")
+        host = meta.get("tool_host")
+        window_id = meta.get("viewport_window_id")
+        hbar = meta.get("viewport_hbar")
+        vbar = meta.get("viewport_vbar")
+
+        if not all((canvas, host, window_id, hbar, vbar)):
             return
 
         try:
-            if not frame.winfo_exists() or not root.winfo_exists():
+            if not canvas.winfo_exists() or not host.winfo_exists():
                 return
-            if frame.winfo_width() <= 20 or frame.winfo_height() <= 20:
-                return
+
+            host.update_idletasks()
+            requested_w = max(1, host.winfo_reqwidth())
+            requested_h = max(1, host.winfo_reqheight())
+
+            if allow_grow:
+                grew = self._grow_window_for_tool(requested_w, requested_h)
+                if grew:
+                    self.after(
+                        90,
+                        lambda k=key: self._refresh_tool_viewport(
+                            k, allow_grow=False
+                        ),
+                    )
+                    return
+
+            canvas.update_idletasks()
+            available_w = max(1, canvas.winfo_width())
+            available_h = max(1, canvas.winfo_height())
+
+            # Resolver la interdependencia de las dos barras: una barra puede
+            # hacer necesaria la otra. Dos pasadas son suficientes.
+            bar_w = max(14, vbar.winfo_reqwidth())
+            bar_h = max(14, hbar.winfo_reqheight())
+
+            need_h = requested_w > available_w + 2
+            need_v = requested_h > available_h + 2
+
+            for _ in range(2):
+                effective_w = max(1, available_w - (bar_w if need_v else 0))
+                effective_h = max(1, available_h - (bar_h if need_h else 0))
+                need_h = requested_w > effective_w + 2
+                need_v = requested_h > effective_h + 2
+
+            if need_h:
+                hbar.grid()
+            else:
+                hbar.grid_remove()
+                try:
+                    canvas.xview_moveto(0)
+                except Exception:
+                    pass
+
+            if need_v:
+                vbar.grid()
+            else:
+                vbar.grid_remove()
+                try:
+                    canvas.yview_moveto(0)
+                except Exception:
+                    pass
+
+            canvas.update_idletasks()
+            available_w = max(1, canvas.winfo_width())
+            available_h = max(1, canvas.winfo_height())
+
+            # Si no hay desborde en un eje, el host usa todo el viewport.
+            # Si hay desborde, conserva su tamaño natural y se desplaza.
+            target_w = requested_w if need_h else available_w
+            target_h = requested_h if need_v else available_h
+
+            canvas.itemconfigure(
+                window_id,
+                width=max(1, target_w),
+                height=max(1, target_h),
+            )
+            canvas.configure(
+                scrollregion=(0, 0, max(target_w, requested_w), max(target_h, requested_h))
+            )
+
+            meta["viewport_need_h"] = bool(need_h)
+            meta["viewport_need_v"] = bool(need_v)
+            meta["tool_has_internal_hscroll"] = self._tool_has_internal_scroll(
+                host, "x"
+            )
+            meta["tool_has_internal_vscroll"] = self._tool_has_internal_scroll(
+                host, "y"
+            )
         except tk.TclError:
             return
-
-        state = self._tool_autofit_state.setdefault(
-            key,
-            {"widgets": {}, "scale": 1.0},
-        )
-
-        self._restore_tool_autofit(root, state)
-
-        try:
-            frame.update_idletasks()
-            available_w = max(1, frame.winfo_width() - 6)
-            available_h = max(1, frame.winfo_height() - 6)
-            requested_w = max(1, root.winfo_reqwidth())
-            requested_h = max(1, root.winfo_reqheight())
-        except tk.TclError:
-            return
-
-        # Tres señales complementarias:
-        # 1) tamaño solicitado del root,
-        # 2) controles hoja que Tk esta comprimiendo,
-        # 3) contenido que rebasa fisicamente la pestaña.
-        root_ratio = min(
-            1.0,
-            available_w / requested_w,
-            available_h / requested_h,
-        )
-        leaf_ratio = self._tool_leaf_fit_ratio(root)
-        bounds_ratio = self._tool_content_bounds_ratio(frame, root)
-
-        scale = min(1.0, root_ratio, leaf_ratio, bounds_ratio)
-
-        # Dejar margen para que temas ttk/bordes no vuelvan a cortar el ultimo
-        # control. Solo se aplica cuando realmente hay desborde.
-        if scale < 0.985:
-            scale *= 0.96
-        else:
-            scale = 1.0
-
-        # En pantallas realmente pequeñas se permite bajar mas que antes.
-        scale = max(0.50, scale)
-
-        self._apply_tool_autofit_scale(root, state, scale)
-
-        # Segunda pasada tras recalcular geometria: algunos temas ttk solo
-        # revelan su minimo real despues del primer ajuste.
-        try:
-            root.update_idletasks()
-            for child in self._iter_tool_widgets(root):
-                if isinstance(child, ttk.Button):
-                    actual = max(1, child.winfo_width())
-                    requested = max(1, child.winfo_reqwidth())
-                    if requested > actual + 6:
-                        try:
-                            child.configure(width=1)
-                        except Exception:
-                            pass
-            root.update_idletasks()
-        except Exception:
-            pass
-
-        state["scale"] = scale
-
-    def _schedule_tool_autofit(self, key, delay=70):
-        old_job = self._tool_autofit_jobs.pop(key, None)
-        if old_job is not None:
-            try:
-                self.after_cancel(old_job)
-            except Exception:
-                pass
-
-        def run():
-            self._tool_autofit_jobs.pop(key, None)
-            self._apply_tool_autofit(key)
-
-        try:
-            self._tool_autofit_jobs[key] = self.after(delay, run)
-        except tk.TclError:
-            pass
-
-    def _setup_tool_autofit(self, key, root):
-        meta = self.open_tabs.get(key)
-        if not meta:
-            return
-
-        meta["autofit_root"] = root
-        self._tool_autofit_state[key] = {"widgets": {}, "scale": 1.0}
-
-        def resized(_event=None):
-            self._schedule_tool_autofit(key)
-
-        try:
-            meta["frame"].bind("<Configure>", resized, add="+")
-        except Exception:
-            pass
-
-        self._schedule_tool_autofit(key, delay=120)
 
     def _load_tool_into_tab(self, tool, key):
         meta = self.open_tabs.get(key)
@@ -3765,7 +3598,6 @@ class PTMApp(tk.Tk):
             return
 
         frame = meta["frame"]
-        self._clear_tool_frame(frame)
 
         if str(tool.get("mode", "")).strip().lower() == "externo":
             self._show_tool_unavailable(
@@ -3777,6 +3609,10 @@ class PTMApp(tk.Tk):
             )
             return
 
+        host = self._prepare_tool_viewport(key)
+        if host is None:
+            return
+
         try:
             module_name = f"ptm_tool_{tool['path'].stem}_{abs(hash(key))}"
             spec = importlib.util.spec_from_file_location(module_name, tool["path"])
@@ -3785,7 +3621,7 @@ class PTMApp(tk.Tk):
             module = importlib.util.module_from_spec(spec)
 
             embedded_roots, tk_proxy = self._run_with_embedded_tk(
-                frame,
+                host,
                 lambda: spec.loader.exec_module(module),
             )
 
@@ -3804,7 +3640,7 @@ class PTMApp(tk.Tk):
             entry = self._resolve_integrated_entry(module)
             if callable(entry):
                 try:
-                    widget = self._instantiate_integrated_entry(entry, frame)
+                    widget = self._instantiate_integrated_entry(entry, host)
                 except Exception as exc:
                     self._show_tool_unavailable(tool, key, exc)
                     return
@@ -3815,7 +3651,7 @@ class PTMApp(tk.Tk):
             if callable(main_func):
                 try:
                     embedded_roots, tk_proxy = self._run_with_embedded_tk(
-                        frame,
+                        host,
                         main_func,
                     )
                     if getattr(module, "tk", None) is tk:
@@ -3841,8 +3677,9 @@ class PTMApp(tk.Tk):
         meta["module"] = module
         meta["state"] = "ready"
         meta["loading_status"] = None
-        self._setup_tool_autofit(key, widget)
+        meta["tool_widget"] = widget
         self._activate_tool_if_foreground(key)
+        self._schedule_tool_viewport(key, delay=100, allow_grow=True)
 
     def _activate_tool_if_foreground(self, key):
         """Actualiza la pestaña sin robar el foco si fue abierta en segundo plano."""
@@ -3897,10 +3734,8 @@ class PTMApp(tk.Tk):
         meta = self.open_tabs[key]
         meta["frame"].pack(fill="both", expand=True)
         self.current_tool_module = meta["module"]
-        # Si la herramienta expuso un único widget hijo, lo usamos para callbacks opcionales.
-        children = meta["frame"].winfo_children()
-        self.current_tool_widget = children[0] if len(children) == 1 else meta["frame"]
-        self._schedule_tool_autofit(key, delay=40)
+        self.current_tool_widget = meta.get("tool_widget") or meta["frame"]
+        self._schedule_tool_viewport(key, delay=50, allow_grow=False)
         try:
             if hasattr(self.current_tool_widget, "on_show"):
                 self.current_tool_widget.on_show()
@@ -4105,19 +3940,17 @@ class PTMApp(tk.Tk):
         if not meta:
             return
         frame = meta["frame"]
+        self._cancel_tool_viewport_job(key)
         try:
-            for child in frame.winfo_children():
-                if hasattr(child, "on_close"):
-                    child.on_close()
+            widget = meta.get("tool_widget")
+            if widget is not None and hasattr(widget, "on_close"):
+                widget.on_close()
+            else:
+                for child in frame.winfo_children():
+                    if hasattr(child, "on_close"):
+                        child.on_close()
         except Exception:
             pass
-        job = self._tool_autofit_jobs.pop(key, None)
-        if job is not None:
-            try:
-                self.after_cancel(job)
-            except Exception:
-                pass
-        self._tool_autofit_state.pop(key, None)
         frame.destroy()
         del self.open_tabs[key]
         if self.current_key == key:
