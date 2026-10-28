@@ -43,9 +43,11 @@ class FileSearchTool(ttk.Frame):
     def _build_ui(self):
         top = ttk.Frame(self)
         top.pack(fill="x", pady=(0, 10))
-        if self.app is not None:
-            ttk.Button(top, text="← Volver al buscador de herramientas", command=self.app.show_home).pack(side="left")
-        ttk.Label(top, text=TOOL_NAME, font=("Segoe UI", 15, "bold")).pack(side="left", padx=12)
+        ttk.Label(
+            top,
+            text=TOOL_NAME,
+            font=("Segoe UI", 15, "bold"),
+        ).pack(side="left")
 
         marco = ttk.Frame(self, padding=4)
         marco.pack(fill="both", expand=True)
