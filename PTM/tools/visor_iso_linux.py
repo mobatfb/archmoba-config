@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.2"
+TOOL_VERSION = "1.0.3"
 
 
 def human_size(n):
@@ -166,14 +166,11 @@ def build_cpio_newc(entries):
     return bytes(out)
 
 
-class InitrdEditor(tk.Toplevel):
-    def __init__(self, owner, path):
-        super().__init__(owner)
+class InitrdEditor(ttk.Frame):
+    def __init__(self, owner, path, parent=None):
+        super().__init__(parent if parent is not None else owner)
         self.owner = owner
         self.path = Path(path)
-        self.title(f"INITRD - {self.path.name}")
-        self.geometry("900x600")
-        self.minsize(700, 420)
         self.entries = []
         self.compression = "none"
         self._build()
@@ -181,6 +178,7 @@ class InitrdEditor(tk.Toplevel):
 
     def _build(self):
         bar = ttk.Frame(self, padding=8); bar.pack(fill="x")
+        ttk.Button(bar, text="Volver al ISO", command=self.owner._close_container_editor).pack(side="left", padx=(0, 12))
         ttk.Button(bar, text="Reemplazar", command=self.replace).pack(side="left", padx=3)
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
@@ -253,14 +251,11 @@ class InitrdEditor(tk.Toplevel):
             messagebox.showerror("INITRD", str(exc), parent=self)
 
 
-class FatEditor(tk.Toplevel):
-    def __init__(self, owner, img_path):
-        super().__init__(owner)
+class FatEditor(ttk.Frame):
+    def __init__(self, owner, img_path, parent=None):
+        super().__init__(parent if parent is not None else owner)
         self.owner = owner
         self.img_path = Path(img_path)
-        self.title(f"FAT IMG - {self.img_path.name}")
-        self.geometry("920x600")
-        self.minsize(700, 420)
         self.fs = None
         self.current = "/"
         self._build()
@@ -268,6 +263,7 @@ class FatEditor(tk.Toplevel):
 
     def _build(self):
         bar = ttk.Frame(self, padding=8); bar.pack(fill="x")
+        ttk.Button(bar, text="Volver al ISO", command=self.owner._close_container_editor).pack(side="left", padx=(0, 12))
         ttk.Button(bar, text="Subir", command=self.up).pack(side="left", padx=3)
         ttk.Button(bar, text="Reemplazar", command=self.replace).pack(side="left", padx=3)
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
@@ -279,19 +275,38 @@ class FatEditor(tk.Toplevel):
             self.tree.heading(c,text=t); self.tree.column(c,width=w)
         self.tree.pack(fill="both", expand=True, padx=8, pady=(0,8))
         self.tree.bind("<Double-Button-1>", self.open_selected)
+        self.error_var = tk.StringVar(value="")
+        ttk.Label(
+            self, textvariable=self.error_var, foreground="#B42318",
+            wraplength=680, padding=(8, 5),
+        ).pack(fill="x")
+        ttk.Button(
+            self, text="Reintentar apertura FAT", command=self._open_fs,
+        ).pack(anchor="e", padx=8, pady=(0, 4))
 
     def _open_fs(self):
+        self.error_var.set("")
         try:
             from pyfatfs.PyFatFS import PyFatFS
         except Exception as exc:
-            messagebox.showerror("FAT", "Falta pyfatfs. Instala:\npython -m pip install pyfatfs", parent=self)
-            self.destroy(); return
+            self.error_var.set(
+                "No se pudo cargar pyfatfs: "
+                f"{type(exc).__name__}: {exc}. "
+                "Vuelve a abrir el Visor ISO Linux desde PTM para "
+                "que se reparen sus dependencias automáticamente."
+            )
+            return
         try:
+            if self.fs is not None:
+                self.fs.close()
             self.fs = PyFatFS(str(self.img_path), read_only=False)
             self.refresh()
         except Exception as exc:
-            messagebox.showerror("FAT", f"No se pudo abrir la imagen FAT:\n{exc}", parent=self)
-            self.destroy()
+            self.fs = None
+            self.error_var.set(
+                f"No se pudo abrir la imagen FAT: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
     def destroy(self):
         try:
@@ -380,6 +395,7 @@ class ISOEditor(ttk.Frame):
         self.temp_dir = None
         self.status_var = tk.StringVar(value="Abra un ISO para comenzar")
         self._paths = {}
+        self._container_host = None
         self._build_ui()
 
     def _build_ui(self):
@@ -418,7 +434,29 @@ class ISOEditor(ttk.Frame):
         self.status_var.set(text)
         self.update_idletasks()
 
+    def _close_container_editor(self):
+        host = self._container_host
+        self._container_host = None
+        if host is not None:
+            host.destroy()
+            if self.work_dir is not None and self.work_dir.exists():
+                self.refresh_tree()
+
+    def _open_container_editor(self, editor_type, path):
+        self._close_container_editor()
+        host = ttk.Frame(self)
+        host.place(relx=0, rely=0, relwidth=1, relheight=1)
+        host.lift()
+        self._container_host = host
+        try:
+            editor = editor_type(self, path, parent=host)
+            editor.pack(fill="both", expand=True)
+        except Exception:
+            self._close_container_editor()
+            raise
+
     def cleanup(self):
+        self._close_container_editor()
         if self.temp_dir:
             try: shutil.rmtree(self.temp_dir, ignore_errors=True)
             except Exception: pass
@@ -578,10 +616,15 @@ class ISOEditor(ttk.Frame):
         if not p or p.is_dir(): return
         n = p.name.lower()
         if n.endswith(".img"):
-            FatEditor(self.winfo_toplevel(), p)
+            try:
+                self._open_container_editor(FatEditor, p)
+            except Exception as exc:
+                messagebox.showerror("FAT", str(exc), parent=self)
         elif "initrd" in n or n.endswith((".cpio", ".cpio.gz", ".cpio.xz")):
-            try: InitrdEditor(self.winfo_toplevel(), p)
-            except Exception as exc: messagebox.showerror("INITRD", str(exc), parent=self)
+            try:
+                self._open_container_editor(InitrdEditor, p)
+            except Exception as exc:
+                messagebox.showerror("INITRD", str(exc), parent=self)
         else:
             messagebox.showinfo("Contenedor", "Este archivo se trata como binario. Puede reemplazarlo, extraerlo o inspeccionarlo en HEX.", parent=self)
 
