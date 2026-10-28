@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.13"
+APP_VERSION = "1.0.14"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:53"
+APP_UPDATE_TIME = "19:57"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -376,6 +376,7 @@ class PTMApp(tk.Tk):
         self.current_tool_widget = None
         self.current_tool_module = None
         self._tool_download_events = queue.Queue()
+        self._failed_download_keys = set()
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
@@ -1829,6 +1830,7 @@ class PTMApp(tk.Tk):
         if meta.get("state") != "failed":
             return
 
+        self._failed_download_keys.discard(key)
         self._begin_tool_download_session(tool, key)
 
     def _start_tool_download(self, tool, key):
@@ -1838,6 +1840,14 @@ class PTMApp(tk.Tk):
             return
 
         if meta.get("download_worker_running"):
+            return
+
+        if key in self._failed_download_keys:
+            self._show_tool_unavailable(
+                tool,
+                key,
+                meta.get("last_download_error"),
+            )
             return
 
         self._begin_tool_download_session(tool, key)
@@ -1862,7 +1872,7 @@ class PTMApp(tk.Tk):
         self._show_tool_loading(
             tool,
             key,
-            f"PTM v{APP_VERSION} · Descargando... intento 1/5",
+            f"PTM v{APP_VERSION} · Descargando... intento 1/5 · sesión única",
         )
 
         def worker():
@@ -1932,6 +1942,7 @@ class PTMApp(tk.Tk):
                     meta["download_attempt"] = 5
                     meta["state"] = "failed"
                     meta["last_download_error"] = exc
+                    self._failed_download_keys.add(key)
                     self._show_tool_unavailable(tool, key, exc)
                     continue
 
