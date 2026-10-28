@@ -80,7 +80,8 @@ class CanvaEditRunner(tk.Tk):
 
             self.editor = self.module.CanvaEditFrame(self.viewer)
             self.editor.pack(fill="both", expand=True)
-            self.status_var.set("CANVAEDIT cargado")
+            version = getattr(self.module, "CANVAEDIT_VERSION", "sin version")
+            self.status_var.set(f"CANVAEDIT v{version}")
 
         except Exception as exc:
             self.status_var.set("Error al cargar CANVAEDIT")
@@ -129,7 +130,8 @@ class CanvaEditRunner(tk.Tk):
             self.status_var.set("Actualizado. Recargando...")
             self.update_idletasks()
             self.load_canvaedit()
-            self.status_var.set("CANVAEDIT actualizado")
+            version = getattr(self.module, "CANVAEDIT_VERSION", "sin version")
+            self.status_var.set(f"CANVAEDIT actualizado · v{version}")
 
         except Exception as exc:
             self.status_var.set("No se pudo actualizar")
