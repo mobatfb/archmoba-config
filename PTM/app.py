@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.15"
+APP_VERSION = "1.0.16"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:02"
+APP_UPDATE_TIME = "20:05"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1436,6 +1436,40 @@ class PTMApp(tk.Tk):
         }
         return mapping.get(module_name, module_name)
 
+    def _compatible_install_package(self, package_spec):
+        """Devuelve el paquete pip más compatible con la versión actual de Python."""
+        raw = str(package_spec or "").strip()
+        name = self._normalize_distribution_name(raw)
+        lower = name.lower()
+
+        # pygame clásico actualmente no ofrece wheel para Python 3.14+.
+        # pygame-ce expone el mismo módulo: import pygame.
+        if lower == "pygame" and sys.version_info >= (3, 14):
+            return "pygame-ce"
+
+        return raw
+
+    def _dependency_satisfied(self, package_spec):
+        """Comprueba una dependencia considerando aliases de distribución/import."""
+        raw = str(package_spec or "").strip()
+        name = self._normalize_distribution_name(raw)
+        lower = name.lower()
+
+        if not name:
+            return True
+
+        if lower == "pygame":
+            # Tanto pygame como pygame-ce proporcionan el módulo pygame.
+            if self._module_available("pygame"):
+                return True
+            if self._distribution_installed("pygame"):
+                return True
+            if self._distribution_installed("pygame-ce"):
+                return True
+            return False
+
+        return self._distribution_installed(raw)
+
     def _is_local_module(self, module_name, tool_path):
         base = tool_path.parent
         return (
@@ -1497,7 +1531,7 @@ class PTMApp(tk.Tk):
                 if not spec:
                     continue
                 key = spec.lower()
-                if key not in seen and not self._distribution_installed(spec):
+                if key not in seen and not self._dependency_satisfied(spec):
                     packages.append(spec)
                     seen.add(key)
 
@@ -1570,7 +1604,17 @@ class PTMApp(tk.Tk):
 
         try:
             for package in missing:
-                status.configure(text=f"Instalando {package}...")
+                install_package = self._compatible_install_package(package)
+
+                if install_package != package:
+                    status.configure(
+                        text=(
+                            f"Instalando {install_package}... "
+                            f"(compatible con Python {sys.version_info.major}.{sys.version_info.minor})"
+                        )
+                    )
+                else:
+                    status.configure(text=f"Instalando {install_package}...")
                 progress.update()
 
                 cmd = [
@@ -1579,7 +1623,8 @@ class PTMApp(tk.Tk):
                     "pip",
                     "install",
                     "--disable-pip-version-check",
-                    package,
+                    "--prefer-binary",
+                    install_package,
                 ]
                 result = subprocess.run(
                     cmd,
@@ -1592,14 +1637,27 @@ class PTMApp(tk.Tk):
                     detail = (result.stderr or result.stdout or "").strip()
                     if len(detail) > 1800:
                         detail = detail[-1800:]
+
+                    python_label = (
+                        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+                    )
                     raise RuntimeError(
-                        f"No se pudo instalar {package}.\n\n{detail or 'pip devolvió un error.'}"
+                        f"No se pudo instalar {install_package} para Python {python_label}.\n\n"
+                        f"{detail or 'pip devolvió un error.'}"
                     )
 
             importlib.invalidate_caches()
 
             still_missing = []
             for package in missing:
+                normalized = self._normalize_distribution_name(package)
+                lower = normalized.lower()
+
+                if lower == "pygame":
+                    if not self._module_available("pygame"):
+                        still_missing.append(package)
+                    continue
+
                 # Si era una dependencia inferida con alias, comprobar por import.
                 candidates = [
                     key for key, value in {
@@ -1616,13 +1674,13 @@ class PTMApp(tk.Tk):
                         "dotenv": "python-dotenv",
                         "Crypto": "pycryptodome",
                     }.items()
-                    if value.lower() == self._normalize_distribution_name(package).lower()
+                    if value.lower() == lower
                 ]
                 if candidates:
                     if not any(self._module_available(name) for name in candidates):
                         still_missing.append(package)
-                elif not self._distribution_installed(package) and not self._module_available(
-                    self._normalize_distribution_name(package).replace("-", "_")
+                elif not self._dependency_satisfied(package) and not self._module_available(
+                    normalized.replace("-", "_")
                 ):
                     still_missing.append(package)
 
