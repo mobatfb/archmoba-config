@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.50"
+APP_VERSION = "1.0.51"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "00:56"
+APP_UPDATE_TIME = "01:04"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -3472,7 +3472,7 @@ class PTMApp(tk.Tk):
                 try:
                     size = int(font["size"])
                     sign = -1 if size < 0 else 1
-                    new_size = sign * max(7, int(abs(size) * scale))
+                    new_size = sign * max(6, int(abs(size) * scale))
                     widget.configure(
                         font=(
                             font["family"],
@@ -3481,6 +3481,24 @@ class PTMApp(tk.Tk):
                             font["slant"],
                         )
                     )
+                except Exception:
+                    pass
+
+            # Algunos controles ttk conservan un ancho minimo en caracteres.
+            # Reducirlo junto con la fuente evita que el ultimo boton sea cortado.
+            if not isinstance(widget, protected):
+                try:
+                    keys = widget.keys()
+                    if "width" in keys:
+                        raw_width = widget.cget("width")
+                        width_value = int(float(raw_width or 0))
+                        if width_value > 1:
+                            widget.configure(width=max(1, int(width_value * scale)))
+                    if "height" in keys:
+                        raw_height = widget.cget("height")
+                        height_value = int(float(raw_height or 0))
+                        if height_value > 1:
+                            widget.configure(height=max(1, int(height_value * scale)))
                 except Exception:
                     pass
 
@@ -3523,6 +3541,84 @@ class PTMApp(tk.Tk):
             except Exception:
                 pass
 
+    def _tool_leaf_fit_ratio(self, root):
+        """Detecta controles visibles comprimidos aunque el root diga que cabe."""
+        protected = (tk.Canvas, tk.Text, tk.Listbox, tk.Scrollbar, ttk.Scrollbar)
+        ratios = []
+
+        try:
+            root.update_idletasks()
+        except Exception:
+            return 1.0
+
+        for widget in self._iter_tool_widgets(root):
+            if widget is root or isinstance(widget, protected):
+                continue
+
+            try:
+                if not widget.winfo_ismapped():
+                    continue
+
+                # Los contenedores pueden encogerse legitimamente; interesa
+                # medir controles/labels hoja que muestran contenido real.
+                if widget.winfo_children():
+                    continue
+
+                actual_w = max(1, widget.winfo_width())
+                actual_h = max(1, widget.winfo_height())
+                req_w = max(1, widget.winfo_reqwidth())
+                req_h = max(1, widget.winfo_reqheight())
+
+                # Ignorar diferencias pequeñas propias del tema ttk.
+                if req_w > actual_w + 8:
+                    ratios.append(actual_w / req_w)
+                if req_h > actual_h + 6:
+                    ratios.append(actual_h / req_h)
+            except Exception:
+                continue
+
+        if not ratios:
+            return 1.0
+
+        # El control mas comprimido marca cuanto hay que reducir.
+        return max(0.45, min(1.0, min(ratios)))
+
+    def _tool_content_bounds_ratio(self, frame, root):
+        """Comprueba si algun widget visible rebasa los limites de la pestaña."""
+        protected = (tk.Canvas, tk.Text, tk.Listbox, tk.Scrollbar, ttk.Scrollbar)
+        ratio = 1.0
+
+        try:
+            frame.update_idletasks()
+            fx = frame.winfo_rootx()
+            fy = frame.winfo_rooty()
+            fw = max(1, frame.winfo_width())
+            fh = max(1, frame.winfo_height())
+        except Exception:
+            return 1.0
+
+        for widget in self._iter_tool_widgets(root):
+            if isinstance(widget, protected):
+                continue
+            try:
+                if not widget.winfo_ismapped():
+                    continue
+                wx = widget.winfo_rootx() - fx
+                wy = widget.winfo_rooty() - fy
+                ww = max(1, widget.winfo_width())
+                wh = max(1, widget.winfo_height())
+
+                right = wx + ww
+                bottom = wy + wh
+                if right > fw and right > 0:
+                    ratio = min(ratio, fw / right)
+                if bottom > fh and bottom > 0:
+                    ratio = min(ratio, fh / bottom)
+            except Exception:
+                continue
+
+        return max(0.45, min(1.0, ratio))
+
     def _apply_tool_autofit(self, key):
         meta = self.open_tabs.get(key)
         if not meta or meta.get("state") not in {"ready", "processing"}:
@@ -3557,17 +3653,29 @@ class PTMApp(tk.Tk):
         except tk.TclError:
             return
 
-        # Solo reducir cuando hay desborde. Nunca ampliar una herramienta.
-        scale = min(
+        # Tres señales complementarias:
+        # 1) tamaño solicitado del root,
+        # 2) controles hoja que Tk esta comprimiendo,
+        # 3) contenido que rebasa fisicamente la pestaña.
+        root_ratio = min(
             1.0,
             available_w / requested_w,
             available_h / requested_h,
         )
-        scale = max(0.68, scale)
+        leaf_ratio = self._tool_leaf_fit_ratio(root)
+        bounds_ratio = self._tool_content_bounds_ratio(frame, root)
 
-        # Evita microcambios continuos al redimensionar.
-        if scale > 0.985:
+        scale = min(1.0, root_ratio, leaf_ratio, bounds_ratio)
+
+        # Dejar margen para que temas ttk/bordes no vuelvan a cortar el ultimo
+        # control. Solo se aplica cuando realmente hay desborde.
+        if scale < 0.985:
+            scale *= 0.96
+        else:
             scale = 1.0
+
+        # En pantallas realmente pequeñas se permite bajar mas que antes.
+        scale = max(0.50, scale)
 
         self._apply_tool_autofit_scale(root, state, scale)
         state["scale"] = scale
