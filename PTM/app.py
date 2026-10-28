@@ -558,6 +558,12 @@ class PTMApp(tk.Tk):
                     )
                     self.destroy()
                     return
+
+                # Si no hubo actualización, programar la próxima comprobación.
+                try:
+                    self.after(60000, self._check_self_update_async)
+                except tk.TclError:
+                    return
         except queue.Empty:
             pass
 
@@ -565,13 +571,6 @@ class PTMApp(tk.Tk):
             self.after(500, self._poll_self_update_events)
         except tk.TclError:
             return
-
-        # Comprobar periódicamente mientras PTM permanece abierto.
-        if not self._self_update_check_running:
-            try:
-                self.after(60000, self._check_self_update_async)
-            except tk.TclError:
-                pass
 
     # ---------- Ventana / proporción ----------
     def _apply_responsive_geometry(self):
