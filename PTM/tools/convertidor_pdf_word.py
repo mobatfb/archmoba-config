@@ -2,7 +2,7 @@
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 
 from pdf2docx import Converter
 
@@ -105,9 +105,10 @@ def create_tool(parent, app):
         status_var.set(f"Conversión completada: {output}")
         set_busy(False)
         app.set_tool_processing(False)
-        messagebox.showinfo(
+        app.show_dialog(
             "Convertidor PDF a Word",
             "El documento Word se generó correctamente.",
+            kind="success",
         )
 
     def finish_error(exc):
@@ -124,9 +125,10 @@ def create_tool(parent, app):
         target = target_var.get().strip()
 
         if not source or not Path(source).is_file():
-            messagebox.showwarning(
+            app.show_dialog(
                 "Convertidor PDF a Word",
                 "Selecciona un archivo PDF válido.",
+                kind="warning",
             )
             return
         if not target:
