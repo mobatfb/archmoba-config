@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.57"
+APP_VERSION = "1.0.58"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "02:08"
+APP_UPDATE_TIME = "02:16"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -3530,11 +3530,23 @@ class PTMApp(tk.Tk):
             if not meta_now or meta_now.get("zoom_updating"):
                 return
 
+            # Una pestaña oculta nunca debe reajustarse por cambios de mapeo.
+            if self.current_key != k:
+                return
+
             if event is not None:
                 size = (int(event.width), int(event.height))
-                if meta_now.get("last_viewport_size") == size:
-                    return
                 meta_now["last_viewport_size"] = size
+
+            # Si esta herramienta ya fue ajustada con el mismo tamaño de PTM,
+            # volver a su pestaña no debe ejecutar otro Ajustar.
+            if meta_now.get("first_fit_complete"):
+                current_window_size = (
+                    int(self.winfo_width()),
+                    int(self.winfo_height()),
+                )
+                if meta_now.get("fit_window_size") == current_window_size:
+                    return
 
             self._schedule_tool_viewport(k, delay=90, allow_grow=False)
 
@@ -4343,6 +4355,10 @@ class PTMApp(tk.Tk):
             meta["viewport_need_h"] = bool(need_h)
             meta["viewport_need_v"] = bool(need_v)
             meta["zoom"] = factor
+            meta["fit_window_size"] = (
+                int(self.winfo_width()),
+                int(self.winfo_height()),
+            )
 
             if not meta.get("first_fit_complete"):
                 self._finish_tool_first_fit(key)
@@ -4486,6 +4502,7 @@ class PTMApp(tk.Tk):
             "last_viewport_size": None,
             "first_fit_complete": False,
             "viewport_loading_overlay": None,
+            "fit_window_size": None,
         }
 
         self._render_tabs()
@@ -4505,7 +4522,12 @@ class PTMApp(tk.Tk):
         self.current_tool_module = meta["module"]
         self.current_tool_widget = meta.get("tool_widget") or meta["frame"]
         self._update_zoom_footer(key)
-        self._schedule_tool_viewport(key, delay=50, allow_grow=False)
+
+        # Solo hacer el primer ajuste si esta herramienta aun no lo tiene.
+        # Cambiar entre pestañas conserva exactamente el zoom ya calculado.
+        if not meta.get("first_fit_complete"):
+            self._schedule_tool_viewport(key, delay=50, allow_grow=False)
+
         try:
             if hasattr(self.current_tool_widget, "on_show"):
                 self.current_tool_widget.on_show()
