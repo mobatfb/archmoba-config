@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.17"
+APP_VERSION = "1.0.18"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:10"
+APP_UPDATE_TIME = "20:12"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -34,6 +34,10 @@ REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
 GUIDE_API_URL = (
     f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/guide.csv?ref=main"
+)
+GUIDE_META_URL = f"{REPO_RAW_BASE}/guide_meta.json"
+GUIDE_META_API_URL = (
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/guide_meta.json?ref=main"
 )
 SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
 SELF_CONFIG_API_URL = (
@@ -369,6 +373,7 @@ class PTMApp(tk.Tk):
         self.tools_dir = self.base_dir / "tools"
         self.tools_dir.mkdir(exist_ok=True)
         self.guide_path = self.base_dir / "guide.csv"
+        self.guide_meta_path = self.base_dir / "guide_meta.json"
 
         self.query = tk.StringVar()
         self.show_all_results = False
@@ -380,7 +385,9 @@ class PTMApp(tk.Tk):
         self.current_tool_module = None
         self._tool_download_events = queue.Queue()
         self._failed_download_keys = set()
-        self._last_catalog_refresh = 0.0
+        self._catalog_events = queue.Queue()
+        self._catalog_meta_check_running = False
+        self._catalog_meta_check_pending = False
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
@@ -393,7 +400,7 @@ class PTMApp(tk.Tk):
         self.floating = FloatingPTM(self)
         self.bind("<Escape>", lambda _e: self.hide_main())
         self.after(100, self._poll_tool_download_events)
-        self.after(8000, self._auto_refresh_catalog)
+        self.after(100, self._poll_catalog_events)
 
     # ---------- Ventana / proporción ----------
     def _apply_responsive_geometry(self):
@@ -822,11 +829,11 @@ class PTMApp(tk.Tk):
         canvas.create_line(7, 16, 7, 23, 24, 23, 24, 16, fill=BLACK, width=2)
 
     # ---------- Herramientas ----------
-    def reload_tools(self):
+    def reload_tools(self, local_only=False):
         """Carga exclusivamente el catálogo guide.csv."""
         self.tools = []
         try:
-            rows = self._load_guide_rows()
+            rows = self._load_guide_rows(local_only=local_only)
         except Exception as exc:
             rows = []
             if hasattr(self, "hint"):
@@ -877,29 +884,72 @@ class PTMApp(tk.Tk):
                 ).lower(),
             })
 
-        self._last_catalog_refresh = time.monotonic()
-
         if hasattr(self, "results_frame") and self.results_frame.winfo_exists():
             self.refresh_results()
 
-    def _auto_refresh_catalog(self):
-        """Refresca el catálogo periódicamente para detectar nuevas herramientas."""
+    def _read_local_guide_meta(self):
         try:
-            self.reload_tools()
+            if self.guide_meta_path.is_file():
+                return json.loads(
+                    self.guide_meta_path.read_text(encoding="utf-8-sig")
+                )
         except Exception:
             pass
-        finally:
-            try:
-                self.after(8000, self._auto_refresh_catalog)
-            except tk.TclError:
-                pass
+        return {}
 
-    def _load_guide_rows(self):
-        """Obtiene guide.csv desde el HEAD actual de main; RAW/local son respaldo."""
-        text = None
-        remote_error = None
+    def _fetch_remote_guide_meta(self):
+        """Consulta solo el archivo pequeño guide_meta.json."""
+        last_error = None
 
-        # 1) API de GitHub: refleja el HEAD de main más rápido que RAW/CDN.
+        try:
+            request = urllib.request.Request(
+                GUIDE_META_API_URL,
+                headers={
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Accept": "application/vnd.github+json",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=6) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            encoded = str(payload.get("content", "")).replace("\n", "")
+            if encoded:
+                return json.loads(
+                    base64.b64decode(encoded).decode("utf-8-sig")
+                )
+        except Exception as exc:
+            last_error = exc
+
+        try:
+            request = urllib.request.Request(
+                f"{GUIDE_META_URL}?v={time.time_ns()}",
+                headers={
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=6) as response:
+                return json.loads(response.read().decode("utf-8-sig"))
+        except Exception as exc:
+            last_error = exc
+
+        raise RuntimeError(f"No se pudo consultar guide_meta.json ({last_error})")
+
+    @staticmethod
+    def _guide_meta_matches(local_meta, remote_meta):
+        if not local_meta or not remote_meta:
+            return False
+        return (
+            str(local_meta.get("updated_at", "")).strip()
+            == str(remote_meta.get("updated_at", "")).strip()
+            and str(local_meta.get("guide_sha", "")).strip()
+            == str(remote_meta.get("guide_sha", "")).strip()
+        )
+
+    def _download_guide_text(self):
+        """Descarga guide.csv únicamente cuando la metadata indica un cambio."""
+        last_error = None
+
         try:
             request = urllib.request.Request(
                 GUIDE_API_URL,
@@ -911,43 +961,108 @@ class PTMApp(tk.Tk):
             )
             with urllib.request.urlopen(request, timeout=8) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-
             encoded = str(payload.get("content", "")).replace("\n", "")
             if encoded:
-                text = base64.b64decode(encoded).decode("utf-8-sig")
+                return base64.b64decode(encoded).decode("utf-8-sig")
         except Exception as exc:
-            remote_error = exc
+            last_error = exc
 
-        # 2) Respaldo RAW.
-        if text is None:
+        try:
+            request = urllib.request.Request(
+                f"{GUIDE_URL}?v={time.time_ns()}",
+                headers={
+                    "User-Agent": f"PTM/{APP_VERSION}",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                return response.read().decode("utf-8-sig")
+        except Exception as exc:
+            last_error = exc
+
+        raise RuntimeError(f"No se pudo descargar guide.csv ({last_error})")
+
+    def _sync_guide_if_needed(self):
+        """Compara metadata remota/local y devuelve True si actualizó guide.csv."""
+        remote_meta = self._fetch_remote_guide_meta()
+        local_meta = self._read_local_guide_meta()
+
+        needs_update = (
+            not self.guide_path.is_file()
+            or not self._guide_meta_matches(local_meta, remote_meta)
+        )
+
+        if not needs_update:
+            return False
+
+        text = self._download_guide_text()
+        self.guide_path.write_text(text, encoding="utf-8")
+        self.guide_meta_path.write_text(
+            json.dumps(remote_meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return True
+
+    def _check_guide_on_search_async(self):
+        """Cada búsqueda consulta metadata; guide.csv solo baja si cambió."""
+        if self._catalog_meta_check_running:
+            self._catalog_meta_check_pending = True
+            return
+
+        self._catalog_meta_check_running = True
+        self._catalog_meta_check_pending = False
+
+        def worker():
             try:
-                request = urllib.request.Request(
-                    f"{GUIDE_URL}?v={time.time_ns()}",
-                    headers={
-                        "User-Agent": f"PTM/{APP_VERSION}",
-                        "Cache-Control": "no-cache",
-                    },
-                )
-                with urllib.request.urlopen(request, timeout=8) as response:
-                    text = response.read().decode("utf-8-sig")
+                changed = self._sync_guide_if_needed()
+                self._catalog_events.put(("done", changed, None))
             except Exception as exc:
-                remote_error = exc
+                self._catalog_events.put(("done", False, exc))
 
-        if text is not None:
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_catalog_events(self):
+        try:
+            while True:
+                _kind, changed, error = self._catalog_events.get_nowait()
+                self._catalog_meta_check_running = False
+
+                if changed:
+                    self.reload_tools(local_only=True)
+                elif error is not None and hasattr(self, "hint"):
+                    # El buscador sigue usando la copia local si la consulta falla.
+                    pass
+
+                if self._catalog_meta_check_pending:
+                    self._catalog_meta_check_pending = False
+                    self._check_guide_on_search_async()
+        except queue.Empty:
+            pass
+
+        try:
+            self.after(100, self._poll_catalog_events)
+        except tk.TclError:
+            pass
+
+    def _load_guide_rows(self, local_only=False):
+        """Carga la copia local; al iniciar sincroniza metadata si es necesario."""
+        if not local_only:
             try:
-                self.guide_path.write_text(text, encoding="utf-8")
+                self._sync_guide_if_needed()
             except Exception:
                 pass
 
-        # 3) Último respaldo: copia local.
-        if text is None:
-            if self.guide_path.is_file():
-                text = self.guide_path.read_text(encoding="utf-8-sig")
-            else:
-                raise RuntimeError(
-                    f"GitHub no respondió y no existe copia local ({remote_error})"
-                )
+        if not self.guide_path.is_file():
+            # Si no existe ninguna copia local, la descarga es obligatoria.
+            remote_meta = self._fetch_remote_guide_meta()
+            text = self._download_guide_text()
+            self.guide_path.write_text(text, encoding="utf-8")
+            self.guide_meta_path.write_text(
+                json.dumps(remote_meta, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
+        text = self.guide_path.read_text(encoding="utf-8-sig")
         reader = csv.DictReader(io.StringIO(text), delimiter=";")
         if not reader.fieldnames or "ruta" not in reader.fieldnames:
             raise ValueError("guide.csv no contiene la columna 'ruta'.")
@@ -1007,11 +1122,13 @@ class PTMApp(tk.Tk):
     def _on_search_key_release(self, event):
         if getattr(event, "keysym", "") == "Return":
             return
+        self._check_guide_on_search_async()
         self.show_all_results = False
         self._apply_search_layout(expanded=False)
         self.refresh_results()
 
     def _show_all_search_results(self, _event=None):
+        self._check_guide_on_search_async()
         self.show_all_results = True
         self._apply_search_layout(expanded=True)
         self.refresh_results()
