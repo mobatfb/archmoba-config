@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.61"
+APP_VERSION = "1.0.62"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "02:34"
+APP_UPDATE_TIME = "03:38"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -2603,6 +2603,10 @@ class PTMApp(tk.Tk):
             "dateutil": "python-dateutil",
             "dotenv": "python-dotenv",
             "Crypto": "pycryptodome",
+            # Namespaces de .NET expuestos por pythonnet. Nunca deben
+            # enviarse literalmente a pip como paquetes "System" o "clr".
+            "System": "pythonnet",
+            "clr": "pythonnet",
         }
         return mapping.get(module_name, module_name)
 
