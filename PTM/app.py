@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.46"
+APP_VERSION = "1.0.47"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "00:11"
+APP_UPDATE_TIME = "00:40"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -535,10 +535,11 @@ class PTMApp(tk.Tk):
         self._command_cache = {}
         self._self_update_events = queue.Queue()
         self._self_update_check_running = False
+        self.pinned = False
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
-        self.attributes("-topmost", True)
+        self.attributes("-topmost", False)
         self.protocol("WM_DELETE_WINDOW", self.hide_main)
 
         self._build_shell()
@@ -626,12 +627,22 @@ class PTMApp(tk.Tk):
         self.tabs_holder = tk.Frame(self.top, bg=WHITE)
         self.tabs_holder.pack(side="left", fill="both", expand=True)
 
-        self.close_canvas = tk.Canvas(self.top, width=30, height=30, bg=WHITE,
-                                      highlightthickness=0, bd=0, cursor="hand2")
-        self.close_canvas.pack(side="right", padx=(8, 4), pady=(2, 0))
+        self.close_canvas = tk.Canvas(
+            self.top, width=30, height=30, bg=WHITE,
+            highlightthickness=0, bd=0, cursor="hand2"
+        )
+        self.close_canvas.pack(side="right", padx=(4, 4), pady=(2, 0))
         self.close_canvas.create_line(8, 8, 22, 22, fill=BLACK, width=2)
         self.close_canvas.create_line(22, 8, 8, 22, fill=BLACK, width=2)
         self.close_canvas.bind("<Button-1>", lambda _e: self.hide_main())
+
+        self.pin_canvas = tk.Canvas(
+            self.top, width=30, height=30, bg=WHITE,
+            highlightthickness=0, bd=0, cursor="hand2"
+        )
+        self.pin_canvas.pack(side="right", padx=(2, 0), pady=(2, 0))
+        self.pin_canvas.bind("<Button-1>", self.toggle_pin)
+        self._draw_pin_button()
 
         self.separator = tk.Frame(self.outer, bg=WHITE, height=2)
         self.separator.pack(fill="x")
@@ -3693,6 +3704,39 @@ class PTMApp(tk.Tk):
         except OSError as exc:
             messagebox.showerror("PTM", str(exc))
 
+    def _draw_pin_button(self):
+        """Dibuja el pin: rojo cuando PTM esta fijado arriba."""
+        if not hasattr(self, "pin_canvas"):
+            return
+        c = self.pin_canvas
+        c.delete("all")
+        color = RED if self.pinned else MUTED
+
+        # Cabeza del pin.
+        c.create_line(10, 8, 20, 8, fill=color, width=2)
+        c.create_line(12, 8, 12, 14, fill=color, width=2)
+        c.create_line(18, 8, 18, 14, fill=color, width=2)
+        c.create_line(10, 14, 20, 14, fill=color, width=2)
+
+        # Punta.
+        c.create_line(15, 14, 15, 23, fill=color, width=2)
+        c.create_line(15, 23, 12, 26, fill=color, width=2)
+
+        if self.pinned:
+            c.create_rectangle(2, 27, 28, 29, fill=RED, outline=RED)
+
+    def toggle_pin(self, _event=None):
+        """Activa o desactiva 'siempre al frente' para la ventana principal."""
+        self.pinned = not self.pinned
+        try:
+            self.attributes("-topmost", self.pinned)
+            if self.pinned:
+                self.lift()
+                self.focus_force()
+        except tk.TclError:
+            pass
+        self._draw_pin_button()
+
     # ---------- Sistema ----------
     def open_tools_folder(self):
         try:
@@ -3710,9 +3754,10 @@ class PTMApp(tk.Tk):
 
     def show_main(self):
         self.deiconify()
-        self.attributes("-topmost", True)
+        self.attributes("-topmost", self.pinned)
         self.lift()
-        self.focus_force()
+        if self.pinned:
+            self.focus_force()
 
     def toggle_main(self):
         if self.state() == "withdrawn" or not self.winfo_viewable():
