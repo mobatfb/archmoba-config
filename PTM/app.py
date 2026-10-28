@@ -24,9 +24,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.33"
+APP_VERSION = "1.0.34"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:09"
+APP_UPDATE_TIME = "22:11"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1145,8 +1145,6 @@ class PTMApp(tk.Tk):
                 "dependencies": dependencies,
                 "author": author,
                 "visits": visits,
-                "recommended": str(row.get("recomendado", "")).strip().lower()
-                    in {"1", "true", "si", "sí", "yes", "recomendado"},
                 "main_file": str(row.get("archivo_principal", "")).strip(),
                 "search": (
                     f"{slug} {Path(repo_path).stem} {name} {description} "
@@ -1509,12 +1507,12 @@ class PTMApp(tk.Tk):
             )[:10]
         if q == "%recommended%":
             return sorted(
-                [tool for tool in self.tools if tool.get("recommended")],
+                self.tools,
                 key=lambda tool: (
                     -int(tool.get("visits", 0)),
                     tool["name"].lower(),
                 ),
-            )
+            )[:20]
 
         tokens = [t for t in q.replace(",", " ").split() if t]
         matches = [tool for tool in self.tools if all(t in tool["search"] for t in tokens)]
