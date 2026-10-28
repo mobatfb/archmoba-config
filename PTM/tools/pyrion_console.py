@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.6.0"
+TOOL_VERSION = "1.7.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -108,7 +108,7 @@ def list_python_processes():
 
 
 class PyrionConsoleTool(tk.Frame):
-    TAB_ORDER = ("Shell", "Killpy", "Red", "SSL", "GitHub", "Logs")
+    TAB_ORDER = ("Shell", "Killpy", "Consultas", "Red", "SSL", "GitHub", "Logs")
 
     def __init__(self, parent, app=None):
         super().__init__(parent, bg=BG)
@@ -121,6 +121,23 @@ class PyrionConsoleTool(tk.Frame):
         self.tab_labels = {}
         self.tab_counters = {}
         self.processes = []
+        self.query_commands = [
+            ("pwd", "Directorio actual"),
+            ("whoami", "Usuario actual"),
+            ("id", "Identidad y grupos"),
+            ("uname -a", "Kernel y arquitectura"),
+            ("date", "Fecha y hora"),
+            ("uptime", "Tiempo encendido y carga"),
+            ("df -h", "Uso de discos"),
+            ("free -h", "Uso de memoria"),
+            ("ps", "Procesos"),
+            ("ip addr", "Direcciones de red"),
+            ("ip route", "Rutas de red"),
+            ("hostname", "Nombre del equipo"),
+            ("mount", "Sistemas montados"),
+            ("cat /proc/cpuinfo", "Informacion de CPU"),
+            ("cat /proc/meminfo", "Informacion detallada de memoria"),
+        ]
 
         self.keyboard_visible = False
         self.keyboard_upper = False
@@ -406,6 +423,8 @@ class PyrionConsoleTool(tk.Frame):
 
         if tab_type == "Killpy":
             self.refresh_kill_py(tab_id)
+        elif tab_type == "Consultas":
+            self.refresh_queries(tab_id)
         elif tab_type == "Red":
             self.refresh_red(tab_id)
         elif tab_type == "SSL":
@@ -426,6 +445,8 @@ class PyrionConsoleTool(tk.Frame):
         tab_type = self.tab_types.get(self.active_tab, "Consola")
         if tab_type == "Killpy":
             self.prompt_label.configure(text="killpy:#")
+        elif tab_type == "Consultas":
+            self.prompt_label.configure(text="consulta:#")
         else:
             self.prompt_label.configure(text="root@mini1:#")
 
@@ -552,6 +573,58 @@ class PyrionConsoleTool(tk.Frame):
                 tab_id or self.active_tab,
             )
 
+    # ---------- CONSULTAS ----------
+    def refresh_queries(self, tab_id=None):
+        lines = [
+            "CONSULTAS",
+            "Comandos populares de solo lectura:",
+            "",
+        ]
+        for index, (command, description) in enumerate(self.query_commands, start=1):
+            lines.append(f"{index}. {command}  -  {description}")
+
+        lines.extend([
+            "",
+            "Escribe SOLO el numero del comando abajo y pulsa Enter.",
+            "Esta pestaña solo ejecuta comandos de consulta predefinidos.",
+        ])
+
+        self._replace("\n".join(lines), tab_id or self.active_tab)
+
+    def _run_query_number(self, raw, tab_id=None):
+        target = tab_id or self.active_tab
+        try:
+            number = int(raw.strip())
+        except ValueError:
+            self._append("Consultas: escribe un numero valido.", target)
+            return
+
+        if number < 1 or number > len(self.query_commands):
+            self._append("Consultas: ese numero no existe en la lista.", target)
+            return
+
+        command, description = self.query_commands[number - 1]
+        self._append(f"consulta:# {number} -> {command}  [{description}]", target)
+
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                executable=None if os.name == "nt" else "/bin/sh",
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            if output:
+                self._append(output.rstrip(), target)
+            if result.returncode:
+                self._append(f"[exit {result.returncode}]", target)
+        except subprocess.TimeoutExpired:
+            self._append("[timeout]", target)
+        except Exception as exc:
+            self._append(f"[error] {exc}", target)
+
     # ---------- diagnósticos ----------
     def refresh_red(self, tab_id=None):
         lines = ["RED - diagnostico", ""]
@@ -663,6 +736,10 @@ class PyrionConsoleTool(tk.Frame):
         if active_type == "Killpy":
             self._append(f"killpy:# {text}", self.active_tab)
             self._kill_number(text, self.active_tab)
+            return
+
+        if active_type == "Consultas":
+            self._run_query_number(text, self.active_tab)
             return
 
         # Todas las demás pestañas aceptan comandos shell sin cambiar de pestaña.
