@@ -3707,10 +3707,50 @@ class EnterGame:
     def close(self):
         # El descanso es progreso local seguro. Nunca confirmar mejoras que
         # continuan pendientes en la plataforma, ni guardar un combate activo.
+        if self._closed:
+            return
+        self._closed = True
+
         if (self.is_rest_room() and self._rest_dirty and
                 not self.upgrades_pending_save):
             self._save()
+
+        if self._tick_job is not None:
+            try:
+                self.root.after_cancel(self._tick_job)
+            except tk.TclError:
+                pass
+            self._tick_job = None
+
+        if self.embedded:
+            if self._fullscreen_active:
+                try:
+                    window = self.app or self.root.winfo_toplevel()
+                    window.attributes('-fullscreen', False)
+                except tk.TclError:
+                    pass
+                self._fullscreen_active = False
+            return
+
         self.root.destroy()
+
+
+def create_tool(parent, app):
+    """Monta ENTER dentro de una pestaña de PTM."""
+    enable_windows_dpi_awareness()
+    configure_display(parent)
+
+    frame = tk.Frame(parent, bg=BG)
+    frame.pack_propagate(False)
+
+    game = EnterGame(frame, embedded=True, app=app)
+
+    # PTM consulta estos callbacks al mostrar/cerrar la pestaña.
+    frame.on_show = game.on_show
+    frame.on_close = game.close
+    frame.enter_game = game
+
+    return frame
 
 
 def main():
