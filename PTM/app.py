@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.21"
+APP_VERSION = "1.0.22"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:41"
+APP_UPDATE_TIME = "20:42"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -2046,7 +2046,7 @@ class PTMApp(tk.Tk):
             if not spinner.winfo_exists():
                 return
             current = self.open_tabs.get(key)
-            if not current or current.get("state") != "loading":
+            if not current or current.get("state") not in {"loading", "preparing"}:
                 return
             try:
                 spinner.itemconfigure(arc, start=angle)
