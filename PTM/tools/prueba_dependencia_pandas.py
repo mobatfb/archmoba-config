@@ -5,7 +5,7 @@ import pandas as pd
 import tkinter as tk
 
 
-def create_tool(parent, app):
+def App(parent, app):
     frame = tk.Frame(parent, bg="#FFFFFF")
 
     tk.Label(
