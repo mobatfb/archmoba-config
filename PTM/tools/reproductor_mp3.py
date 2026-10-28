@@ -217,7 +217,10 @@ class Mp3PlayerTool(ttk.Frame):
                 pass
 
 
-App = Mp3PlayerTool\n\n\ndef main():
+App = Mp3PlayerTool
+
+
+def main():
     root = tk.Tk()
     root.title(TOOL_NAME)
     root.geometry("820x430")
