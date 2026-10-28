@@ -26,9 +26,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.39"
+APP_VERSION = "1.0.40"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:30"
+APP_UPDATE_TIME = "22:33"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -700,14 +700,16 @@ class PTMApp(tk.Tk):
             else 90
         )
 
+        home_active = self.current_key == "home"
         home = TabButton(
             self.tabs_holder,
             "PTM",
             on_open=self.show_home,
-            active=(self.current_key == "home"),
+            active=home_active,
             width=home_width,
+            height=(30 if home_active else 25),
         )
-        home.pack(side="left", padx=(0, 6))
+        home.pack(side="left", padx=(0, 6), anchor="s")
         self.tab_widgets["home"] = home
 
         processing_states = {"loading", "preparing", "processing"}
@@ -717,19 +719,21 @@ class PTMApp(tk.Tk):
             is_processing = meta.get("state") in processing_states
 
             tool = meta.get("tool", {})
+            tab_active = self.current_key == key
             tab = TabButton(
                 self.tabs_holder,
                 meta["name"],
                 on_open=lambda k=key: self.switch_to_tool(k),
                 on_close=lambda k=key: self.close_tool_tab(k),
-                active=(self.current_key == key),
+                active=tab_active,
                 width=tab_width,
+                height=(30 if tab_active else 25),
                 processing=is_processing,
                 favorite=self._is_favorite(tool),
                 on_favorite=lambda t=tool: self._toggle_favorite(t),
                 on_reload=lambda t=tool: self.reload_tool(t),
             )
-            tab.pack(side="left", padx=(0, 6))
+            tab.pack(side="left", padx=(0, 6), anchor="s")
             self.tab_widgets[key] = tab
 
     def _clear_content(self):
