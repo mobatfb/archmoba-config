@@ -20,14 +20,16 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:28"
+APP_UPDATE_TIME = "19:32"
 
-REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PTM"
+REPO_OWNER = "mobatfb"
+REPO_NAME = "archmoba-config"
+REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
+REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
 SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
-SELF_APP_URL = f"{REPO_RAW_BASE}/app.py"
 
 def _version_tuple(value):
     """Convierte 1.2.3 en una tupla comparable sin depender de librerías externas."""
@@ -60,20 +62,38 @@ def check_self_update():
         if _version_tuple(remote_version) <= _version_tuple(APP_VERSION):
             return False
 
-        app_path = str(remote_config.get("app_path", "PTM/app.py")).strip().replace("\\", "/")
+        app_path = str(remote_config.get("app_path", "PTM/app.py")).strip().replace("\\", "/").lstrip("/")
         expected_name = Path(app_path).name or "app.py"
         if expected_name.lower() != "app.py":
             raise RuntimeError("config.json no apunta a un app.py válido.")
 
-        app_request = urllib.request.Request(
-            f"{SELF_APP_URL}?v={time.time_ns()}",
-            headers={
-                "User-Agent": f"PTM/{APP_VERSION}",
-                "Cache-Control": "no-cache",
-            },
-        )
-        with urllib.request.urlopen(app_request, timeout=15) as response:
-            source = response.read().decode("utf-8-sig")
+        release_commit = str(remote_config.get("release_commit", "")).strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", release_commit):
+            raise RuntimeError("config.json no contiene un release_commit válido.")
+
+        immutable_app_url = f"{REPO_RAW_ROOT}/{release_commit}/{app_path}"
+
+        source = None
+        last_error = None
+        for attempt in range(4):
+            try:
+                app_request = urllib.request.Request(
+                    f"{immutable_app_url}?v={time.time_ns()}",
+                    headers={
+                        "User-Agent": f"PTM/{APP_VERSION}",
+                        "Cache-Control": "no-cache",
+                    },
+                )
+                with urllib.request.urlopen(app_request, timeout=15) as response:
+                    source = response.read().decode("utf-8-sig")
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < 3:
+                    time.sleep(0.8)
+
+        if source is None:
+            raise RuntimeError(f"No se pudo descargar el release fijado: {last_error}")
 
         version_match = re.search(
             r'''APP_VERSION\s*=\s*["']([^"']+)["']''',
