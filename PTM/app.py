@@ -17,12 +17,88 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:11"
+APP_UPDATE_TIME = "19:15"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
+SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
+SELF_APP_URL = f"{REPO_RAW_BASE}/app.py"
+
+def _version_tuple(value):
+    """Convierte 1.2.3 en una tupla comparable sin depender de librerías externas."""
+    parts = []
+    for part in str(value).strip().split("."):
+        match = re.match(r"(\d+)", part)
+        parts.append(int(match.group(1)) if match else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def check_self_update():
+    """Busca una versión nueva de PTM, reemplaza app.py y reinicia el proceso."""
+    try:
+        config_request = urllib.request.Request(
+            f"{SELF_CONFIG_URL}?v={time.time_ns()}",
+            headers={
+                "User-Agent": f"PTM/{APP_VERSION}",
+                "Cache-Control": "no-cache",
+            },
+        )
+        with urllib.request.urlopen(config_request, timeout=8) as response:
+            remote_config = json.loads(response.read().decode("utf-8-sig"))
+
+        remote_version = str(remote_config.get("version", "")).strip()
+        if not remote_version:
+            return False
+
+        if _version_tuple(remote_version) <= _version_tuple(APP_VERSION):
+            return False
+
+        app_path = str(remote_config.get("app_path", "PTM/app.py")).strip().replace("\\", "/")
+        expected_name = Path(app_path).name or "app.py"
+        if expected_name.lower() != "app.py":
+            raise RuntimeError("config.json no apunta a un app.py válido.")
+
+        app_request = urllib.request.Request(
+            f"{SELF_APP_URL}?v={time.time_ns()}",
+            headers={
+                "User-Agent": f"PTM/{APP_VERSION}",
+                "Cache-Control": "no-cache",
+            },
+        )
+        with urllib.request.urlopen(app_request, timeout=15) as response:
+            source = response.read().decode("utf-8-sig")
+
+        version_match = re.search(
+            r'''APP_VERSION\s*=\s*["']([^"']+)["']''',
+            source,
+        )
+        downloaded_version = version_match.group(1).strip() if version_match else ""
+
+        if downloaded_version != remote_version:
+            raise RuntimeError(
+                f"Versión remota inconsistente: config={remote_version}, app.py={downloaded_version or 'sin versión'}"
+            )
+
+        compile(source, "PTM/app.py", "exec")
+
+        current_file = Path(__file__).resolve()
+        temp_file = current_file.with_suffix(current_file.suffix + ".update")
+        temp_file.write_text(source, encoding="utf-8")
+        os.replace(temp_file, current_file)
+
+        subprocess.Popen(
+            [sys.executable, str(current_file), *sys.argv[1:]],
+            cwd=str(current_file.parent),
+        )
+        return True
+    except Exception:
+        # Una falla de actualización nunca debe impedir abrir la versión instalada.
+        return False
+
 
 def detect_system_dark_mode():
     """Detecta si el sistema operativo está usando tema oscuro."""
@@ -1421,4 +1497,6 @@ class PTMApp(tk.Tk):
 
 
 if __name__ == "__main__":
+    if check_self_update():
+        raise SystemExit(0)
     PTMApp().mainloop()
