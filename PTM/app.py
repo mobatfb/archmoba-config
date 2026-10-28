@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.23"
+APP_VERSION = "1.0.24"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "20:44"
+APP_UPDATE_TIME = "20:58"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -504,7 +504,7 @@ class PTMApp(tk.Tk):
         home.pack(side="left", padx=(0, 6))
         self.tab_widgets["home"] = home
 
-        processing_states = {"loading", "preparing"}
+        processing_states = {"loading", "preparing", "processing"}
         spinner_frames = ("◐", "◓", "◑", "◒")
         spinner_index = int(getattr(self, "_tab_spinner_index", 0))
         has_processing_tabs = False
@@ -2527,6 +2527,42 @@ class PTMApp(tk.Tk):
         except Exception:
             pass
         self._render_tabs()
+
+    def set_tool_processing(self, active=True, key=None):
+        """Marca una pestaña como ocupada durante trabajo propio de la herramienta."""
+        target_key = key or self.current_key
+        if not target_key or target_key == "home":
+            return False
+
+        meta = self.open_tabs.get(target_key)
+        if not meta:
+            return False
+
+        if active:
+            # Solo una herramienta ya cargada debe entrar a processing por esta API.
+            if meta.get("state") in {"ready", "processing"}:
+                meta["state"] = "processing"
+        else:
+            if meta.get("state") == "processing":
+                meta["state"] = "ready"
+
+        self._render_tabs()
+        return True
+
+    def tool_processing(self, key=None):
+        """Context manager simple para herramientas que ejecutan trabajo síncrono."""
+        app = self
+
+        class _ProcessingContext:
+            def __enter__(self_inner):
+                app.set_tool_processing(True, key)
+                return self_inner
+
+            def __exit__(self_inner, exc_type, exc, tb):
+                app.set_tool_processing(False, key)
+                return False
+
+        return _ProcessingContext()
 
     def close_tool_tab(self, key):
         meta = self.open_tabs.get(key)
