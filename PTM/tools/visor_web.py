@@ -1,280 +1,295 @@
-# ARGUMENTOS: visor web navegador internet url pagina html texto enlaces historial favoritos zoom seguro
+# ARGUMENTOS: visor web navegador internet edge webview2 chromium google youtube javascript css historial favoritos zoom
+import ctypes
+import importlib
 import json
 import os
 import queue
-import re
-import ssl
+import secrets
+import subprocess
+import sys
 import threading
+import time
 import tkinter as tk
-import tkinter.font as tkfont
-from html.parser import HTMLParser
+from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from tkinter import ttk
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import quote_plus
 
 TOOL_NAME = "Visor Web"
 TOOL_DESCRIPTION = (
-    "Visor web seguro integrado en PTM. Muestra paginas como contenido "
-    "estructurado con titulos, texto y enlaces clicables."
+    "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
+    "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "1.0.2"
+TOOL_VERSION = "2.0.0"
 
-HOME_URL = "https://www.wikipedia.org/"
-SEARCH_URL = "https://html.duckduckgo.com/html/?q={query}"
-MAX_DOWNLOAD_BYTES = 4 * 1024 * 1024
+HOME_URL = "https://www.google.com/"
+SEARCH_URL = "https://www.google.com/search?q={query}"
+CHILD_FLAG = "--ptm-webview-child"
 
 
-class _SafeHTMLParser(HTMLParser):
-    BLOCK_TAGS = {
-        "p", "div", "section", "article", "header", "footer", "main",
-        "aside", "nav", "blockquote", "pre", "table", "tr", "ul", "ol",
-        "dl", "figure", "figcaption",
-    }
-    HEADING_TAGS = {"h1": "h1", "h2": "h2", "h3": "h3", "h4": "h3", "h5": "h3", "h6": "h3"}
+# ---------------------------------------------------------------------------
+# Proceso hijo aislado: pywebview + Edge WebView2
+# ---------------------------------------------------------------------------
+def _child_send(conn, payload):
+    try:
+        conn.send(payload)
+        return True
+    except Exception:
+        return False
 
-    def __init__(self, base_url):
-        super().__init__(convert_charrefs=True)
-        self.base_url = base_url
-        self.parts = []
-        self.main_parts = []
-        self.title = ""
-        self._in_title = False
-        self._skip_depth = 0
-        self._main_depth = 0
-        self._element_stack = []
-        self._style_stack = ["body"]
-        self._href_stack = [None]
 
-    def _style(self):
-        return self._style_stack[-1] if self._style_stack else "body"
+def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
+    conn = None
+    window = None
 
-    def _href(self):
-        return self._href_stack[-1] if self._href_stack else None
-
-    def _append(self, text, style=None, href=None):
-        if not text:
-            return
-        part = (
-            text,
-            style or self._style(),
-            href if href is not None else self._href(),
+    try:
+        conn = Client(
+            ("127.0.0.1", int(port)),
+            authkey=bytes.fromhex(auth_hex),
         )
-        self.parts.append(part)
-        if self._main_depth > 0:
-            self.main_parts.append(part)
+        _child_send(conn, {"type": "starting"})
 
-    def _newline(self, count=1):
-        if not self.parts:
-            return
-        current = "".join(part[0] for part in self.parts[-3:])
-        have = len(current) - len(current.rstrip("\n"))
-        need = max(0, count - have)
-        if need:
-            part = ("\n" * need, "body", None)
-            self.parts.append(part)
-            if self._main_depth > 0:
-                self.main_parts.append(part)
+        webview = importlib.import_module("webview")
 
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-        attrs = dict(attrs)
-
-        if tag in {"script", "style", "noscript", "template", "svg"}:
-            self._skip_depth += 1
-            return
-        if self._skip_depth:
-            return
-
-        if tag == "title":
-            self._in_title = True
-            return
-
-        # Los sitios modernos suelen separar el contenido útil con <main>,
-        # <article> o role="main". Guardamos ese flujo por separado para
-        # evitar mostrar primero cabeceras, menús y navegación lateral.
-        is_main_container = (
-            tag in {"main", "article"}
-            or str(attrs.get("role", "")).strip().lower() == "main"
+        window = webview.create_window(
+            window_title,
+            url=start_url,
+            width=900,
+            height=620,
+            min_size=(240, 180),
+            hidden=True,
+            frameless=True,
+            easy_drag=False,
+            shadow=False,
+            focus=True,
+            text_select=True,
+            zoomable=True,
+            background_color="#FFFFFF",
         )
-        if tag not in {
-            "area", "base", "br", "col", "embed", "hr", "img",
-            "input", "link", "meta", "param", "source", "track", "wbr",
-        }:
-            self._element_stack.append((tag, is_main_container))
 
-        if is_main_container:
-            self._main_depth += 1
+        state = {
+            "alive": True,
+            "zoom": 1.0,
+            "last_url": "",
+            "last_title": "",
+        }
 
-        if tag in self.HEADING_TAGS:
-            self._newline(2)
-            self._style_stack.append(self.HEADING_TAGS[tag])
-        elif tag == "a":
-            href = attrs.get("href", "").strip()
-            resolved = urljoin(self.base_url, href) if href else None
-            self._href_stack.append(resolved)
-            self._style_stack.append("link")
-        elif tag == "strong" or tag == "b":
-            self._style_stack.append("bold")
-        elif tag == "em" or tag == "i":
-            self._style_stack.append("italic")
-        elif tag == "code":
-            self._style_stack.append("code")
-        elif tag == "pre":
-            self._newline(1)
-            self._style_stack.append("code")
-        elif tag == "br":
-            self._newline(1)
-        elif tag == "li":
-            self._newline(1)
-            self._append("• ", "body", None)
-        elif tag == "img":
-            alt = (attrs.get("alt") or "").strip()
-            if alt:
-                self._append(f"[Imagen: {alt}]", "muted", None)
-        elif tag == "hr":
-            self._newline(1)
-            self._append("────────────────────────────────────────", "muted", None)
-            self._newline(1)
-        elif tag in self.BLOCK_TAGS:
-            self._newline(1)
-        elif tag in {"td", "th"}:
-            if self.parts:
-                self._append("   ", "body", None)
+        def browser_loop():
+            _child_send(
+                conn,
+                {
+                    "type": "ready",
+                    "renderer": "edgechromium",
+                    "title": window_title,
+                },
+            )
 
-    def handle_endtag(self, tag):
-        tag = tag.lower()
+            last_report = 0.0
 
-        if tag in {"script", "style", "noscript", "template", "svg"}:
-            if self._skip_depth:
-                self._skip_depth -= 1
-            return
-        if self._skip_depth:
-            return
+            while state["alive"]:
+                try:
+                    if conn.poll(0.08):
+                        message = conn.recv()
+                        if not isinstance(message, dict):
+                            continue
 
-        if tag == "title":
-            self._in_title = False
-            return
+                        command = str(message.get("cmd", "")).lower()
 
-        if tag in self.HEADING_TAGS:
-            if len(self._style_stack) > 1:
-                self._style_stack.pop()
-            self._newline(2)
-        elif tag == "a":
-            if len(self._href_stack) > 1:
-                self._href_stack.pop()
-            if len(self._style_stack) > 1:
-                self._style_stack.pop()
-        elif tag in {"strong", "b", "em", "i", "code", "pre"}:
-            if len(self._style_stack) > 1:
-                self._style_stack.pop()
-            if tag == "pre":
-                self._newline(1)
-        elif tag == "li":
-            self._newline(1)
-        elif tag in self.BLOCK_TAGS:
-            self._newline(1)
-        elif tag == "tr":
-            self._newline(1)
+                        if command == "navigate":
+                            url = str(message.get("url", "") or "").strip()
+                            if url:
+                                window.load_url(url)
 
-        # Cerrar correctamente el contexto main/article/role=main aunque
-        # existan muchos contenedores del mismo tipo anidados.
-        if self._element_stack:
-            match_index = None
-            for i in range(len(self._element_stack) - 1, -1, -1):
-                if self._element_stack[i][0] == tag:
-                    match_index = i
+                        elif command == "back":
+                            try:
+                                window.run_js("history.back();")
+                            except Exception:
+                                pass
+
+                        elif command == "forward":
+                            try:
+                                window.run_js("history.forward();")
+                            except Exception:
+                                pass
+
+                        elif command == "reload":
+                            try:
+                                window.run_js("location.reload();")
+                            except Exception:
+                                current = window.get_current_url()
+                                if current:
+                                    window.load_url(current)
+
+                        elif command == "zoom":
+                            try:
+                                zoom = float(message.get("factor", 1.0))
+                            except Exception:
+                                zoom = 1.0
+                            state["zoom"] = max(0.5, min(2.0, zoom))
+                            percent = int(round(state["zoom"] * 100))
+                            try:
+                                window.run_js(
+                                    "document.documentElement.style.zoom="
+                                    + repr(str(percent) + "%")
+                                    + ";"
+                                )
+                            except Exception:
+                                pass
+
+                        elif command == "close":
+                            state["alive"] = False
+                            try:
+                                window.destroy()
+                            except Exception:
+                                pass
+                            break
+
+                    now = time.monotonic()
+                    if now - last_report >= 0.45:
+                        last_report = now
+
+                        try:
+                            current_url = str(
+                                window.get_current_url() or ""
+                            ).strip()
+                        except Exception:
+                            current_url = ""
+
+                        current_title = ""
+                        try:
+                            current_title = str(
+                                window.evaluate_js("document.title") or ""
+                            ).strip()
+                        except Exception:
+                            pass
+
+                        if (
+                            current_url != state["last_url"]
+                            or current_title != state["last_title"]
+                        ):
+                            state["last_url"] = current_url
+                            state["last_title"] = current_title
+                            _child_send(
+                                conn,
+                                {
+                                    "type": "state",
+                                    "url": current_url,
+                                    "title": current_title,
+                                },
+                            )
+
+                except (EOFError, OSError):
+                    state["alive"] = False
+                    try:
+                        window.destroy()
+                    except Exception:
+                        pass
                     break
+                except Exception as exc:
+                    _child_send(
+                        conn,
+                        {
+                            "type": "warning",
+                            "message": str(exc),
+                        },
+                    )
+                    time.sleep(0.12)
 
-            if match_index is not None:
-                closing = self._element_stack[match_index:]
-                del self._element_stack[match_index:]
-                for _name, entered_main in closing:
-                    if entered_main:
-                        self._main_depth = max(0, self._main_depth - 1)
+        try:
+            webview.start(
+                func=browser_loop,
+                gui="edgechromium",
+                debug=False,
+                private_mode=False,
+                storage_path=storage_dir,
+            )
+        except Exception as exc:
+            _child_send(
+                conn,
+                {
+                    "type": "error",
+                    "message": (
+                        "No se pudo iniciar Edge WebView2. "
+                        + str(exc)
+                    ),
+                },
+            )
 
-    def handle_data(self, data):
-        if self._skip_depth:
-            return
-
-        if self._in_title:
-            self.title += data
-            return
-
-        if self._style() == "code":
-            text = data
-        else:
-            text = re.sub(r"[ \t\r\f\v]+", " ", data)
-            text = re.sub(r"\n+", " ", text)
-
-        if not text:
-            return
-
-        if self.parts:
-            previous = self.parts[-1][0]
-            if (
-                text.startswith(" ")
-                and previous.endswith((" ", "\n", "\t"))
-            ):
-                text = text.lstrip(" ")
-
-        self._append(text)
-
-    def document(self):
-        title = re.sub(r"\s+", " ", self.title).strip()
-
-        # Preferir el contenido principal cuando exista y tenga sustancia.
-        # Esto elimina de la vista inicial menús, barras laterales y pie.
-        main_text = "".join(part[0] for part in self.main_parts)
-        main_text = re.sub(r"\s+", " ", main_text).strip()
-        if len(main_text) >= 120:
-            return title, self.main_parts
-
-        return title, self.parts
+    except Exception as exc:
+        if conn is not None:
+            _child_send(
+                conn,
+                {
+                    "type": "error",
+                    "message": str(exc),
+                },
+            )
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
 
 
+# ---------------------------------------------------------------------------
+# Herramienta PTM
+# ---------------------------------------------------------------------------
 class WebViewerTool(ttk.Frame):
     def __init__(self, parent, app=None):
         super().__init__(parent)
         self.app = app
-        self._alive = True
-        self._events = queue.Queue()
-        self._request_id = 0
 
         self.address_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="Listo")
+        self.status_var = tk.StringVar(value="Preparando Edge WebView2...")
         self.title_var = tk.StringVar(value="Visor Web")
         self.zoom_var = tk.StringVar(value="100%")
 
-        self.history = []
-        self.history_index = -1
         self.favorites = []
         self.zoom_level = 1.0
-        self._last_url = ""
-        self._current_parts = []
-        self._current_title = "Visor Web"
+        self._last_url = HOME_URL
+
+        self._alive = True
+        self._listener = None
+        self._conn = None
+        self._process = None
+        self._ipc_queue = queue.Queue()
+        self._send_lock = threading.Lock()
+
+        self._child_hwnd = 0
+        self._embedded = False
+        self._embed_attempts = 0
+        self._resize_job = None
+
+        self._token = secrets.token_hex(8)
+        self._child_title = "PTM_WEBVIEW_" + self._token
+        self._authkey = secrets.token_bytes(24)
 
         self._state_path = self._get_state_path()
+        self._storage_dir = str(self._get_storage_dir())
         self._load_state()
-        self._build_ui()
-        self._configure_text_tags()
-        self._refresh_favorites_menu()
-        self._update_nav_buttons()
-        self.after(80, self._poll_events)
 
-        start_url = self._last_url or HOME_URL
-        self.after(150, lambda: self.navigate(start_url, record=True))
+        self._build_ui()
+        self.after(80, self._poll_ipc)
+        self.after(180, self._start_browser_process)
 
     # ---------- Estado ----------
-    def _get_state_path(self):
+    def _get_base_dir(self):
         local = os.environ.get("LOCALAPPDATA")
         if local:
             base = Path(local) / "ARCHMOBA" / "PTM" / "visor_web"
         else:
             base = Path.home() / ".archmoba" / "PTM" / "visor_web"
         base.mkdir(parents=True, exist_ok=True)
-        return base / "state.json"
+        return base
+
+    def _get_state_path(self):
+        return self._get_base_dir() / "state.json"
+
+    def _get_storage_dir(self):
+        path = self._get_base_dir() / "webview2_data"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def _load_state(self):
         try:
@@ -282,20 +297,22 @@ class WebViewerTool(ttk.Frame):
         except Exception:
             return
 
-        favorites = data.get("favorites", [])
-        if isinstance(favorites, list):
+        saved = data.get("favorites", [])
+        if isinstance(saved, list):
             self.favorites = [
                 str(item).strip()
-                for item in favorites
+                for item in saved
                 if str(item).strip()
-            ][:30]
+            ][:40]
 
-        self._last_url = str(data.get("last_url", "") or "").strip()
+        last_url = str(data.get("last_url", "") or "").strip()
+        if last_url:
+            self._last_url = last_url
 
         try:
             self.zoom_level = max(
-                0.6,
-                min(1.8, float(data.get("zoom", 1.0))),
+                0.5,
+                min(2.0, float(data.get("zoom", 1.0))),
             )
         except Exception:
             self.zoom_level = 1.0
@@ -305,12 +322,13 @@ class WebViewerTool(ttk.Frame):
             self._state_path.write_text(
                 json.dumps(
                     {
-                        "favorites": self.favorites[:30],
-                        "last_url": self.address_var.get().strip(),
+                        "favorites": self.favorites[:40],
+                        "last_url": self.address_var.get().strip()
+                        or self._last_url,
                         "zoom": self.zoom_level,
                     },
-                    indent=2,
                     ensure_ascii=False,
+                    indent=2,
                 ),
                 encoding="utf-8",
             )
@@ -322,22 +340,22 @@ class WebViewerTool(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
-        toolbar = ttk.Frame(self, padding=(8, 7, 8, 4))
+        toolbar = ttk.Frame(self, padding=(7, 6, 7, 4))
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.columnconfigure(5, weight=1)
 
         self.back_btn = ttk.Button(
-            toolbar, text="←", width=3, command=self.go_back
+            toolbar, text="←", width=3, command=lambda: self._send({"cmd": "back"})
         )
         self.back_btn.grid(row=0, column=0, padx=(0, 3))
 
         self.forward_btn = ttk.Button(
-            toolbar, text="→", width=3, command=self.go_forward
+            toolbar, text="→", width=3, command=lambda: self._send({"cmd": "forward"})
         )
         self.forward_btn.grid(row=0, column=1, padx=3)
 
         self.reload_btn = ttk.Button(
-            toolbar, text="↻", width=3, command=self.reload_page
+            toolbar, text="↻", width=3, command=lambda: self._send({"cmd": "reload"})
         )
         self.reload_btn.grid(row=0, column=2, padx=3)
 
@@ -372,7 +390,7 @@ class WebViewerTool(ttk.Frame):
             toolbar, text="Ir", width=4, command=self.go_address
         ).grid(row=0, column=6, padx=(5, 0))
 
-        secondary = ttk.Frame(self, padding=(8, 0, 8, 5))
+        secondary = ttk.Frame(self, padding=(7, 0, 7, 5))
         secondary.grid(row=1, column=0, sticky="ew")
         secondary.columnconfigure(2, weight=1)
 
@@ -387,8 +405,13 @@ class WebViewerTool(ttk.Frame):
             secondary, text="Favoritos ▾"
         )
         self.favorites_btn.grid(row=0, column=1, padx=(0, 8))
-        self.favorites_menu = tk.Menu(self.favorites_btn, tearoff=0)
+
+        self.favorites_menu = tk.Menu(
+            self.favorites_btn,
+            tearoff=0,
+        )
         self.favorites_btn.configure(menu=self.favorites_menu)
+        self._refresh_favorites_menu()
 
         ttk.Label(
             secondary,
@@ -423,31 +446,51 @@ class WebViewerTool(ttk.Frame):
             command=self.reset_zoom,
         ).grid(row=0, column=6, padx=(3, 0))
 
-        content = ttk.Frame(self, padding=(8, 0, 8, 0))
-        content.grid(row=2, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-        content.rowconfigure(0, weight=1)
-
-        self.text = tk.Text(
-            content,
-            wrap="word",
-            relief="flat",
+        self.browser_host = tk.Frame(
+            self,
+            bg="white",
             bd=0,
-            padx=18,
-            pady=14,
-            cursor="arrow",
-            undo=False,
-            state="disabled",
+            highlightthickness=0,
         )
-        self.text.grid(row=0, column=0, sticky="nsew")
+        self.browser_host.grid(
+            row=2,
+            column=0,
+            sticky="nsew",
+            padx=7,
+        )
+        self.browser_host.grid_propagate(False)
 
-        scrollbar = ttk.Scrollbar(
-            content,
-            orient="vertical",
-            command=self.text.yview,
+        self.placeholder = ttk.Frame(self.browser_host)
+        self.placeholder.place(
+            relx=0,
+            rely=0,
+            relwidth=1,
+            relheight=1,
         )
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.text.configure(yscrollcommand=scrollbar.set)
+
+        self.placeholder.columnconfigure(0, weight=1)
+        self.placeholder.rowconfigure(0, weight=1)
+
+        center = ttk.Frame(self.placeholder)
+        center.grid(row=0, column=0)
+
+        ttk.Label(
+            center,
+            text="Visor Web",
+            font=("Segoe UI", 15, "bold"),
+        ).pack(pady=(0, 7))
+
+        self.placeholder_status = ttk.Label(
+            center,
+            text="Iniciando Edge WebView2...",
+        )
+        self.placeholder_status.pack()
+
+        self.retry_btn = ttk.Button(
+            center,
+            text="Reintentar",
+            command=self._restart_browser,
+        )
 
         status = ttk.Frame(self, padding=(8, 4))
         status.grid(row=3, column=0, sticky="ew")
@@ -461,60 +504,421 @@ class WebViewerTool(ttk.Frame):
 
         ttk.Label(
             status,
-            text="Modo seguro · HTML como texto estructurado",
+            text="Edge WebView2 · proceso aislado",
         ).grid(row=0, column=1, padx=(8, 0))
 
         self.address_var.trace_add(
-            "write", lambda *_: self._update_clear_button()
+            "write",
+            lambda *_: self._update_clear_button(),
         )
+        self.browser_host.bind(
+            "<Configure>",
+            self._on_host_configure,
+            add="+",
+        )
+
         self._update_clear_button()
         self._update_zoom_text()
 
-    def _configure_text_tags(self):
-        base = max(8, int(round(11 * self.zoom_level)))
-        family = "Segoe UI"
+    # ---------- Proceso/IPC ----------
+    def _windowless_python(self):
+        executable = Path(sys.executable)
+        if os.name == "nt" and executable.name.lower() == "python.exe":
+            candidate = executable.with_name("pythonw.exe")
+            if candidate.exists():
+                return str(candidate)
+        return str(executable)
 
-        self.font_body = tkfont.Font(
-            family=family, size=base
+    def _start_browser_process(self):
+        if not self._alive:
+            return
+
+        if os.name != "nt":
+            self._show_browser_error(
+                "Visor Web 2.0 requiere Windows y Microsoft Edge WebView2."
+            )
+            return
+
+        if self._process is not None and self._process.poll() is None:
+            return
+
+        self.status_var.set("Iniciando Edge WebView2...")
+        self.placeholder_status.configure(
+            text="Iniciando Edge WebView2..."
         )
-        self.font_bold = tkfont.Font(
-            family=family, size=base, weight="bold"
-        )
-        self.font_italic = tkfont.Font(
-            family=family, size=base, slant="italic"
-        )
-        self.font_h1 = tkfont.Font(
-            family=family,
-            size=max(base + 7, int(round(base * 1.65))),
-            weight="bold",
-        )
-        self.font_h2 = tkfont.Font(
-            family=family,
-            size=max(base + 4, int(round(base * 1.38))),
-            weight="bold",
-        )
-        self.font_h3 = tkfont.Font(
-            family=family,
-            size=max(base + 2, int(round(base * 1.18))),
-            weight="bold",
-        )
-        self.font_code = tkfont.Font(
-            family="Consolas",
-            size=max(8, base - 1),
+        self.retry_btn.pack_forget()
+        self.placeholder.place(
+            relx=0,
+            rely=0,
+            relwidth=1,
+            relheight=1,
         )
 
-        self.text.configure(font=self.font_body)
-        self.text.tag_configure("body", font=self.font_body)
-        self.text.tag_configure("bold", font=self.font_bold)
-        self.text.tag_configure("italic", font=self.font_italic)
-        self.text.tag_configure("h1", font=self.font_h1, spacing1=10, spacing3=8)
-        self.text.tag_configure("h2", font=self.font_h2, spacing1=9, spacing3=6)
-        self.text.tag_configure("h3", font=self.font_h3, spacing1=7, spacing3=5)
-        self.text.tag_configure("code", font=self.font_code, background="#F4F4F4")
-        self.text.tag_configure("muted", foreground="#666666")
-        self.text.tag_configure("link", foreground="#0563C1", underline=True)
+        try:
+            self._listener = Listener(
+                ("127.0.0.1", 0),
+                authkey=self._authkey,
+            )
+            port = int(self._listener.address[1])
 
-    # ---------- Direcciones ----------
+            command = [
+                self._windowless_python(),
+                str(Path(__file__).resolve()),
+                CHILD_FLAG,
+                str(port),
+                self._authkey.hex(),
+                self._child_title,
+                self._last_url or HOME_URL,
+                self._storage_dir,
+            ]
+
+            kwargs = {}
+            if os.name == "nt":
+                kwargs["creationflags"] = int(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                )
+
+            self._process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **kwargs,
+            )
+
+            threading.Thread(
+                target=self._accept_child,
+                daemon=True,
+            ).start()
+
+        except Exception as exc:
+            self._show_browser_error(
+                "No se pudo iniciar el proceso WebView2: " + str(exc)
+            )
+
+    def _accept_child(self):
+        listener = self._listener
+        if listener is None:
+            return
+
+        try:
+            conn = listener.accept()
+            self._conn = conn
+            self._ipc_queue.put(
+                {"type": "connected"}
+            )
+
+            while self._alive:
+                try:
+                    if conn.poll(0.2):
+                        message = conn.recv()
+                        if isinstance(message, dict):
+                            self._ipc_queue.put(message)
+                except (EOFError, OSError):
+                    break
+                except Exception as exc:
+                    self._ipc_queue.put(
+                        {
+                            "type": "warning",
+                            "message": str(exc),
+                        }
+                    )
+                    break
+        except Exception as exc:
+            if self._alive:
+                self._ipc_queue.put(
+                    {
+                        "type": "error",
+                        "message": (
+                            "No se pudo conectar con WebView2: "
+                            + str(exc)
+                        ),
+                    }
+                )
+        finally:
+            try:
+                listener.close()
+            except Exception:
+                pass
+
+    def _send(self, payload):
+        conn = self._conn
+        if conn is None:
+            return False
+
+        try:
+            with self._send_lock:
+                conn.send(payload)
+            return True
+        except Exception:
+            return False
+
+    def _poll_ipc(self):
+        if not self._alive:
+            return
+
+        try:
+            while True:
+                message = self._ipc_queue.get_nowait()
+                self._handle_child_message(message)
+        except queue.Empty:
+            pass
+
+        if (
+            self._process is not None
+            and self._process.poll() is not None
+            and self._alive
+            and self._embedded
+        ):
+            self._embedded = False
+            self._child_hwnd = 0
+            self._show_browser_error(
+                "El proceso Edge WebView2 se cerró. PTM continúa funcionando."
+            )
+
+        try:
+            self.after(90, self._poll_ipc)
+        except tk.TclError:
+            pass
+
+    def _handle_child_message(self, message):
+        kind = str(message.get("type", ""))
+
+        if kind == "starting":
+            self.status_var.set("Cargando motor Edge WebView2...")
+
+        elif kind == "ready":
+            self.status_var.set("Integrando Edge WebView2 en PTM...")
+            self._embed_attempts = 0
+            self.after(20, self._attempt_embed)
+
+        elif kind == "state":
+            url = str(message.get("url", "") or "").strip()
+            title = str(message.get("title", "") or "").strip()
+
+            if url:
+                self._last_url = url
+                if self.address_entry.focus_get() is not self.address_entry:
+                    self.address_var.set(url)
+
+            if title:
+                self.title_var.set(title[:100])
+            else:
+                self.title_var.set("Visor Web")
+
+            if self._embedded:
+                self.status_var.set("Listo")
+
+            self._update_favorite_button()
+            self._save_state()
+
+        elif kind == "warning":
+            if not self._embedded:
+                self.status_var.set(
+                    str(message.get("message", "Preparando navegador..."))
+                )
+
+        elif kind == "error":
+            self._show_browser_error(
+                str(
+                    message.get(
+                        "message",
+                        "No se pudo iniciar Edge WebView2.",
+                    )
+                )
+            )
+
+    # ---------- Integración Win32 ----------
+    def _win_api(self):
+        user32 = ctypes.windll.user32
+
+        get_long = getattr(
+            user32,
+            "GetWindowLongPtrW",
+            user32.GetWindowLongW,
+        )
+        set_long = getattr(
+            user32,
+            "SetWindowLongPtrW",
+            user32.SetWindowLongW,
+        )
+
+        get_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        get_long.restype = ctypes.c_ssize_t
+
+        set_long.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_ssize_t,
+        ]
+        set_long.restype = ctypes.c_ssize_t
+
+        return user32, get_long, set_long
+
+    def _attempt_embed(self):
+        if not self._alive or os.name != "nt":
+            return
+
+        try:
+            user32, get_long, set_long = self._win_api()
+
+            user32.FindWindowW.argtypes = [
+                ctypes.c_wchar_p,
+                ctypes.c_wchar_p,
+            ]
+            user32.FindWindowW.restype = ctypes.c_void_p
+
+            hwnd = user32.FindWindowW(
+                None,
+                self._child_title,
+            )
+
+            if not hwnd:
+                self._embed_attempts += 1
+                if self._embed_attempts < 80:
+                    self.after(50, self._attempt_embed)
+                else:
+                    self._show_browser_error(
+                        "WebView2 inició, pero PTM no pudo encontrar su ventana."
+                    )
+                return
+
+            parent_hwnd = ctypes.c_void_p(
+                int(self.browser_host.winfo_id())
+            )
+
+            GWL_STYLE = -16
+            WS_CHILD = 0x40000000
+            WS_VISIBLE = 0x10000000
+            WS_POPUP = 0x80000000
+            WS_CAPTION = 0x00C00000
+            WS_THICKFRAME = 0x00040000
+            WS_SYSMENU = 0x00080000
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_CLIPSIBLINGS = 0x04000000
+            WS_CLIPCHILDREN = 0x02000000
+
+            style = int(
+                get_long(
+                    ctypes.c_void_p(hwnd),
+                    GWL_STYLE,
+                )
+            )
+
+            style &= ~(
+                WS_POPUP
+                | WS_CAPTION
+                | WS_THICKFRAME
+                | WS_SYSMENU
+                | WS_MINIMIZEBOX
+                | WS_MAXIMIZEBOX
+            )
+            style |= (
+                WS_CHILD
+                | WS_VISIBLE
+                | WS_CLIPSIBLINGS
+                | WS_CLIPCHILDREN
+            )
+
+            user32.SetParent(
+                ctypes.c_void_p(hwnd),
+                parent_hwnd,
+            )
+            set_long(
+                ctypes.c_void_p(hwnd),
+                GWL_STYLE,
+                style,
+            )
+
+            self._child_hwnd = int(hwnd)
+            self._embedded = True
+
+            self.placeholder.place_forget()
+            self.status_var.set("Listo")
+            self._resize_embedded(force=True)
+
+            user32.ShowWindow(
+                ctypes.c_void_p(hwnd),
+                5,
+            )
+
+            self._send(
+                {
+                    "cmd": "zoom",
+                    "factor": self.zoom_level,
+                }
+            )
+
+        except Exception as exc:
+            self._show_browser_error(
+                "No se pudo incrustar WebView2: " + str(exc)
+            )
+
+    def _on_host_configure(self, _event=None):
+        if not self._embedded:
+            return
+
+        if self._resize_job is not None:
+            try:
+                self.after_cancel(self._resize_job)
+            except Exception:
+                pass
+
+        self._resize_job = self.after(
+            35,
+            self._resize_embedded,
+        )
+
+    def _resize_embedded(self, force=False):
+        self._resize_job = None
+
+        if not self._embedded or not self._child_hwnd:
+            return
+
+        try:
+            width = max(1, int(self.browser_host.winfo_width()))
+            height = max(1, int(self.browser_host.winfo_height()))
+
+            user32 = ctypes.windll.user32
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            SWP_SHOWWINDOW = 0x0040
+
+            flags = (
+                SWP_NOZORDER
+                | SWP_NOACTIVATE
+                | SWP_SHOWWINDOW
+            )
+            if force:
+                flags |= SWP_FRAMECHANGED
+
+            user32.SetWindowPos(
+                ctypes.c_void_p(self._child_hwnd),
+                None,
+                0,
+                0,
+                width,
+                height,
+                flags,
+            )
+        except Exception:
+            pass
+
+    def _set_embedded_visible(self, visible):
+        if not self._child_hwnd or os.name != "nt":
+            return
+
+        try:
+            ctypes.windll.user32.ShowWindow(
+                ctypes.c_void_p(self._child_hwnd),
+                5 if visible else 0,
+            )
+        except Exception:
+            pass
+
+    # ---------- Navegación ----------
     def _normalize_address(self, raw):
         value = str(raw or "").strip()
         if not value:
@@ -525,7 +929,9 @@ class WebViewerTool(ttk.Frame):
             return value
 
         if " " in value or "." not in value:
-            return SEARCH_URL.format(query=quote_plus(value))
+            return SEARCH_URL.format(
+                query=quote_plus(value)
+            )
 
         return "https://" + value
 
@@ -534,280 +940,50 @@ class WebViewerTool(ttk.Frame):
         return "break"
 
     def go_address(self):
-        self.navigate(self.address_var.get(), record=True)
-
-    def clear_address(self):
-        self.address_var.set("")
-        self.address_entry.focus_set()
-
-    def _update_clear_button(self):
-        try:
-            self.clear_btn.configure(
-                state=("normal" if self.address_var.get() else "disabled")
-            )
-        except Exception:
-            pass
-
-    # ---------- Navegacion ----------
-    def navigate(self, raw_url, record=True):
-        target = self._normalize_address(raw_url)
+        target = self._normalize_address(
+            self.address_var.get()
+        )
         if not target:
             self.address_entry.focus_set()
             return
 
-        parsed = urlparse(target)
-        if parsed.scheme not in {"http", "https"}:
-            self.status_var.set("Solo se permiten direcciones http:// y https://")
-            return
-
-        if record:
-            if self.history_index < len(self.history) - 1:
-                self.history = self.history[: self.history_index + 1]
-            if (
-                self.history_index < 0
-                or not self.history
-                or self.history[self.history_index] != target
-            ):
-                self.history.append(target)
-                self.history = self.history[-80:]
-                self.history_index = len(self.history) - 1
-
-        self._request_id += 1
-        request_id = self._request_id
         self.address_var.set(target)
-        self.title_var.set("Visor Web")
         self.status_var.set("Cargando...")
-        self._show_loading(target)
-        self._update_nav_buttons()
-
-        threading.Thread(
-            target=self._download_worker,
-            args=(request_id, target),
-            daemon=True,
-        ).start()
-
-    def _download_worker(self, request_id, target):
-        try:
-            request = Request(
-                target,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 Chrome/124 Safari/537.36"
-                    ),
-                    "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5",
-                    "Accept-Language": "es,en;q=0.8",
-                    "Connection": "close",
-                },
-            )
-
-            context = ssl.create_default_context()
-            with urlopen(
-                request,
-                timeout=15,
-                context=context,
-            ) as response:
-                final_url = response.geturl()
-                content_type = response.headers.get_content_type()
-                charset = response.headers.get_content_charset() or "utf-8"
-
-                raw = response.read(MAX_DOWNLOAD_BYTES + 1)
-                truncated = len(raw) > MAX_DOWNLOAD_BYTES
-                raw = raw[:MAX_DOWNLOAD_BYTES]
-
-            try:
-                text = raw.decode(charset, errors="replace")
-            except LookupError:
-                text = raw.decode("utf-8", errors="replace")
-
-            if content_type in {"text/html", "application/xhtml+xml"}:
-                parser = _SafeHTMLParser(final_url)
-                parser.feed(text)
-                parser.close()
-                title, parts = parser.document()
-            elif content_type.startswith("text/") or content_type in {
-                "application/json",
-                "application/xml",
-            }:
-                title = final_url
-                parts = [(text, "code", None)]
-            else:
-                title = final_url
-                parts = [
-                    (
-                        "Este recurso no es una pagina de texto que el visor "
-                        f"seguro pueda mostrar. Tipo recibido: {content_type}",
-                        "body",
-                        None,
-                    )
-                ]
-
-            self._events.put(
-                (
-                    "loaded",
-                    request_id,
-                    {
-                        "url": final_url,
-                        "title": title or final_url,
-                        "parts": parts,
-                        "truncated": truncated,
-                    },
-                )
-            )
-        except HTTPError as exc:
-            self._events.put(
-                (
-                    "error",
-                    request_id,
-                    f"Error HTTP {exc.code}: {exc.reason}",
-                )
-            )
-        except URLError as exc:
-            self._events.put(
-                (
-                    "error",
-                    request_id,
-                    f"No se pudo conectar: {exc.reason}",
-                )
-            )
-        except Exception as exc:
-            self._events.put(
-                (
-                    "error",
-                    request_id,
-                    f"No se pudo abrir la pagina: {exc}",
-                )
-            )
-
-    def _poll_events(self):
-        if not self._alive:
-            return
-
-        try:
-            while True:
-                kind, request_id, payload = self._events.get_nowait()
-                if request_id != self._request_id:
-                    continue
-
-                if kind == "loaded":
-                    self._apply_document(payload)
-                else:
-                    self._show_error(str(payload))
-        except queue.Empty:
-            pass
-
-        try:
-            self.after(80, self._poll_events)
-        except tk.TclError:
-            pass
-
-    def _apply_document(self, payload):
-        final_url = payload["url"]
-        title = payload["title"]
-        parts = payload["parts"]
-
-        self.address_var.set(final_url)
-        self._last_url = final_url
-        self._current_title = title
-        self._current_parts = parts
-
-        if 0 <= self.history_index < len(self.history):
-            self.history[self.history_index] = final_url
-
-        self.title_var.set(title[:90])
-        self._render_document()
-
-        if payload.get("truncated"):
-            self.status_var.set(
-                "Listo · contenido limitado a 4 MB por seguridad"
-            )
-        else:
-            self.status_var.set("Listo")
-
-        self._update_nav_buttons()
-        self._update_favorite_button()
-        self._save_state()
-
-    def _render_document(self):
-        self.text.configure(state="normal")
-        self.text.delete("1.0", "end")
-
-        for index, (value, style, href) in enumerate(self._current_parts):
-            if not value:
-                continue
-
-            if href:
-                tag_name = f"link_{index}"
-                self.text.insert("end", value, ("link", tag_name))
-                self.text.tag_configure(tag_name)
-                self.text.tag_bind(
-                    tag_name,
-                    "<Enter>",
-                    lambda _e: self.text.configure(cursor="hand2"),
-                )
-                self.text.tag_bind(
-                    tag_name,
-                    "<Leave>",
-                    lambda _e: self.text.configure(cursor="arrow"),
-                )
-                self.text.tag_bind(
-                    tag_name,
-                    "<Button-1>",
-                    lambda _e, url=href: self.navigate(url, record=True),
-                )
-            else:
-                self.text.insert("end", value, (style or "body",))
-
-        self.text.configure(state="disabled")
-        self.text.yview_moveto(0)
-
-    def _show_loading(self, target):
-        self.text.configure(state="normal")
-        self.text.delete("1.0", "end")
-        self.text.insert("end", "Cargando pagina...\n\n", ("h2",))
-        self.text.insert("end", target, ("muted",))
-        self.text.configure(state="disabled")
-
-    def _show_error(self, message):
-        self.status_var.set(message)
-        self.text.configure(state="normal")
-        self.text.delete("1.0", "end")
-        self.text.insert("end", "No se pudo abrir la pagina\n\n", ("h2",))
-        self.text.insert("end", message, ("body",))
-        self.text.configure(state="disabled")
-        self._update_nav_buttons()
-
-    def go_back(self):
-        if self.history_index <= 0:
-            return
-        self.history_index -= 1
-        self.navigate(self.history[self.history_index], record=False)
-
-    def go_forward(self):
-        if self.history_index >= len(self.history) - 1:
-            return
-        self.history_index += 1
-        self.navigate(self.history[self.history_index], record=False)
+        self._send(
+            {
+                "cmd": "navigate",
+                "url": target,
+            }
+        )
 
     def go_home(self):
-        self.navigate(HOME_URL, record=True)
-
-    def reload_page(self):
-        current = self.address_var.get().strip()
-        if current:
-            self.navigate(current, record=False)
-
-    def _update_nav_buttons(self):
-        self.back_btn.configure(
-            state=("normal" if self.history_index > 0 else "disabled")
+        self.address_var.set(HOME_URL)
+        self.status_var.set("Cargando...")
+        self._send(
+            {
+                "cmd": "navigate",
+                "url": HOME_URL,
+            }
         )
-        self.forward_btn.configure(
-            state=(
-                "normal"
-                if 0 <= self.history_index < len(self.history) - 1
-                else "disabled"
+
+    def clear_address(self):
+        self.address_var.set("")
+        try:
+            self.address_entry.focus_set()
+        except Exception:
+            pass
+
+    def _update_clear_button(self):
+        try:
+            self.clear_btn.configure(
+                state=(
+                    "normal"
+                    if self.address_var.get()
+                    else "disabled"
+                )
             )
-        )
+        except Exception:
+            pass
 
     # ---------- Favoritos ----------
     def toggle_favorite(self):
@@ -819,7 +995,7 @@ class WebViewerTool(ttk.Frame):
             self.favorites.remove(url)
         else:
             self.favorites.append(url)
-            self.favorites = self.favorites[-30:]
+            self.favorites = self.favorites[-40:]
 
         self._refresh_favorites_menu()
         self._update_favorite_button()
@@ -827,9 +1003,16 @@ class WebViewerTool(ttk.Frame):
 
     def _update_favorite_button(self):
         url = self.address_var.get().strip()
-        self.favorite_btn.configure(
-            text=("★ Favorito" if url in self.favorites else "☆ Favorito")
-        )
+        try:
+            self.favorite_btn.configure(
+                text=(
+                    "★ Favorito"
+                    if url in self.favorites
+                    else "☆ Favorito"
+                )
+            )
+        except Exception:
+            pass
 
     def _refresh_favorites_menu(self):
         self.favorites_menu.delete(0, "end")
@@ -842,16 +1025,29 @@ class WebViewerTool(ttk.Frame):
             return
 
         for url in self.favorites:
-            label = url if len(url) <= 55 else url[:52] + "..."
+            label = (
+                url
+                if len(url) <= 58
+                else url[:55] + "..."
+            )
             self.favorites_menu.add_command(
                 label=label,
-                command=lambda u=url: self.navigate(u, record=True),
+                command=lambda u=url: self._navigate_favorite(u),
             )
 
         self.favorites_menu.add_separator()
         self.favorites_menu.add_command(
             label="Limpiar favoritos",
             command=self.clear_favorites,
+        )
+
+    def _navigate_favorite(self, url):
+        self.address_var.set(url)
+        self._send(
+            {
+                "cmd": "navigate",
+                "url": url,
+            }
         )
 
     def clear_favorites(self):
@@ -863,50 +1059,155 @@ class WebViewerTool(ttk.Frame):
     # ---------- Zoom ----------
     def change_zoom(self, delta):
         self.zoom_level = max(
-            0.6,
-            min(1.8, round(self.zoom_level + delta, 2)),
+            0.5,
+            min(
+                2.0,
+                round(
+                    self.zoom_level + float(delta),
+                    2,
+                ),
+            ),
         )
-        self._configure_text_tags()
         self._update_zoom_text()
-        if self._current_parts:
-            current_y = self.text.yview()[0]
-            self._render_document()
-            self.text.yview_moveto(current_y)
+        self._send(
+            {
+                "cmd": "zoom",
+                "factor": self.zoom_level,
+            }
+        )
         self._save_state()
 
     def reset_zoom(self):
         self.zoom_level = 1.0
-        self._configure_text_tags()
         self._update_zoom_text()
-        if self._current_parts:
-            current_y = self.text.yview()[0]
-            self._render_document()
-            self.text.yview_moveto(current_y)
+        self._send(
+            {
+                "cmd": "zoom",
+                "factor": 1.0,
+            }
+        )
         self._save_state()
 
     def _update_zoom_text(self):
-        self.zoom_var.set(f"{int(round(self.zoom_level * 100))}%")
+        self.zoom_var.set(
+            f"{int(round(self.zoom_level * 100))}%"
+        )
+
+    # ---------- Errores / reinicio ----------
+    def _show_browser_error(self, message):
+        self._embedded = False
+        self._child_hwnd = 0
+        self.status_var.set(message)
+
+        try:
+            self.placeholder_status.configure(
+                text=message,
+                wraplength=560,
+                justify="center",
+            )
+            self.placeholder.place(
+                relx=0,
+                rely=0,
+                relwidth=1,
+                relheight=1,
+            )
+            if not self.retry_btn.winfo_manager():
+                self.retry_btn.pack(pady=(12, 0))
+        except Exception:
+            pass
+
+    def _restart_browser(self):
+        self._stop_browser()
+        self._token = secrets.token_hex(8)
+        self._child_title = "PTM_WEBVIEW_" + self._token
+        self._authkey = secrets.token_bytes(24)
+        self._conn = None
+        self._listener = None
+        self._process = None
+        self._child_hwnd = 0
+        self._embedded = False
+        self._embed_attempts = 0
+        self.after(120, self._start_browser_process)
+
+    def _stop_browser(self):
+        self._send({"cmd": "close"})
+
+        conn = self._conn
+        self._conn = None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        listener = self._listener
+        self._listener = None
+        if listener is not None:
+            try:
+                listener.close()
+            except Exception:
+                pass
+
+        process = self._process
+        if process is not None:
+            try:
+                process.wait(timeout=1.2)
+            except Exception:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+
+        self._process = None
+        self._child_hwnd = 0
+        self._embedded = False
 
     # ---------- Ciclo PTM ----------
     def on_show(self):
-        self._update_nav_buttons()
+        self._set_embedded_visible(True)
+        self.after(25, lambda: self._resize_embedded(force=True))
 
     def on_hide(self):
+        self._set_embedded_visible(False)
         self._save_state()
 
     def on_close(self):
         self._alive = False
-        self._request_id += 1
         self._save_state()
+        self._stop_browser()
 
 
 App = WebViewerTool
 
 
-if __name__ == "__main__":
+def _run_standalone():
     root = tk.Tk()
     root.title(TOOL_NAME)
-    root.geometry("1000x680")
-    root.minsize(720, 480)
-    WebViewerTool(root).pack(fill="both", expand=True)
+    root.geometry("1050x720")
+    root.minsize(760, 500)
+
+    tool = WebViewerTool(root)
+    tool.pack(fill="both", expand=True)
+
+    def close():
+        tool.on_close()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", close)
     root.mainloop()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == CHILD_FLAG:
+        if len(sys.argv) < 7:
+            raise SystemExit(2)
+
+        _browser_child(
+            sys.argv[2],
+            sys.argv[3],
+            sys.argv[4],
+            sys.argv[5],
+            sys.argv[6],
+        )
+    else:
+        _run_standalone()
