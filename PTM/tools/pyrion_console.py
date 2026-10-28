@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.8.0"
+TOOL_VERSION = "1.9.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -144,8 +144,10 @@ class PyrionConsoleTool(tk.Frame):
             ("amixer", "Estado y niveles actuales del mezclador"),
         ]
 
-        self.keyboard_visible = False
-        self.keyboard_upper = False
+        self.keyboard_window = None
+        self.keyboard_mode = "lower"
+        self.keyboard_drag_x = 0
+        self.keyboard_drag_y = 0
 
         self._build_ui()
 
@@ -313,10 +315,6 @@ class PyrionConsoleTool(tk.Frame):
             font=("DejaVu Sans", 12),
         ).pack(side="right", fill="y")
 
-        self.keyboard = tk.Frame(self, bg=PANEL)
-        self.keyboard_rows = tk.Frame(self.keyboard, bg=PANEL)
-        self.keyboard_rows.pack(fill="x", padx=4, pady=4)
-        self._draw_keyboard()
 
     # ---------- pestañas ----------
     def open_tab(self, tab_type):
@@ -778,45 +776,205 @@ class PyrionConsoleTool(tk.Frame):
         except Exception as exc:
             self._append(f"[error] {exc}", self.active_tab)
 
-    # ---------- teclado ----------
+    # ---------- teclado flotante ----------
     def toggle_keyboard(self):
-        self.keyboard_visible = not self.keyboard_visible
+        if self.keyboard_window is not None:
+            try:
+                if self.keyboard_window.winfo_exists():
+                    self.close_keyboard()
+                    return
+            except tk.TclError:
+                pass
 
-        if self.keyboard_visible:
-            self.keyboard.pack(fill="x", padx=2, pady=(0, 2))
-        else:
-            self.keyboard.pack_forget()
+        self.open_keyboard()
+
+    def open_keyboard(self):
+        if self.keyboard_window is not None:
+            try:
+                if self.keyboard_window.winfo_exists():
+                    self.keyboard_window.lift()
+                    return
+            except tk.TclError:
+                pass
+
+        win = tk.Toplevel(self)
+        self.keyboard_window = win
+
+        try:
+            win.overrideredirect(True)
+        except tk.TclError:
+            pass
+
+        try:
+            win.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+
+        win.configure(bg=TAB)
+
+        width = 560
+        height = 255
+        try:
+            self.update_idletasks()
+            x = self.winfo_rootx() + max(20, (self.winfo_width() - width) // 2)
+            y = self.winfo_rooty() + max(40, self.winfo_height() - height - 55)
+        except tk.TclError:
+            x, y = 120, 120
+
+        win.geometry(f"{width}x{height}+{x}+{y}")
+
+        titlebar = tk.Frame(win, bg=TAB_ACTIVE, height=34)
+        titlebar.pack(fill="x")
+        titlebar.pack_propagate(False)
+
+        title = tk.Label(
+            titlebar,
+            text="PYRION Keyboard",
+            bg=TAB_ACTIVE,
+            fg=FG,
+            font=("DejaVu Sans", 9, "bold"),
+            padx=10,
+        )
+        title.pack(side="left", fill="y")
+
+        tk.Button(
+            titlebar,
+            text="×",
+            command=self.close_keyboard,
+            bg=TAB_ACTIVE,
+            fg=RED,
+            activebackground=RED,
+            activeforeground="#FFFFFF",
+            bd=0,
+            relief="flat",
+            width=4,
+            font=("DejaVu Sans", 12, "bold"),
+        ).pack(side="right", fill="y")
+
+        for widget in (titlebar, title):
+            widget.bind("<Button-1>", self._keyboard_drag_start)
+            widget.bind("<B1-Motion>", self._keyboard_drag_move)
+
+        modes = tk.Frame(win, bg=PANEL, height=36)
+        modes.pack(fill="x")
+        modes.pack_propagate(False)
+
+        self.keyboard_mode_buttons = {}
+        for mode, label in (
+            ("numbers", "123"),
+            ("upper", "ABC"),
+            ("lower", "abc"),
+            ("symbols", "#+="),
+        ):
+            button = tk.Button(
+                modes,
+                text=label,
+                command=lambda m=mode: self.set_keyboard_mode(m),
+                bg=TAB,
+                fg=MUTED,
+                activebackground=TAB_ACTIVE,
+                activeforeground=FG,
+                bd=1,
+                relief="solid",
+                padx=14,
+                font=("DejaVu Sans", 9, "bold"),
+            )
+            button.pack(side="left", fill="y", padx=(4, 0), pady=3)
+            self.keyboard_mode_buttons[mode] = button
+
+        self.keyboard_rows = tk.Frame(win, bg=PANEL)
+        self.keyboard_rows.pack(fill="both", expand=True, padx=5, pady=(2, 5))
+
+        self._draw_keyboard()
+        self.command.focus_set()
+
+    def close_keyboard(self):
+        if self.keyboard_window is not None:
+            try:
+                self.keyboard_window.destroy()
+            except tk.TclError:
+                pass
+        self.keyboard_window = None
+        self.command.focus_set()
+
+    def _keyboard_drag_start(self, event):
+        self.keyboard_drag_x = event.x_root
+        self.keyboard_drag_y = event.y_root
+
+    def _keyboard_drag_move(self, event):
+        if self.keyboard_window is None:
+            return
+        try:
+            x = self.keyboard_window.winfo_x() + (event.x_root - self.keyboard_drag_x)
+            y = self.keyboard_window.winfo_y() + (event.y_root - self.keyboard_drag_y)
+            self.keyboard_window.geometry(f"+{x}+{y}")
+            self.keyboard_drag_x = event.x_root
+            self.keyboard_drag_y = event.y_root
+        except tk.TclError:
+            pass
+
+    def set_keyboard_mode(self, mode):
+        if mode not in ("numbers", "upper", "lower", "symbols"):
+            return
+        self.keyboard_mode = mode
+        self._draw_keyboard()
 
     def _draw_keyboard(self):
+        if self.keyboard_window is None:
+            return
+
+        try:
+            if not self.keyboard_window.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
         for child in self.keyboard_rows.winfo_children():
             child.destroy()
 
-        letters = (
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            if self.keyboard_upper
-            else "abcdefghijklmnopqrstuvwxyz"
-        )
+        for mode, button in self.keyboard_mode_buttons.items():
+            selected = mode == self.keyboard_mode
+            button.configure(
+                bg=TAB_ACTIVE if selected else TAB,
+                fg=FG if selected else MUTED,
+            )
 
-        rows = [
-            list("1234567890") + ["-", "=", "⌫"],
-            list(letters[:10]),
-            list(letters[10:19]) + [";", "'", "[", "]"],
-            list(letters[19:])
-            + ["/", "\\", ".", ",", "@", "#", "$", "%", "&", "*"],
-        ]
+        if self.keyboard_mode == "numbers":
+            rows = [
+                list("1234567890"),
+                ["-", "+", "=", "*", "/", "%", ".", ",", "(", ")"],
+            ]
+        elif self.keyboard_mode == "upper":
+            rows = [
+                list("QWERTYUIOP"),
+                list("ASDFGHJKL"),
+                list("ZXCVBNM"),
+            ]
+        elif self.keyboard_mode == "lower":
+            rows = [
+                list("qwertyuiop"),
+                list("asdfghjkl"),
+                list("zxcvbnm"),
+            ]
+        else:
+            rows = [
+                ["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"],
+                ["_", "-", "+", "=", "{", "}", "[", "]", "|", "\\"],
+                [":", ";", "'", '"', "<", ">", ",", ".", "?", "/", "~", "`"],
+            ]
 
         for row_index, chars in enumerate(rows):
-            for col_index, char in enumerate(chars):
-                command = (
-                    self._backspace
-                    if char == "⌫"
-                    else lambda value=char: self._insert_key(value)
-                )
+            row = tk.Frame(self.keyboard_rows, bg=PANEL)
+            row.pack(fill="x", expand=True, pady=1)
 
+            spacer_left = tk.Frame(row, bg=PANEL)
+            spacer_left.pack(side="left", expand=True)
+
+            for char in chars:
                 tk.Button(
-                    self.keyboard_rows,
+                    row,
                     text=char,
-                    command=command,
+                    command=lambda value=char: self._insert_key(value),
                     bg=TAB,
                     fg=FG,
                     activebackground=TAB_ACTIVE,
@@ -824,48 +982,51 @@ class PyrionConsoleTool(tk.Frame):
                     bd=1,
                     relief="solid",
                     width=4,
-                    font=("DejaVu Sans Mono", 8),
-                ).grid(
-                    row=row_index,
-                    column=col_index,
-                    padx=1,
-                    pady=1,
-                    sticky="nsew",
-                )
+                    font=("DejaVu Sans Mono", 9),
+                ).pack(side="left", padx=1, pady=1)
 
-        extras = tk.Frame(self.keyboard, bg=PANEL)
-        extras.pack(fill="x", padx=4, pady=(0, 4))
+            spacer_right = tk.Frame(row, bg=PANEL)
+            spacer_right.pack(side="left", expand=True)
+
+        actions = tk.Frame(self.keyboard_rows, bg=PANEL)
+        actions.pack(fill="x", pady=(4, 0))
 
         tk.Button(
-            extras,
-            text="ABC/abc",
-            command=self._toggle_case,
+            actions,
+            text="⌫",
+            command=self._backspace,
             bg=TAB,
             fg=FG,
+            activebackground=TAB_ACTIVE,
+            activeforeground=FG,
             bd=1,
+            width=6,
+            font=("DejaVu Sans", 9, "bold"),
         ).pack(side="left")
 
         tk.Button(
-            extras,
+            actions,
             text="ESPACIO",
             command=lambda: self._insert_key(" "),
             bg=TAB,
             fg=FG,
+            activebackground=TAB_ACTIVE,
+            activeforeground=FG,
             bd=1,
-        ).pack(
-            side="left",
-            fill="x",
-            expand=True,
-            padx=3,
-        )
+            font=("DejaVu Sans", 9),
+        ).pack(side="left", fill="x", expand=True, padx=4)
 
         tk.Button(
-            extras,
+            actions,
             text="ENTER",
             command=self.execute_input,
             bg=TAB,
-            fg=FG,
+            fg=GREEN,
+            activebackground=TAB_ACTIVE,
+            activeforeground=FG,
             bd=1,
+            width=8,
+            font=("DejaVu Sans", 9, "bold"),
         ).pack(side="right")
 
     def _insert_key(self, value):
@@ -877,10 +1038,6 @@ class PyrionConsoleTool(tk.Frame):
         if position > 0:
             self.command.delete(position - 1, position)
         self.command.focus_set()
-
-    def _toggle_case(self):
-        self.keyboard_upper = not self.keyboard_upper
-        self._draw_keyboard()
 
 
 App = PyrionConsoleTool
