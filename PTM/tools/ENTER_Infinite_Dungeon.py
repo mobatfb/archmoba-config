@@ -3552,13 +3552,21 @@ class EnterGame:
         # Sin PLAY: abandonar el circulo guarda solo si se compro una mejora.
 
     def tick(self):
+        if self._closed:
+            return
+        try:
+            if not self.canvas.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
         now=time.monotonic()
         elapsed=max(0.0,now-self.last)
         dt=min(.040,elapsed); self.last=now; self.frame+=dt
         if self.roster_mode:
             self.update_roster(dt,now)
             self.draw_roster()
-            self.root.after(16,self.tick)
+            self._tick_job = self.root.after(16,self.tick)
             return
         if self.state == 'dead':
             self.update_death_animation(dt)
@@ -3574,7 +3582,19 @@ class EnterGame:
         self.door_progress += (want_open-self.door_progress)*min(1.0,dt*5.5)
         self.update(dt,now)
         self.draw()
-        self.root.after(16,self.tick)
+        self._tick_job = self.root.after(16,self.tick)
+
+    def focus_game(self):
+        if self._closed:
+            return
+        try:
+            self.canvas.focus_set()
+        except tk.TclError:
+            pass
+
+    def on_show(self):
+        self.last = time.monotonic()
+        self.focus_game()
 
     def _initial_fullscreen(self):
         if not self._fullscreen_touched:
