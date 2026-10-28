@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.11.0"
+TOOL_VERSION = "1.12.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -148,7 +148,8 @@ class PyrionConsoleTool(tk.Frame):
         self.keyboard_mode = "lower"
         self.keyboard_drag_x = 0
         self.keyboard_drag_y = 0
-        self.keyboard_keep_job = None
+        self.keyboard_start_x = 0
+        self.keyboard_start_y = 0
 
         self._build_ui()
 
@@ -798,43 +799,32 @@ class PyrionConsoleTool(tk.Frame):
             except tk.TclError:
                 pass
 
-        parent_top = self.winfo_toplevel()
-        win = tk.Toplevel(parent_top)
-        self.keyboard_window = win
+        # Panel flotante INTERNO. No usa Toplevel para evitar que PTM/Xorg
+        # lo ancle abajo o lo trate como una ventana separada.
+        self.update_idletasks()
 
-        try:
-            win.transient(parent_top)
-        except tk.TclError:
-            pass
+        host_w = max(1, self.winfo_width())
+        host_h = max(1, self.winfo_height())
 
-        try:
-            win.overrideredirect(True)
-        except tk.TclError:
-            pass
+        width = min(560, max(360, host_w - 60))
+        height = min(255, max(210, host_h - 100))
 
-        try:
-            win.attributes("-topmost", True)
-        except tk.TclError:
-            pass
+        x = max(0, (host_w - width) // 2)
+        y = max(0, (host_h - height) // 2)
 
-        win.configure(bg=TAB)
+        panel = tk.Frame(
+            self,
+            bg=TAB,
+            bd=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground=ACCENT,
+        )
+        self.keyboard_window = panel
+        panel.place(x=x, y=y, width=width, height=height)
+        panel.lift()
 
-        width = 560
-        height = 255
-
-        # Siempre aparece centrado en la pantalla, no relativo a la consola.
-        try:
-            win.update_idletasks()
-            screen_w = win.winfo_screenwidth()
-            screen_h = win.winfo_screenheight()
-            x = max(0, (screen_w - width) // 2)
-            y = max(0, (screen_h - height) // 2)
-        except tk.TclError:
-            x, y = 120, 120
-
-        win.geometry(f"{width}x{height}+{x}+{y}")
-
-        titlebar = tk.Frame(win, bg=TAB_ACTIVE, height=34)
+        titlebar = tk.Frame(panel, bg=TAB_ACTIVE, height=34, cursor="fleur")
         titlebar.pack(fill="x")
         titlebar.pack_propagate(False)
 
@@ -845,6 +835,7 @@ class PyrionConsoleTool(tk.Frame):
             fg=FG,
             font=("DejaVu Sans", 9, "bold"),
             padx=10,
+            cursor="fleur",
         )
         title.pack(side="left", fill="y")
 
@@ -860,13 +851,14 @@ class PyrionConsoleTool(tk.Frame):
             relief="flat",
             width=4,
             font=("DejaVu Sans", 12, "bold"),
+            takefocus=False,
         ).pack(side="right", fill="y")
 
         for widget in (titlebar, title):
             widget.bind("<Button-1>", self._keyboard_drag_start)
             widget.bind("<B1-Motion>", self._keyboard_drag_move)
 
-        modes = tk.Frame(win, bg=PANEL, height=36)
+        modes = tk.Frame(panel, bg=PANEL, height=36)
         modes.pack(fill="x")
         modes.pack_propagate(False)
 
@@ -889,67 +881,18 @@ class PyrionConsoleTool(tk.Frame):
                 relief="solid",
                 padx=14,
                 font=("DejaVu Sans", 9, "bold"),
+                takefocus=False,
             )
             button.pack(side="left", fill="y", padx=(4, 0), pady=3)
             self.keyboard_mode_buttons[mode] = button
 
-        self.keyboard_rows = tk.Frame(win, bg=PANEL)
+        self.keyboard_rows = tk.Frame(panel, bg=PANEL)
         self.keyboard_rows.pack(fill="both", expand=True, padx=5, pady=(2, 5))
 
         self._draw_keyboard()
-
-        # Forzar que aparezca al frente incluso en Xorg minimal o sin WM completo.
-        try:
-            win.deiconify()
-            win.lift()
-            win.attributes("-topmost", True)
-            win.focus_force()
-        except tk.TclError:
-            pass
-
-        # El Entry sigue recibiendo inserciones programaticas sin robar
-        # el orden visual de la ventana flotante.
-        self.after(10, self._raise_keyboard)
-        self.after(80, self._raise_keyboard)
-        self.after(220, self._raise_keyboard)
-        self._schedule_keyboard_front()
-
-    def _raise_keyboard(self):
-        win = self.keyboard_window
-        if win is None:
-            return
-        try:
-            if not win.winfo_exists():
-                return
-            win.lift()
-            win.attributes("-topmost", True)
-        except tk.TclError:
-            pass
-
-    def _schedule_keyboard_front(self):
-        if self.keyboard_window is None:
-            self.keyboard_keep_job = None
-            return
-        try:
-            if not self.keyboard_window.winfo_exists():
-                self.keyboard_keep_job = None
-                return
-            self.keyboard_window.lift()
-            self.keyboard_window.attributes("-topmost", True)
-        except tk.TclError:
-            self.keyboard_keep_job = None
-            return
-
-        self.keyboard_keep_job = self.after(300, self._schedule_keyboard_front)
+        panel.lift()
 
     def close_keyboard(self):
-        if self.keyboard_keep_job is not None:
-            try:
-                self.after_cancel(self.keyboard_keep_job)
-            except tk.TclError:
-                pass
-            self.keyboard_keep_job = None
-
         if self.keyboard_window is not None:
             try:
                 self.keyboard_window.destroy()
@@ -962,18 +905,46 @@ class PyrionConsoleTool(tk.Frame):
             pass
 
     def _keyboard_drag_start(self, event):
+        panel = self.keyboard_window
+        if panel is None:
+            return
         self.keyboard_drag_x = event.x_root
         self.keyboard_drag_y = event.y_root
+        try:
+            self.keyboard_start_x = panel.winfo_x()
+            self.keyboard_start_y = panel.winfo_y()
+            panel.lift()
+        except tk.TclError:
+            pass
 
     def _keyboard_drag_move(self, event):
-        if self.keyboard_window is None:
+        panel = self.keyboard_window
+        if panel is None:
             return
+
         try:
-            x = self.keyboard_window.winfo_x() + (event.x_root - self.keyboard_drag_x)
-            y = self.keyboard_window.winfo_y() + (event.y_root - self.keyboard_drag_y)
-            self.keyboard_window.geometry(f"+{x}+{y}")
-            self.keyboard_drag_x = event.x_root
-            self.keyboard_drag_y = event.y_root
+            dx = event.x_root - self.keyboard_drag_x
+            dy = event.y_root - self.keyboard_drag_y
+
+            new_x = self.keyboard_start_x + dx
+            new_y = self.keyboard_start_y + dy
+
+            host_w = max(1, self.winfo_width())
+            host_h = max(1, self.winfo_height())
+            panel_w = max(1, panel.winfo_width())
+            panel_h = max(1, panel.winfo_height())
+
+            # Mantener al menos la barra superior dentro del area visible.
+            min_x = -panel_w + 80
+            max_x = host_w - 80
+            min_y = 0
+            max_y = max(0, host_h - 34)
+
+            new_x = max(min_x, min(new_x, max_x))
+            new_y = max(min_y, min(new_y, max_y))
+
+            panel.place_configure(x=new_x, y=new_y)
+            panel.lift()
         except tk.TclError:
             pass
 
@@ -982,13 +953,19 @@ class PyrionConsoleTool(tk.Frame):
             return
         self.keyboard_mode = mode
         self._draw_keyboard()
+        if self.keyboard_window is not None:
+            try:
+                self.keyboard_window.lift()
+            except tk.TclError:
+                pass
 
     def _draw_keyboard(self):
-        if self.keyboard_window is None:
+        panel = self.keyboard_window
+        if panel is None:
             return
 
         try:
-            if not self.keyboard_window.winfo_exists():
+            if not panel.winfo_exists():
                 return
         except tk.TclError:
             return
@@ -1027,12 +1004,11 @@ class PyrionConsoleTool(tk.Frame):
                 [":", ";", "'", '"', "<", ">", ",", ".", "?", "/", "~", "`"],
             ]
 
-        for row_index, chars in enumerate(rows):
+        for chars in rows:
             row = tk.Frame(self.keyboard_rows, bg=PANEL)
             row.pack(fill="x", expand=True, pady=1)
 
-            spacer_left = tk.Frame(row, bg=PANEL)
-            spacer_left.pack(side="left", expand=True)
+            tk.Frame(row, bg=PANEL).pack(side="left", expand=True)
 
             for char in chars:
                 tk.Button(
@@ -1050,8 +1026,7 @@ class PyrionConsoleTool(tk.Frame):
                     takefocus=False,
                 ).pack(side="left", padx=1, pady=1)
 
-            spacer_right = tk.Frame(row, bg=PANEL)
-            spacer_right.pack(side="left", expand=True)
+            tk.Frame(row, bg=PANEL).pack(side="left", expand=True)
 
         actions = tk.Frame(self.keyboard_rows, bg=PANEL)
         actions.pack(fill="x", pady=(4, 0))
@@ -1067,6 +1042,7 @@ class PyrionConsoleTool(tk.Frame):
             bd=1,
             width=6,
             font=("DejaVu Sans", 9, "bold"),
+            takefocus=False,
         ).pack(side="left")
 
         tk.Button(
@@ -1079,6 +1055,7 @@ class PyrionConsoleTool(tk.Frame):
             activeforeground=FG,
             bd=1,
             font=("DejaVu Sans", 9),
+            takefocus=False,
         ).pack(side="left", fill="x", expand=True, padx=4)
 
         tk.Button(
@@ -1092,17 +1069,28 @@ class PyrionConsoleTool(tk.Frame):
             bd=1,
             width=8,
             font=("DejaVu Sans", 9, "bold"),
+            takefocus=False,
         ).pack(side="right")
+
+        panel.lift()
 
     def _insert_key(self, value):
         self.command.insert("insert", value)
-        self._raise_keyboard()
+        if self.keyboard_window is not None:
+            try:
+                self.keyboard_window.lift()
+            except tk.TclError:
+                pass
 
     def _backspace(self):
         position = self.command.index("insert")
         if position > 0:
             self.command.delete(position - 1, position)
-        self._raise_keyboard()
+        if self.keyboard_window is not None:
+            try:
+                self.keyboard_window.lift()
+            except tk.TclError:
+                pass
 
 
 App = PyrionConsoleTool
