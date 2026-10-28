@@ -785,6 +785,28 @@ class PTMApp(tk.Tk):
 
         self.search_box.bind("<Button-1>", lambda _e: self.search_entry.focus_set())
 
+        self.quick_filters = tk.Frame(self.center, bg=WHITE)
+        quick_items = (
+            ("Recientes", "%recents%"),
+            ("Favoritos", "%favorites%"),
+            ("Más usados", "%used%"),
+            ("Recomendados", "%recommended%"),
+        )
+        for index, (label_text, command) in enumerate(quick_items):
+            link = tk.Label(
+                self.quick_filters,
+                text=label_text,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 8, "underline"),
+                cursor="hand2",
+            )
+            link.pack(side="left", padx=(0 if index == 0 else 14, 0))
+            link.bind(
+                "<Button-1>",
+                lambda _e, cmd=command: self._set_search_command(cmd),
+            )
+
         # Contador encima de los resultados, alineado a la derecha.
         self.hint = tk.Label(
             self.center, text="", bg=WHITE, fg=MUTED,
@@ -871,6 +893,7 @@ class PTMApp(tk.Tk):
         self.logo.grid_forget()
         self.logo_compact.grid_forget()
         self.search_wrap.grid_forget()
+        self.quick_filters.grid_forget()
         self.hint.grid_forget()
         self.results_container.grid_forget()
 
@@ -885,12 +908,16 @@ class PTMApp(tk.Tk):
                 row=0, column=1, sticky="n",
                 pady=(0, 0)
             )
+            self.quick_filters.grid(
+                row=1, column=1, sticky="w",
+                pady=(4, 0)
+            )
             self.hint.grid(
-                row=1, column=1, sticky="ew",
+                row=2, column=1, sticky="ew",
                 pady=(3, 3)
             )
             self.results_container.grid(
-                row=2, column=1, sticky="ew"
+                row=3, column=1, sticky="ew"
             )
         else:
             # Diseño inicial: logo centrado encima del buscador.
@@ -903,12 +930,16 @@ class PTMApp(tk.Tk):
                 row=1, column=0, columnspan=2,
                 sticky="n", pady=(16, 0)
             )
-            self.hint.grid(
+            self.quick_filters.grid(
                 row=2, column=0, columnspan=2,
+                sticky="w", pady=(4, 0)
+            )
+            self.hint.grid(
+                row=3, column=0, columnspan=2,
                 sticky="ew", pady=(6, 4)
             )
             self.results_container.grid(
-                row=3, column=0, columnspan=2,
+                row=4, column=0, columnspan=2,
                 sticky="ew"
             )
 
