@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.7.0"
+TOOL_VERSION = "1.8.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -137,6 +137,11 @@ class PyrionConsoleTool(tk.Frame):
             ("mount", "Sistemas montados"),
             ("cat /proc/cpuinfo", "Informacion de CPU"),
             ("cat /proc/meminfo", "Informacion detallada de memoria"),
+            ("cat /proc/asound/cards", "Tarjetas de sonido detectadas por ALSA"),
+            ("aplay -l", "Dispositivos de reproduccion de audio"),
+            ("arecord -l", "Dispositivos de grabacion de audio"),
+            ("amixer scontrols", "Controles de sonido disponibles"),
+            ("amixer", "Estado y niveles actuales del mezclador"),
         ]
 
         self.keyboard_visible = False
