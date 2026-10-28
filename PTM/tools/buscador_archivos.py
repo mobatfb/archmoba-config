@@ -246,15 +246,11 @@ class FileSearchTool(ttk.Frame):
         self.detener.set()
 
 
-def create_tool(parent, app=None):
-    return FileSearchTool(parent, app)
-
-
-def main():
+App = FileSearchTool\n\n\ndef main():
     root = tk.Tk()
     root.title(TOOL_NAME)
     root.geometry("1080x690")
-    tool = create_tool(root)
+    tool = App(root)
     tool.pack(fill="both", expand=True, padx=12, pady=12)
     root.protocol("WM_DELETE_WINDOW", lambda: (tool.on_close(), root.destroy()))
     root.mainloop()
