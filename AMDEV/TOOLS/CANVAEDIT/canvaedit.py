@@ -9,6 +9,7 @@ import uuid
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
 PROJECT_FILE = BASE_DIR / "layers.json"
+BG_ASSET = ASSETS_DIR / "pyrion_background.jpg"
 
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -47,8 +48,12 @@ class LayerManager:
         self._normalize()
 
     def remove(self, layer_id):
+        layer = self.get(layer_id)
+        if layer and layer.locked:
+            return False
         self.layers = [x for x in self.layers if x.id != layer_id]
         self._normalize()
+        return True
 
     def move_up(self, layer_id):
         index = self._index(layer_id)
@@ -114,10 +119,15 @@ class LayerManager:
 def create_default_project():
     manager = LayerManager()
     manager.add(
-        Layer.create(
-            "Fondo PYRION",
+        Layer(
+            id="bg",
+            name="BG",
             type="background",
-            asset="assets/pyrion_background.png",
+            visible=True,
+            locked=True,
+            opacity=1.0,
+            z_index=0,
+            asset="assets/pyrion_background.jpg",
         )
     )
     manager.save()
@@ -131,8 +141,11 @@ if __name__ == "__main__":
         manager = create_default_project()
 
     print("CANVAEDIT - Sistema de capas")
+    print(f"BG asset: {BG_ASSET}")
+    print(f"BG exists: {BG_ASSET.is_file()}")
     for layer in manager.layers:
         print(
             f"{layer.z_index}: {layer.name} | "
+            f"asset={layer.asset} | "
             f"visible={layer.visible} | locked={layer.locked}"
         )
