@@ -26,9 +26,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.42"
+APP_VERSION = "1.0.43"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:40"
+APP_UPDATE_TIME = "23:03"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1353,6 +1353,7 @@ class PTMApp(tk.Tk):
             category = str(row.get("categoria", "")).strip()
             version = str(row.get("version", "")).strip()
             mode = str(row.get("modo", "Integrado")).strip() or "Integrado"
+            file_type = str(row.get("tipo_archivo", "py")).strip().lower() or "py"
             dependencies = str(row.get("dependencias", "")).strip()
             author = str(row.get("autor", "")).strip()
             slug = str(row.get("slug", "")).strip()
@@ -1383,6 +1384,7 @@ class PTMApp(tk.Tk):
                 "category": category,
                 "version": version,
                 "mode": mode,
+                "file_type": file_type,
                 "dependencies": dependencies,
                 "author": author,
                 "visits": visits,
@@ -1706,7 +1708,7 @@ class PTMApp(tk.Tk):
         return list(reader)
 
     def _ensure_tool_local(self, tool):
-        """Descarga el .py indicado por guide.csv antes de abrirlo."""
+        """Descarga una herramienta remota y devuelve su archivo Python ejecutable."""
         repo_path = str(tool.get("repo_path", "")).strip().replace("\\", "/").lstrip("/")
         if not repo_path:
             raise ValueError("La herramienta no tiene una ruta válida en guide.csv.")
@@ -1718,15 +1720,99 @@ class PTMApp(tk.Tk):
         request = urllib.request.Request(
             remote_url,
             headers={
-                "User-Agent": "PTM/1.0",
+                "User-Agent": f"PTM/{APP_VERSION}",
                 "Cache-Control": "no-cache",
             },
         )
 
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             data = response.read()
 
-        # Validar sintaxis antes de reemplazar una copia funcional.
+        file_type = str(tool.get("file_type", "")).strip().lower()
+        if not file_type:
+            file_type = Path(repo_path).suffix.lower().lstrip(".")
+
+        if file_type == "zip" or Path(repo_path).suffix.lower() == ".zip":
+            temp_zip = local_path.with_suffix(local_path.suffix + ".tmp")
+            temp_zip.write_bytes(data)
+            try:
+                # Validar estructura y CRC antes de reemplazar la copia local.
+                with zipfile.ZipFile(temp_zip, "r") as zf:
+                    bad_file = zf.testzip()
+                    if bad_file:
+                        raise ValueError(f"El ZIP está dañado: {bad_file}")
+
+                temp_zip.replace(local_path)
+
+                # Cada versión del paquete se extrae en una carpeta inmutable.
+                # Esto evita romper una herramienta externa que siga ejecutándose.
+                package_hash = hashlib.sha1(data).hexdigest()[:12]
+                slug = str(tool.get("slug", "")).strip() or Path(repo_path).stem
+                package_root = self.tools_dir / ".packages" / slug / package_hash
+                package_root.parent.mkdir(parents=True, exist_ok=True)
+
+                if not package_root.is_dir():
+                    temp_extract = package_root.with_name(package_root.name + ".tmp")
+                    shutil.rmtree(temp_extract, ignore_errors=True)
+                    temp_extract.mkdir(parents=True, exist_ok=True)
+                    try:
+                        self._safe_extract_zip(local_path, temp_extract)
+                        if package_root.exists():
+                            shutil.rmtree(package_root, ignore_errors=True)
+                        temp_extract.replace(package_root)
+                    except Exception:
+                        shutil.rmtree(temp_extract, ignore_errors=True)
+                        raise
+
+                main_file = str(tool.get("main_file", "")).strip().replace("\\", "/")
+                package_root_resolved = package_root.resolve()
+
+                if main_file:
+                    main_path = (package_root / main_file).resolve()
+                    if (
+                        main_path != package_root_resolved
+                        and package_root_resolved not in main_path.parents
+                    ):
+                        raise ValueError(
+                            "archivo_principal está fuera del paquete ZIP."
+                        )
+                else:
+                    candidates = sorted(package_root.rglob("*.py"))
+                    if not candidates:
+                        raise FileNotFoundError(
+                            "El ZIP no contiene ningún archivo Python."
+                        )
+
+                    main_path = None
+                    for preferred in ("app.py", "main.py", "launcher.py"):
+                        main_path = next(
+                            (
+                                path for path in candidates
+                                if path.name.lower() == preferred
+                            ),
+                            None,
+                        )
+                        if main_path is not None:
+                            break
+                    main_path = main_path or candidates[0]
+
+                if not main_path.is_file() or main_path.suffix.lower() != ".py":
+                    raise FileNotFoundError(
+                        f"No se encontró el archivo principal: "
+                        f"{main_file or main_path.name}"
+                    )
+
+                source = main_path.read_text(encoding="utf-8-sig")
+                compile(source, str(main_path), "exec")
+                return main_path
+            finally:
+                try:
+                    if temp_zip.exists():
+                        temp_zip.unlink()
+                except OSError:
+                    pass
+
+        # Herramientas Python simples mantienen el comportamiento tradicional.
         source = data.decode("utf-8-sig")
         compile(source, repo_path, "exec")
         temp_path = local_path.with_suffix(local_path.suffix + ".tmp")
