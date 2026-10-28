@@ -16,9 +16,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.14"
+APP_VERSION = "1.0.15"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "04:48"
+APP_UPDATE_TIME = "05:08"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -712,8 +712,21 @@ class AMDEVApp(tk.Tk):
             text=f"{name} seleccionada. Clic izquierdo en AMDEV para actualizar y ejecutar."
         )
 
+    @staticmethod
+    def _pid_is_alive(pid):
+        if not pid or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+        except Exception:
+            return False
+
     def _stop_cached_app_processes(self, app_id, local_app):
-        """Cierra instancias anteriores de la app, incluso si AMDEV fue reiniciado."""
+        """Cierra la instancia anterior y espera a que libere recursos."""
+
         previous = self.running_processes.get(app_id)
         if previous is not None and previous.poll() is None:
             try:
@@ -744,6 +757,30 @@ class AMDEVApp(tk.Tk):
                             os.kill(old_pid, 15)
                         except OSError:
                             pass
+
+                        # En Linux/MiniLinux PTM usa un bloqueo de instancia
+                        # única. Esperar a que el proceso anterior termine evita
+                        # que la nueva instancia arranque mientras el puerto sigue
+                        # ocupado y se cierre silenciosamente.
+                        deadline = time.time() + 3.0
+                        while (
+                            self._pid_is_alive(old_pid)
+                            and time.time() < deadline
+                        ):
+                            time.sleep(0.08)
+
+                        if self._pid_is_alive(old_pid):
+                            try:
+                                os.kill(old_pid, 9)
+                            except OSError:
+                                pass
+
+                            deadline = time.time() + 1.0
+                            while (
+                                self._pid_is_alive(old_pid)
+                                and time.time() < deadline
+                            ):
+                                time.sleep(0.05)
             except Exception:
                 pass
 
@@ -885,11 +922,30 @@ class AMDEVApp(tk.Tk):
             self.status.configure(
                 text=f"Ejecutando {config.get('name', item.get('name', app_id))} v{config.get('version', '')}..."
             )
+            log_handle = None
+            launch_log = local_dir / "launch.log"
+            popen_kwargs = {
+                "cwd": str(local_dir),
+            }
+
+            if os.name != "nt":
+                # Conservar el error real de arranque en MiniLinux/Linux.
+                log_handle = open(
+                    launch_log,
+                    "w",
+                    encoding="utf-8",
+                    buffering=1,
+                )
+                popen_kwargs["stdout"] = log_handle
+                popen_kwargs["stderr"] = subprocess.STDOUT
+                popen_kwargs["env"] = os.environ.copy()
+
             process = subprocess.Popen(
                 [_windowless_python(), str(local_app)],
-                cwd=str(local_dir),
+                **popen_kwargs,
             )
             self.running_processes[app_id] = process
+
             try:
                 (local_dir / "process.pid").write_text(
                     str(process.pid),
@@ -898,13 +954,70 @@ class AMDEVApp(tk.Tk):
             except Exception:
                 pass
 
-            if force_update:
-                self.status.configure(
-                    text=(
-                        f"{config.get('name', item.get('name', app_id))} "
-                        f"actualizada y reiniciada · v{config.get('version', '')}"
+            app_name = config.get("name", item.get("name", app_id))
+            app_version = config.get("version", "")
+
+            self.status.configure(
+                text=f"Iniciando {app_name} v{app_version}..."
+            )
+
+            def verify_started():
+                try:
+                    return_code = process.poll()
+                except Exception:
+                    return_code = None
+
+                if return_code is None:
+                    self.status.configure(
+                        text=(
+                            f"{app_name} iniciada · v{app_version}"
+                            if not force_update
+                            else f"{app_name} actualizada e iniciada · v{app_version}"
+                        )
                     )
+                    if log_handle is not None:
+                        try:
+                            log_handle.flush()
+                        except Exception:
+                            pass
+                    return
+
+                details = ""
+                if log_handle is not None:
+                    try:
+                        log_handle.flush()
+                        log_handle.close()
+                    except Exception:
+                        pass
+
+                try:
+                    if launch_log.is_file():
+                        details = launch_log.read_text(
+                            encoding="utf-8",
+                            errors="replace",
+                        ).strip()
+                except Exception:
+                    details = ""
+
+                if not details:
+                    details = (
+                        f"El proceso terminó inmediatamente "
+                        f"(código {return_code})."
+                    )
+
+                self.status.configure(
+                    text=f"{app_name} no pudo iniciar."
                 )
+                messagebox.showerror(
+                    APP_SHORT,
+                    (
+                        f"{app_name} no pudo iniciar en Linux/MiniLinux.\n\n"
+                        f"{details[-3500:]}"
+                    ),
+                    parent=self,
+                )
+
+            self.after(1200, verify_started)
         except Exception as exc:
             messagebox.showerror(APP_SHORT, f"No se pudo iniciar la aplicación:\n\n{exc}")
             self.status.configure(text=f"Error: {exc}")
