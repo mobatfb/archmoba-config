@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.0"
+TOOL_VERSION = "2.0.1"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -46,6 +46,7 @@ class Mp3PlayerTool(ttk.Frame):
 
         self.state_path = self._state_file()
         self._build_ui()
+        self._init_drag_drop()
         self._init_backends()
         self._load_state()
         self._refresh_playlist()
@@ -117,43 +118,60 @@ class Mp3PlayerTool(ttk.Frame):
         self.rowconfigure(1, weight=1)
 
         style = ttk.Style(self)
-        style.configure("PlayerTitle.TLabel", font=("Segoe UI", 18, "bold"))
-        style.configure("TrackTitle.TLabel", font=("Segoe UI", 16, "bold"))
+        style.configure("PlayerTitle.TLabel", font=("Segoe UI", 17, "bold"))
+        style.configure("TrackTitle.TLabel", font=("Segoe UI", 14, "bold"))
         style.configure("Muted.TLabel", foreground="#707070")
-        style.configure("Transport.TButton", font=("Segoe UI Symbol", 13), padding=(12, 8))
+        style.configure("Transport.TButton", font=("Segoe UI Symbol", 12), padding=(10, 5))
 
-        header = ttk.Frame(self, padding=(18, 12))
+        # Cabecera compacta: PTM ya posee su propia navegacion por pestañas.
+        header = ttk.Frame(self, padding=(18, 8))
         header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(1, weight=1)
-        if self.app is not None:
-            ttk.Button(header, text="← Herramientas", command=self.app.show_home).grid(row=0, column=0, padx=(0, 12))
-        ttk.Label(header, text=TOOL_NAME, style="PlayerTitle.TLabel").grid(row=0, column=1, sticky="w")
-        ttk.Label(header, text=f"v{TOOL_VERSION}", style="Muted.TLabel").grid(row=0, column=2, sticky="e")
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text=TOOL_NAME, style="PlayerTitle.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(header, text=f"v{TOOL_VERSION}", style="Muted.TLabel").grid(
+            row=0, column=1, sticky="e"
+        )
 
         body = ttk.Panedwindow(self, orient="horizontal")
-        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 12))
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 6))
 
         # Biblioteca / playlist
-        left = ttk.Frame(body, padding=10)
+        left = ttk.Frame(body, padding=6)
         body.add(left, weight=2)
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(3, weight=1)
+        left.rowconfigure(4, weight=1)
 
-        ttk.Label(left, text="Lista de reproduccion", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            left, text="Lista de reproduccion", font=("Segoe UI", 11, "bold")
+        ).grid(row=0, column=0, sticky="w")
+
         actions = ttk.Frame(left)
-        actions.grid(row=1, column=0, sticky="ew", pady=(8, 8))
+        actions.grid(row=1, column=0, sticky="ew", pady=(6, 5))
         ttk.Button(actions, text="+ Archivos", command=self.add_files).pack(side="left")
-        ttk.Button(actions, text="+ Carpeta", command=self.add_folder).pack(side="left", padx=6)
+        ttk.Button(actions, text="+ Carpeta", command=self.add_folder).pack(
+            side="left", padx=5
+        )
         ttk.Button(actions, text="Quitar", command=self.remove_selected).pack(side="left")
-        ttk.Button(actions, text="Limpiar", command=self.clear_playlist).pack(side="left", padx=6)
+        ttk.Button(actions, text="Limpiar", command=self.clear_playlist).pack(
+            side="left", padx=5
+        )
+
+        self.drop_hint = ttk.Label(
+            left,
+            text="Arrastra aqui archivos MP3 o carpetas",
+            style="Muted.TLabel",
+            anchor="w",
+        )
+        self.drop_hint.grid(row=2, column=0, sticky="ew", pady=(0, 4))
 
         search = ttk.Entry(left, textvariable=self.search_var)
-        search.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        search.insert(0, "")
+        search.grid(row=3, column=0, sticky="ew", pady=(0, 5))
         self.search_var.trace_add("write", lambda *_: self._refresh_playlist())
 
         list_frame = ttk.Frame(left)
-        list_frame.grid(row=3, column=0, sticky="nsew")
+        list_frame.grid(row=4, column=0, sticky="nsew")
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
         self.listbox = tk.Listbox(
@@ -162,7 +180,7 @@ class Mp3PlayerTool(ttk.Frame):
             selectmode="extended",
             bd=0,
             highlightthickness=1,
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
         )
         self.listbox.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
@@ -171,29 +189,47 @@ class Mp3PlayerTool(ttk.Frame):
         self.listbox.bind("<Double-Button-1>", self._open_selected)
         self.listbox.bind("<Return>", self._open_selected)
 
-        # Reproductor
-        right = ttk.Frame(body, padding=(22, 12))
+        # Reproductor compacto y responsivo para la altura real de una pestaña PTM.
+        right = ttk.Frame(body, padding=(14, 4))
         body.add(right, weight=3)
         right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1)
 
-        cover_shell = ttk.Frame(right, width=250, height=250)
-        cover_shell.grid(row=0, column=0, pady=(2, 16))
+        player = ttk.Frame(right)
+        player.grid(row=0, column=0, sticky="nsew")
+        player.columnconfigure(0, weight=1)
+
+        cover_shell = ttk.Frame(player, width=180, height=180)
+        cover_shell.grid(row=0, column=0, pady=(0, 8))
         cover_shell.grid_propagate(False)
         self.cover_label = tk.Label(
             cover_shell,
             text="♫",
-            font=("Segoe UI Symbol", 58),
+            font=("Segoe UI Symbol", 48),
             bg="#20252B",
             fg="#E8EDF2",
             bd=0,
         )
         self.cover_label.place(relx=0, rely=0, relwidth=1, relheight=1)
 
-        ttk.Label(right, textvariable=self.title_var, style="TrackTitle.TLabel", anchor="center").grid(row=1, column=0, sticky="ew")
-        ttk.Label(right, textvariable=self.artist_var, anchor="center").grid(row=2, column=0, sticky="ew", pady=(5, 0))
-        ttk.Label(right, textvariable=self.album_var, style="Muted.TLabel", anchor="center").grid(row=3, column=0, sticky="ew", pady=(2, 14))
+        ttk.Label(
+            player,
+            textvariable=self.title_var,
+            style="TrackTitle.TLabel",
+            anchor="center",
+            wraplength=430,
+        ).grid(row=1, column=0, sticky="ew")
+        ttk.Label(
+            player, textvariable=self.artist_var, anchor="center"
+        ).grid(row=2, column=0, sticky="ew", pady=(2, 0))
+        ttk.Label(
+            player,
+            textvariable=self.album_var,
+            style="Muted.TLabel",
+            anchor="center",
+        ).grid(row=3, column=0, sticky="ew", pady=(1, 6))
 
-        progress_row = ttk.Frame(right)
+        progress_row = ttk.Frame(player)
         progress_row.grid(row=4, column=0, sticky="ew")
         progress_row.columnconfigure(0, weight=1)
         self.progress_scale = ttk.Scale(
@@ -206,33 +242,102 @@ class Mp3PlayerTool(ttk.Frame):
         self.progress_scale.grid(row=0, column=0, sticky="ew")
         self.progress_scale.bind("<ButtonPress-1>", self._progress_press)
         self.progress_scale.bind("<ButtonRelease-1>", self._progress_release)
-        ttk.Label(progress_row, textvariable=self.time_var, width=13, anchor="e").grid(row=0, column=1, padx=(10, 0))
-
-        controls = ttk.Frame(right)
-        controls.grid(row=5, column=0, pady=(14, 10))
-        ttk.Button(controls, text="⏮", style="Transport.TButton", command=self.previous_track).grid(row=0, column=0, padx=4)
-        self.play_btn = ttk.Button(controls, text="▶", style="Transport.TButton", command=self.play_pause)
-        self.play_btn.grid(row=0, column=1, padx=4)
-        ttk.Button(controls, text="⏹", style="Transport.TButton", command=self.stop).grid(row=0, column=2, padx=4)
-        ttk.Button(controls, text="⏭", style="Transport.TButton", command=self.next_track).grid(row=0, column=3, padx=4)
-
-        volume_row = ttk.Frame(right)
-        volume_row.grid(row=6, column=0, sticky="ew", pady=(4, 6))
-        volume_row.columnconfigure(1, weight=1)
-        ttk.Label(volume_row, text="🔊").grid(row=0, column=0, padx=(0, 8))
-        ttk.Scale(volume_row, from_=0, to=100, variable=self.volume, command=self._volume_changed).grid(row=0, column=1, sticky="ew")
-        self.volume_label = ttk.Label(volume_row, text="70%", width=5, anchor="e")
-        self.volume_label.grid(row=0, column=2, padx=(8, 0))
-
-        ttk.Label(right, textvariable=self.status_var, style="Muted.TLabel", anchor="center", wraplength=520).grid(row=7, column=0, sticky="ew", pady=(10, 0))
-
-        footer = ttk.Frame(self, padding=(18, 8))
-        footer.grid(row=2, column=0, sticky="ew")
         ttk.Label(
-            footer,
-            text="La playlist, el volumen y el ultimo punto de cada MP3 se guardan automaticamente.",
+            progress_row, textvariable=self.time_var, width=12, anchor="e"
+        ).grid(row=0, column=1, padx=(8, 0))
+
+        controls = ttk.Frame(player)
+        controls.grid(row=5, column=0, pady=(6, 5))
+        ttk.Button(
+            controls, text="⏮", style="Transport.TButton", command=self.previous_track
+        ).grid(row=0, column=0, padx=3)
+        self.play_btn = ttk.Button(
+            controls, text="▶", style="Transport.TButton", command=self.play_pause
+        )
+        self.play_btn.grid(row=0, column=1, padx=3)
+        ttk.Button(
+            controls, text="⏹", style="Transport.TButton", command=self.stop
+        ).grid(row=0, column=2, padx=3)
+        ttk.Button(
+            controls, text="⏭", style="Transport.TButton", command=self.next_track
+        ).grid(row=0, column=3, padx=3)
+
+        volume_row = ttk.Frame(player)
+        volume_row.grid(row=6, column=0, sticky="ew", pady=(0, 2))
+        volume_row.columnconfigure(1, weight=1)
+        ttk.Label(volume_row, text="Vol.").grid(row=0, column=0, padx=(0, 7))
+        ttk.Scale(
+            volume_row,
+            from_=0,
+            to=100,
+            variable=self.volume,
+            command=self._volume_changed,
+        ).grid(row=0, column=1, sticky="ew")
+        self.volume_label = ttk.Label(
+            volume_row, text="70%", width=5, anchor="e"
+        )
+        self.volume_label.grid(row=0, column=2, padx=(7, 0))
+
+        ttk.Label(
+            player,
+            textvariable=self.status_var,
             style="Muted.TLabel",
-        ).pack(side="left")
+            anchor="center",
+            wraplength=480,
+        ).grid(row=7, column=0, sticky="ew", pady=(3, 0))
+
+    def _init_drag_drop(self):
+        """Activa arrastrar y soltar archivos/carpetas sobre la playlist."""
+        try:
+            from tkinterdnd2 import DND_FILES, TkinterDnD
+
+            root = self.winfo_toplevel()
+            TkinterDnD._require(root)
+
+            # Los widgets tkinter normales pueden usar directamente el wrapper
+            # de tkinterdnd2 una vez cargado tkdnd en el interprete Tcl.
+            TkinterDnD.DnDWrapper.drop_target_register(self.listbox, DND_FILES)
+            TkinterDnD.DnDWrapper.dnd_bind(
+                self.listbox, "<<Drop>>", self._on_drop_files
+            )
+            TkinterDnD.DnDWrapper.drop_target_register(self.drop_hint, DND_FILES)
+            TkinterDnD.DnDWrapper.dnd_bind(
+                self.drop_hint, "<<Drop>>", self._on_drop_files
+            )
+            self.drop_hint.configure(
+                text="Arrastra aqui archivos MP3 o carpetas"
+            )
+        except Exception:
+            self.drop_hint.configure(
+                text="Arrastrar y soltar no disponible · usa + Archivos / + Carpeta"
+            )
+
+    def _on_drop_files(self, event):
+        try:
+            raw_items = self.tk.splitlist(event.data)
+        except Exception:
+            raw_items = [getattr(event, "data", "")]
+
+        paths = []
+        for raw in raw_items:
+            if not raw:
+                continue
+            p = Path(str(raw))
+            if p.is_dir():
+                paths.extend(
+                    str(x) for x in sorted(
+                        p.rglob("*.mp3"), key=lambda q: q.name.lower()
+                    )
+                )
+            elif p.is_file() and p.suffix.lower() == ".mp3":
+                paths.append(str(p))
+
+        if paths:
+            self._add_paths(paths)
+            self.status_var.set(
+                f"{len(paths)} elemento(s) recibido(s) por arrastrar y soltar"
+            )
+        return "copy"
 
     # ---------- Backends ----------
     def _init_backends(self):
@@ -407,10 +512,10 @@ class Mp3PlayerTool(ttk.Frame):
         if data and self._image_cls is not None and self._imagetk is not None:
             try:
                 image = self._image_cls.open(io.BytesIO(data)).convert("RGB")
-                image.thumbnail((250, 250))
-                canvas = self._image_cls.new("RGB", (250, 250), (32, 37, 43))
-                x = (250 - image.width) // 2
-                y = (250 - image.height) // 2
+                image.thumbnail((180, 180))
+                canvas = self._image_cls.new("RGB", (180, 180), (32, 37, 43))
+                x = (180 - image.width) // 2
+                y = (180 - image.height) // 2
                 canvas.paste(image, (x, y))
                 self.cover_photo = self._imagetk.PhotoImage(canvas)
                 self.cover_label.configure(image=self.cover_photo, text="")
@@ -703,8 +808,8 @@ App = Mp3PlayerTool
 def main():
     root = tk.Tk()
     root.title(TOOL_NAME)
-    root.geometry("1100x680")
-    root.minsize(860, 560)
+    root.geometry("980x560")
+    root.minsize(760, 430)
 
     tool = App(root)
     tool.pack(fill="both", expand=True)
