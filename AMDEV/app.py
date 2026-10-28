@@ -16,7 +16,7 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.13"
+APP_VERSION = "1.0.14"
 APP_UPDATE_DATE = "28/10/2026"
 APP_UPDATE_TIME = "04:48"
 
@@ -253,8 +253,26 @@ def check_self_update():
         ):
             return False
 
-        _launch_update_helper(source)
-        return True
+        # En Windows se conserva el helper original, porque python.exe/pythonw.exe
+        # puede mantener bloqueado el archivo mientras AMDEV esta en ejecucion.
+        if os.name == "nt":
+            _launch_update_helper(source)
+            return True
+
+        # En MiniLinux/Linux no debemos terminar el proceso principal: /init
+        # interpreta la salida de AMDEV como fin de la sesion y entra en la
+        # consola de rescate. Reemplazamos el archivo de forma atomica y usamos
+        # execv(), que mantiene el mismo proceso en lugar de devolver el control
+        # al init.
+        current = Path(__file__).resolve()
+        pending = current.with_suffix(current.suffix + ".pending")
+        pending.write_text(source, encoding="utf-8")
+        os.replace(pending, current)
+        os.execv(
+            sys.executable,
+            [sys.executable, str(current), *sys.argv[1:]],
+        )
+        return False  # Solo se alcanza si execv no reemplazo el proceso.
     except Exception:
         return False
 
