@@ -193,16 +193,25 @@ class ResponsiveCanvas(tk.Canvas):
 
 
 class EnterGame:
-    def __init__(self, root):
+    def __init__(self, root, embedded=False, app=None):
         self.root = root
-        root.title('ENTER | INFINITE DUNGEON  /  ARCHMOBA')
-        root.geometry(f'{W}x{H}')
-        root.minsize(420, 310)
-        root.resizable(True, True)
+        self.embedded = bool(embedded)
+        self.app = app
+        self._closed = False
+        self._tick_job = None
+
+        if not self.embedded:
+            root.title('ENTER | INFINITE DUNGEON  /  ARCHMOBA')
+            root.geometry(f'{W}x{H}')
+            root.minsize(420, 310)
+            root.resizable(True, True)
         root.configure(bg=BG)
-        self.canvas = ResponsiveCanvas(root, width=W, height=H,
-                                       bg=BG, highlightthickness=0,
-                                       bd=0)
+
+        self.canvas = ResponsiveCanvas(
+            root, width=W, height=H,
+            bg=BG, highlightthickness=0, bd=0,
+            takefocus=1,
+        )
         self.canvas.pack(fill='both', expand=True)
         self._fullscreen_active = False
         self._fullscreen_touched = False
@@ -281,13 +290,16 @@ class EnterGame:
         self.summon_until = 0.0
         self._load()
         self.start_room()
-        root.bind('<KeyPress>', self.keydown)
-        root.bind('<KeyRelease>', self.keyup)
-        root.bind('<ButtonPress-1>', self.mousepress)
-        root.protocol('WM_DELETE_WINDOW', self.close)
-        root.bind('<MouseWheel>', self.roster_wheel)
-        root.bind('<Button-4>', self.roster_wheel)
-        root.bind('<Button-5>', self.roster_wheel)
+
+        bind_target = self.canvas if self.embedded else root
+        bind_target.bind('<KeyPress>', self.keydown)
+        bind_target.bind('<KeyRelease>', self.keyup)
+        bind_target.bind('<ButtonPress-1>', self.mousepress)
+        bind_target.bind('<MouseWheel>', self.roster_wheel)
+        bind_target.bind('<Button-4>', self.roster_wheel)
+        bind_target.bind('<Button-5>', self.roster_wheel)
+        if not self.embedded:
+            root.protocol('WM_DELETE_WINDOW', self.close)
         # Modo de prueba separado de la partida: no combate, no EXP, no guardado.
         self.roster_mode = True
         self.roster_scroll = 0.0
@@ -298,8 +310,11 @@ class EnterGame:
         self.roster_keys = set()
         self.roster_entries = self.build_roster_entries()
         self.tick()
-        # Inicio real a pantalla completa. Sin cambiar resolucion del monitor.
-        self.root.after(60, self._initial_fullscreen)
+        if self.embedded:
+            self.root.after(80, self.focus_game)
+        else:
+            # Inicio real a pantalla completa. Sin cambiar resolucion del monitor.
+            self.root.after(60, self._initial_fullscreen)
 
     # Cada nivel de mejora multiplica el atributo actual por 1.10.
     # El escudo parte del 5%: el 10% de un escudo inicial del 0% seria siempre 0.
