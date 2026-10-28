@@ -43,7 +43,7 @@ class _SafeHTMLParser(HTMLParser):
         self._in_title = False
         self._skip_depth = 0
         self._main_depth = 0
-        self._main_tag_stack = []
+        self._element_stack = []
         self._style_stack = ["body"]
         self._href_stack = [None]
 
@@ -98,9 +98,14 @@ class _SafeHTMLParser(HTMLParser):
             tag in {"main", "article"}
             or str(attrs.get("role", "")).strip().lower() == "main"
         )
+        if tag not in {
+            "area", "base", "br", "col", "embed", "hr", "img",
+            "input", "link", "meta", "param", "source", "track", "wbr",
+        }:
+            self._element_stack.append((tag, is_main_container))
+
         if is_main_container:
             self._main_depth += 1
-            self._main_tag_stack.append(tag)
 
         if tag in self.HEADING_TAGS:
             self._newline(2)
@@ -152,11 +157,6 @@ class _SafeHTMLParser(HTMLParser):
             self._in_title = False
             return
 
-        closes_main = (
-            self._main_tag_stack
-            and tag == self._main_tag_stack[-1]
-        )
-
         if tag in self.HEADING_TAGS:
             if len(self._style_stack) > 1:
                 self._style_stack.pop()
@@ -178,9 +178,21 @@ class _SafeHTMLParser(HTMLParser):
         elif tag == "tr":
             self._newline(1)
 
-        if closes_main:
-            self._main_tag_stack.pop()
-            self._main_depth = max(0, self._main_depth - 1)
+        # Cerrar correctamente el contexto main/article/role=main aunque
+        # existan muchos contenedores del mismo tipo anidados.
+        if self._element_stack:
+            match_index = None
+            for i in range(len(self._element_stack) - 1, -1, -1):
+                if self._element_stack[i][0] == tag:
+                    match_index = i
+                    break
+
+            if match_index is not None:
+                closing = self._element_stack[match_index:]
+                del self._element_stack[match_index:]
+                for _name, entered_main in closing:
+                    if entered_main:
+                        self._main_depth = max(0, self._main_depth - 1)
 
     def handle_data(self, data):
         if self._skip_depth:
