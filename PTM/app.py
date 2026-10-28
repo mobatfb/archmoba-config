@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.48"
+APP_VERSION = "1.0.49"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "00:43"
+APP_UPDATE_TIME = "00:47"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -536,6 +536,9 @@ class PTMApp(tk.Tk):
         self._self_update_events = queue.Queue()
         self._self_update_check_running = False
         self.pinned = False
+        self._outside_click_count = 0
+        self._outside_click_last = 0.0
+        self._mouse_left_was_down = False
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
@@ -550,6 +553,7 @@ class PTMApp(tk.Tk):
         self.after(100, self._poll_tool_download_events)
         self.after(100, self._poll_dependency_events)
         self.after(100, self._poll_catalog_events)
+        self.after(40, self._poll_pinned_outside_double_click)
         self.after(30000, self._check_self_update_async)
         self.after(500, self._poll_self_update_events)
 
@@ -3704,6 +3708,56 @@ class PTMApp(tk.Tk):
         except OSError as exc:
             messagebox.showerror("PTM", str(exc))
 
+    def _poll_pinned_outside_double_click(self):
+        """Oculta PTM tras dos clics fuera cuando el pin esta activo."""
+        try:
+            if os.name == "nt":
+                import ctypes
+
+                down = bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+
+                if down and not self._mouse_left_was_down:
+                    if self.pinned and self.state() != "withdrawn" and self.winfo_viewable():
+                        class POINT(ctypes.Structure):
+                            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+                        point = POINT()
+                        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                            left = self.winfo_rootx()
+                            top = self.winfo_rooty()
+                            right = left + self.winfo_width()
+                            bottom = top + self.winfo_height()
+                            outside = not (
+                                left <= point.x < right
+                                and top <= point.y < bottom
+                            )
+
+                            if outside:
+                                now = time.monotonic()
+                                if now - self._outside_click_last <= 0.55:
+                                    self._outside_click_count += 1
+                                else:
+                                    self._outside_click_count = 1
+
+                                self._outside_click_last = now
+
+                                if self._outside_click_count >= 2:
+                                    self._outside_click_count = 0
+                                    self._outside_click_last = 0.0
+                                    self.hide_main()
+                            else:
+                                self._outside_click_count = 0
+                                self._outside_click_last = 0.0
+
+                self._mouse_left_was_down = down
+        except Exception:
+            pass
+
+        try:
+            self.after(40, self._poll_pinned_outside_double_click)
+        except tk.TclError:
+            pass
+
     def _draw_pin_button(self):
         """Dibuja el pin: rojo cuando PTM esta fijado arriba."""
         if not hasattr(self, "pin_canvas"):
@@ -3750,6 +3804,8 @@ class PTMApp(tk.Tk):
             messagebox.showerror("PTM", str(exc))
 
     def hide_main(self):
+        self._outside_click_count = 0
+        self._outside_click_last = 0.0
         self.withdraw()
 
     def show_main(self):
