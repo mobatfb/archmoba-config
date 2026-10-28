@@ -22,9 +22,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:44"
+APP_UPDATE_TIME = "19:46"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -898,18 +898,15 @@ class PTMApp(tk.Tk):
             },
         )
 
-        try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                data = response.read()
-            # Validar sintaxis antes de reemplazar una copia funcional.
-            source = data.decode("utf-8-sig")
-            compile(source, repo_path, "exec")
-            temp_path = local_path.with_suffix(local_path.suffix + ".tmp")
-            temp_path.write_bytes(data)
-            temp_path.replace(local_path)
-        except Exception:
-            if not local_path.is_file():
-                raise
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = response.read()
+
+        # Validar sintaxis antes de reemplazar una copia funcional.
+        source = data.decode("utf-8-sig")
+        compile(source, repo_path, "exec")
+        temp_path = local_path.with_suffix(local_path.suffix + ".tmp")
+        temp_path.write_bytes(data)
+        temp_path.replace(local_path)
 
         return local_path
 
@@ -1680,6 +1677,7 @@ class PTMApp(tk.Tk):
             font=("Segoe UI", 9),
         )
         status.pack(pady=(6, 0))
+        meta["loading_status"] = status
 
         def animate(angle=0):
             if not spinner.winfo_exists():
@@ -1702,6 +1700,7 @@ class PTMApp(tk.Tk):
             return
 
         meta["state"] = "unavailable"
+        meta["loading_status"] = None
         frame = meta["frame"]
         self._clear_tool_frame(frame)
 
@@ -1812,15 +1811,28 @@ class PTMApp(tk.Tk):
         meta["download_token"] = token
 
         def worker():
-            try:
-                local_path = self._ensure_tool_local(tool)
+            last_error = None
+
+            for attempt in range(1, 6):
                 self._tool_download_events.put(
-                    ("ok", key, token, tool, local_path, None)
+                    ("progress", key, token, tool, None, attempt)
                 )
-            except Exception as exc:
-                self._tool_download_events.put(
-                    ("error", key, token, tool, None, exc)
-                )
+
+                try:
+                    local_path = self._ensure_tool_local(tool)
+                    self._tool_download_events.put(
+                        ("ok", key, token, tool, local_path, None)
+                    )
+                    return
+                except Exception as exc:
+                    last_error = exc
+
+                if attempt < 5:
+                    time.sleep(2)
+
+            self._tool_download_events.put(
+                ("error", key, token, tool, None, last_error)
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1838,7 +1850,16 @@ class PTMApp(tk.Tk):
                 if int(meta.get("download_token", 0)) != int(token):
                     continue
 
-                if kind == "ok":
+                if kind == "progress":
+                    attempt = int(exc or 1)
+                    current = self.open_tabs.get(key)
+                    if current and current.get("state") == "loading":
+                        status_widget = current.get("loading_status")
+                        if status_widget is not None and status_widget.winfo_exists():
+                            status_widget.configure(
+                                text=f"Descargando... intento {attempt}/5"
+                            )
+                elif kind == "ok":
                     self._tool_download_ready(tool, key, local_path)
                 else:
                     self._show_tool_unavailable(tool, key, exc)
@@ -1968,6 +1989,7 @@ class PTMApp(tk.Tk):
 
         meta["module"] = module
         meta["state"] = "ready"
+        meta["loading_status"] = None
         self.switch_to_tool(key)
 
     def open_tool(self, tool):
