@@ -5,6 +5,7 @@ import tkinter as tk
 
 
 def create_tool(parent, app):
+    tool_key = app.current_key
     frame = tk.Frame(parent, bg="#FFFFFF")
     frame.columnconfigure(0, weight=1)
 
@@ -56,7 +57,7 @@ def create_tool(parent, app):
 
     def finish_process(message="Proceso detenido."):
         worker_ref["running"] = False
-        app.set_tool_processing(False)
+        app.set_tool_processing(False, key=tool_key)
         counter_var.set(message)
         status_var.set("El indicador de carga de la pestaña debe haberse detenido.")
         set_running_ui(False)
@@ -68,7 +69,7 @@ def create_tool(parent, app):
         stop_event.clear()
         worker_ref["running"] = True
         set_running_ui(True)
-        app.set_tool_processing(True)
+        app.set_tool_processing(True, key=tool_key)
         status_var.set("Proceso activo. El icono de la pestaña debe estar animándose.")
 
         def worker():
@@ -136,8 +137,6 @@ def create_tool(parent, app):
     class ToolLifecycle:
         def on_close(self):
             stop_event.set()
-            if worker_ref["running"]:
-                app.set_tool_processing(False)
 
     lifecycle = ToolLifecycle()
     frame.on_close = lifecycle.on_close
