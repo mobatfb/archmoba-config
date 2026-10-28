@@ -1,4 +1,5 @@
 # ARGUMENTOS: amdev archmomadev launcher apps aplicaciones catalogo remoto github
+import base64
 import json
 import os
 import re
@@ -317,10 +318,33 @@ class AMDEVApp(tk.Tk):
     def _request_text(self, url, timeout=12):
         request = urllib.request.Request(
             f"{url}{'&' if '?' in url else '?'}v={time.time_ns()}",
-            headers={"User-Agent": "AMDEV/1.0", "Cache-Control": "no-cache"},
+            headers={"User-Agent": f"AMDEV/{APP_VERSION}", "Cache-Control": "no-cache"},
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read().decode("utf-8-sig")
+
+    def _request_repo_file_main(self, repo_path, timeout=12):
+        """Lee un archivo del HEAD de main vía GitHub API; RAW queda como respaldo."""
+        clean = str(repo_path).strip().replace("\\", "/").lstrip("/")
+        api_url = (
+            f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
+            f"{clean}?ref=main"
+        )
+        try:
+            request = urllib.request.Request(
+                api_url,
+                headers={
+                    "User-Agent": f"AMDEV/{APP_VERSION}",
+                    "Accept": "application/vnd.github+json",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            encoded = str(payload.get("content", "")).replace("\n", "")
+            return base64.b64decode(encoded).decode("utf-8-sig")
+        except Exception:
+            return self._request_text(f"{REPO_RAW_BASE}/{clean}", timeout=timeout)
 
     def load_apps(self):
         for child in self.list_frame.winfo_children():
@@ -328,7 +352,7 @@ class AMDEVApp(tk.Tk):
 
         text = None
         try:
-            text = self._request_text(APPS_URL)
+            text = self._request_repo_file_main("apps.json")
             self.apps_cache.write_text(text, encoding="utf-8")
             self.status.configure(text="Catálogo actualizado desde GitHub.")
         except Exception as exc:
@@ -518,7 +542,7 @@ class AMDEVApp(tk.Tk):
             self.status.configure(text=f"Leyendo {config_path}...")
             self.update_idletasks()
 
-            config_text = self._request_text(f"{REPO_RAW_BASE}/{config_path}")
+            config_text = self._request_repo_file_main(config_path)
             config = json.loads(config_text)
 
             if config.get("maintenance", False):
