@@ -17,7 +17,7 @@ TOOL_DESCRIPTION = (
     "Explorador de archivos tipo Windows 11 con pestañas, copiar/cortar/pegar, "
     "navegacion y panel lateral de HDD, SSD, USB, CD/DVD y unidades de red."
 )
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 
 class ExplorerTab(ttk.Frame):
@@ -237,7 +237,7 @@ class ExplorerTab(ttk.Frame):
                 "end",
                 iid=iid,
                 values=(
-                    item["name"],
+                    ("📁 " if item["is_dir"] else "📄 ") + item["name"],
                     item["type"],
                     "" if item["is_dir"] else self.owner.format_size(item["size"]),
                     self.owner.format_time(item["modified"]),
