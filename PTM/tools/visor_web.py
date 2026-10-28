@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.2"
+TOOL_VERSION = "2.0.3"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -78,12 +78,32 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
         }
 
         def browser_loop():
+            form_hwnd = 0
+            webview_hwnd = 0
+            deadline = time.monotonic() + 10.0
+
+            while state["alive"] and time.monotonic() < deadline:
+                try:
+                    native = window.native
+                    if native is not None:
+                        form_hwnd = int(native.Handle.ToInt32())
+                        native_webview = getattr(native, "webview", None)
+                        if native_webview is not None:
+                            webview_hwnd = int(native_webview.Handle.ToInt32())
+                        if form_hwnd:
+                            break
+                except Exception:
+                    pass
+                time.sleep(0.05)
+
             _child_send(
                 conn,
                 {
                     "type": "ready",
                     "renderer": "edgechromium",
                     "title": window_title,
+                    "form_hwnd": form_hwnd,
+                    "webview_hwnd": webview_hwnd,
                 },
             )
 
@@ -136,6 +156,27 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
                                     + repr(str(percent) + "%")
                                     + ";"
                                 )
+                            except Exception:
+                                pass
+
+                        elif command == "focus":
+                            try:
+                                native = window.native
+                                native_webview = getattr(native, "webview", None)
+                                if native is not None and native_webview is not None:
+                                    from System import Action
+
+                                    def apply_focus():
+                                        try:
+                                            native.Activate()
+                                        except Exception:
+                                            pass
+                                        try:
+                                            native_webview.Focus()
+                                        except Exception:
+                                            pass
+
+                                    native.BeginInvoke(Action(apply_focus))
                             except Exception:
                                 pass
 
@@ -293,9 +334,11 @@ class WebViewerTool(ttk.Frame):
         self._send_lock = threading.Lock()
 
         self._child_hwnd = 0
+        self._webview_hwnd = 0
         self._embedded = False
         self._embed_attempts = 0
         self._resize_job = None
+        self._last_left_button_down = False
 
         self._token = secrets.token_hex(8)
         self._child_title = "PTM_WEBVIEW_" + self._token
@@ -307,6 +350,7 @@ class WebViewerTool(ttk.Frame):
 
         self._build_ui()
         self.after(80, self._poll_ipc)
+        self.after(120, self._poll_browser_focus_click)
         self.after(180, self._start_browser_process)
 
     # ---------- Estado ----------
@@ -710,6 +754,7 @@ class WebViewerTool(ttk.Frame):
             was_embedded = self._embedded
             self._embedded = False
             self._child_hwnd = 0
+            self._webview_hwnd = 0
 
             # Si ya recibimos un error explicito, conservar ese mensaje.
             current = self.status_var.get()
@@ -742,6 +787,15 @@ class WebViewerTool(ttk.Frame):
             self.status_var.set("Cargando motor Edge WebView2...")
 
         elif kind == "ready":
+            try:
+                self._child_hwnd = int(message.get("form_hwnd", 0) or 0)
+            except Exception:
+                self._child_hwnd = 0
+            try:
+                self._webview_hwnd = int(message.get("webview_hwnd", 0) or 0)
+            except Exception:
+                self._webview_hwnd = 0
+
             self.status_var.set("Integrando Edge WebView2 en PTM...")
             self._embed_attempts = 0
             self.after(20, self._attempt_embed)
@@ -836,10 +890,12 @@ class WebViewerTool(ttk.Frame):
             ]
             user32.FindWindowW.restype = ctypes.c_void_p
 
-            hwnd = user32.FindWindowW(
-                None,
-                self._child_title,
-            )
+            hwnd = ctypes.c_void_p(self._child_hwnd) if self._child_hwnd else None
+            if not hwnd:
+                hwnd = user32.FindWindowW(
+                    None,
+                    self._child_title,
+                )
 
             if not hwnd:
                 self._embed_attempts += 1
@@ -917,6 +973,7 @@ class WebViewerTool(ttk.Frame):
                     "factor": self.zoom_level,
                 }
             )
+            self.after(80, self._focus_embedded_browser)
 
         except Exception as exc:
             self._show_browser_error(
@@ -985,6 +1042,133 @@ class WebViewerTool(ttk.Frame):
             )
         except Exception:
             pass
+
+    # ---------- Foco teclado Win32 ----------
+    def _poll_browser_focus_click(self):
+        """Transfiere el foco al WebView2 cuando el usuario hace clic dentro."""
+        if not self._alive:
+            return
+
+        if os.name == "nt" and self._embedded:
+            try:
+                user32 = ctypes.windll.user32
+                down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)
+
+                if down and not self._last_left_button_down:
+                    class POINT(ctypes.Structure):
+                        _fields_ = [
+                            ("x", ctypes.c_long),
+                            ("y", ctypes.c_long),
+                        ]
+
+                    point = POINT()
+                    if user32.GetCursorPos(ctypes.byref(point)):
+                        x0 = int(self.browser_host.winfo_rootx())
+                        y0 = int(self.browser_host.winfo_rooty())
+                        x1 = x0 + int(self.browser_host.winfo_width())
+                        y1 = y0 + int(self.browser_host.winfo_height())
+
+                        if x0 <= point.x < x1 and y0 <= point.y < y1:
+                            self._focus_embedded_browser()
+
+                self._last_left_button_down = down
+            except Exception:
+                pass
+
+        try:
+            self.after(35, self._poll_browser_focus_click)
+        except tk.TclError:
+            pass
+
+    def _focus_embedded_browser(self):
+        """Comparte temporalmente las colas de input y da foco al WebView2."""
+        if (
+            os.name != "nt"
+            or not self._embedded
+            or not self._child_hwnd
+        ):
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            target_hwnd = int(self._webview_hwnd or self._child_hwnd)
+            parent_hwnd = int(self.winfo_toplevel().winfo_id())
+
+            user32.GetWindowThreadProcessId.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_ulong),
+            ]
+            user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+
+            parent_pid = ctypes.c_ulong(0)
+            child_pid = ctypes.c_ulong(0)
+
+            parent_tid = int(
+                user32.GetWindowThreadProcessId(
+                    ctypes.c_void_p(parent_hwnd),
+                    ctypes.byref(parent_pid),
+                )
+            )
+            child_tid = int(
+                user32.GetWindowThreadProcessId(
+                    ctypes.c_void_p(target_hwnd),
+                    ctypes.byref(child_pid),
+                )
+            )
+
+            current_tid = int(kernel32.GetCurrentThreadId())
+            attach_from = current_tid or parent_tid
+            attached = False
+
+            if child_tid and attach_from and child_tid != attach_from:
+                try:
+                    attached = bool(
+                        user32.AttachThreadInput(
+                            attach_from,
+                            child_tid,
+                            True,
+                        )
+                    )
+                except Exception:
+                    attached = False
+
+            try:
+                try:
+                    user32.SetForegroundWindow(
+                        ctypes.c_void_p(parent_hwnd)
+                    )
+                except Exception:
+                    pass
+
+                try:
+                    user32.SetActiveWindow(
+                        ctypes.c_void_p(parent_hwnd)
+                    )
+                except Exception:
+                    pass
+
+                user32.SetFocus(
+                    ctypes.c_void_p(target_hwnd)
+                )
+            finally:
+                if attached:
+                    try:
+                        user32.AttachThreadInput(
+                            attach_from,
+                            child_tid,
+                            False,
+                        )
+                    except Exception:
+                        pass
+
+            # Refuerzo dentro del proceso hijo: enfoca el control WinForms
+            # Microsoft.Web.WebView2.WinForms.WebView2.
+            self._send({"cmd": "focus"})
+
+        except Exception:
+            self._send({"cmd": "focus"})
 
     # ---------- Navegación ----------
     def _normalize_address(self, raw):
@@ -1193,6 +1377,7 @@ class WebViewerTool(ttk.Frame):
         self._listener = None
         self._process = None
         self._child_hwnd = 0
+        self._webview_hwnd = 0
         self._embedded = False
         self._embed_attempts = 0
         self.after(120, self._start_browser_process)
@@ -1228,12 +1413,14 @@ class WebViewerTool(ttk.Frame):
 
         self._process = None
         self._child_hwnd = 0
+        self._webview_hwnd = 0
         self._embedded = False
 
     # ---------- Ciclo PTM ----------
     def on_show(self):
         self._set_embedded_visible(True)
         self.after(25, lambda: self._resize_embedded(force=True))
+        self.after(90, self._focus_embedded_browser)
 
     def on_hide(self):
         self._set_embedded_visible(False)
