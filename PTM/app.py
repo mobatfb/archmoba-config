@@ -10,17 +10,19 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:24"
+APP_UPDATE_TIME = "19:28"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
@@ -1573,50 +1575,267 @@ class PTMApp(tk.Tk):
                 pass
             progress.destroy()
 
-    def open_tool(self, tool):
-        try:
-            tool["path"] = self._ensure_tool_local(tool)
-        except Exception as exc:
-            messagebox.showerror(
-                "PTM",
-                f"No se pudo descargar la herramienta desde el catálogo:\n\n{exc}"
+    def _tool_tab_key(self, tool):
+        repo_path = str(tool.get("repo_path", "")).strip()
+        if repo_path:
+            return f"remote:{repo_path.lower()}"
+        return str(Path(tool["path"]).resolve())
+
+    def _clear_tool_frame(self, frame):
+        for child in frame.winfo_children():
+            child.destroy()
+
+    def _show_tool_loading(self, tool, key, text="Descargando herramienta..."):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        frame = meta["frame"]
+        self._clear_tool_frame(frame)
+
+        holder = tk.Frame(frame, bg=WHITE)
+        holder.pack(expand=True)
+
+        spinner = tk.Canvas(
+            holder,
+            width=48,
+            height=48,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+        )
+        spinner.pack(pady=(0, 12))
+        arc = spinner.create_arc(
+            7, 7, 41, 41,
+            start=0,
+            extent=265,
+            style="arc",
+            outline=TEAL,
+            width=4,
+        )
+
+        tk.Label(
+            holder,
+            text=tool.get("name", "Herramienta"),
+            bg=WHITE,
+            fg=BLACK,
+            font=("Segoe UI", 15, "bold"),
+        ).pack()
+
+        status = tk.Label(
+            holder,
+            text=text,
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+        )
+        status.pack(pady=(6, 0))
+
+        def animate(angle=0):
+            if not spinner.winfo_exists():
+                return
+            current = self.open_tabs.get(key)
+            if not current or current.get("state") != "loading":
+                return
+            try:
+                spinner.itemconfigure(arc, start=angle)
+                spinner.after(45, lambda: animate((angle - 18) % 360))
+            except tk.TclError:
+                return
+
+        animate()
+        self.switch_to_tool(key)
+
+    def _show_tool_unavailable(self, tool, key, exc=None):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        meta["state"] = "unavailable"
+        frame = meta["frame"]
+        self._clear_tool_frame(frame)
+
+        holder = tk.Frame(frame, bg=WHITE)
+        holder.pack(expand=True)
+
+        icon = tk.Canvas(
+            holder,
+            width=54,
+            height=54,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+        )
+        icon.pack(pady=(0, 10))
+        icon.create_oval(7, 7, 47, 47, outline=RED, width=3)
+        icon.create_line(19, 19, 35, 35, fill=RED, width=3)
+        icon.create_line(35, 19, 19, 35, fill=RED, width=3)
+
+        tk.Label(
+            holder,
+            text=tool.get("name", "Herramienta"),
+            bg=WHITE,
+            fg=BLACK,
+            font=("Segoe UI", 15, "bold"),
+        ).pack()
+
+        is_404 = isinstance(exc, urllib.error.HTTPError) and getattr(exc, "code", None) == 404
+        title = "No está disponible" if is_404 else "No se pudo descargar"
+
+        tk.Label(
+            holder,
+            text=title,
+            bg=WHITE,
+            fg=RED if is_404 else BLACK,
+            font=("Segoe UI", 11, "bold"),
+        ).pack(pady=(5, 2))
+
+        detail = ""
+        if exc is not None and not is_404:
+            detail = str(exc).strip()
+        if detail:
+            if len(detail) > 260:
+                detail = detail[:257] + "..."
+            tk.Label(
+                holder,
+                text=detail,
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 8),
+                wraplength=430,
+                justify="center",
+            ).pack(pady=(2, 8))
+        else:
+            tk.Label(
+                holder,
+                text="El archivo no se encuentra disponible en este momento.",
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 8),
+            ).pack(pady=(2, 8))
+
+        buttons = tk.Frame(holder, bg=WHITE)
+        buttons.pack(pady=(8, 0))
+
+        tk.Button(
+            buttons,
+            text="Reintentar",
+            command=lambda: self._retry_tool_download(tool, key),
+            bg=TEAL,
+            fg=ON_ACCENT,
+            activebackground=TEAL_DARK,
+            activeforeground=ON_ACCENT,
+            relief="flat",
+            padx=18,
+            pady=7,
+            cursor="hand2",
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            buttons,
+            text="Cerrar",
+            command=lambda: self.close_tool_tab(key),
+            bg=LIGHT,
+            fg=BLACK,
+            relief="flat",
+            padx=18,
+            pady=7,
+            cursor="hand2",
+        ).pack(side="left")
+
+        self.switch_to_tool(key)
+
+    def _retry_tool_download(self, tool, key):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+        meta["state"] = "loading"
+        self._show_tool_loading(tool, key, "Reintentando descarga...")
+        self._start_tool_download(tool, key)
+
+    def _start_tool_download(self, tool, key):
+        def worker():
+            try:
+                local_path = self._ensure_tool_local(tool)
+            except Exception as exc:
+                self.after(
+                    0,
+                    lambda err=exc: self._show_tool_unavailable(tool, key, err),
+                )
+                return
+
+            self.after(
+                0,
+                lambda path=local_path: self._tool_download_ready(tool, key, path),
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _tool_download_ready(self, tool, key, local_path):
+        if key not in self.open_tabs:
+            return
+
+        tool["path"] = local_path
+        meta = self.open_tabs[key]
+        meta["state"] = "preparing"
+        self._show_tool_loading(tool, key, "Verificando dependencias...")
+
+        # La instalación existente se ejecuta después de la descarga.
+        if not self._install_dependencies(tool):
+            self._show_tool_unavailable(
+                tool,
+                key,
+                RuntimeError("No se pudieron preparar las dependencias requeridas."),
             )
             return
 
-        if not self._install_dependencies(tool):
+        self._load_tool_into_tab(tool, key)
+
+    def _load_tool_into_tab(self, tool, key):
+        meta = self.open_tabs.get(key)
+        if not meta:
             return
 
-        key = str(tool["path"].resolve())
-        if key in self.open_tabs:
-            self.switch_to_tool(key)
-            return
+        frame = meta["frame"]
+        self._clear_tool_frame(frame)
 
         if str(tool.get("mode", "")).strip().lower() == "externo":
-            frame = tk.Frame(self.content, bg=WHITE)
             info = tk.Frame(frame, bg=WHITE)
             info.pack(expand=True)
             tk.Label(
-                info, text=tool["name"], bg=WHITE, fg=BLACK,
-                font=("Segoe UI", 20, "bold")
+                info,
+                text=tool["name"],
+                bg=WHITE,
+                fg=BLACK,
+                font=("Segoe UI", 20, "bold"),
             ).pack(pady=(0, 8))
+
             if tool.get("description"):
                 tk.Label(
-                    info, text=tool["description"], bg=WHITE, fg=MUTED,
-                    font=("Segoe UI", 10), wraplength=520, justify="center"
+                    info,
+                    text=tool["description"],
+                    bg=WHITE,
+                    fg=MUTED,
+                    font=("Segoe UI", 10),
+                    wraplength=520,
+                    justify="center",
                 ).pack(pady=(0, 10))
+
             tk.Button(
-                info, text="Ejecutar herramienta",
+                info,
+                text="Ejecutar herramienta",
                 command=lambda p=tool["path"]: self.run_external(p),
-                bg=TEAL, fg=ON_ACCENT, activebackground=TEAL_DARK,
-                activeforeground=ON_ACCENT, relief="flat", padx=18, pady=8
+                bg=TEAL,
+                fg=ON_ACCENT,
+                activebackground=TEAL_DARK,
+                activeforeground=ON_ACCENT,
+                relief="flat",
+                padx=18,
+                pady=8,
             ).pack(pady=8)
 
-            self.open_tabs[key] = {
-                "name": tool["name"],
-                "tool": tool,
-                "frame": frame,
-                "module": None,
-            }
+            meta["module"] = None
+            meta["state"] = "ready"
             self.switch_to_tool(key)
             return
 
@@ -1628,39 +1847,68 @@ class PTMApp(tk.Tk):
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
         except Exception as exc:
-            messagebox.showerror("PTM", f"No se pudo cargar {tool['path'].name}:\n\n{exc}")
+            self._show_tool_unavailable(tool, key, exc)
             return
 
         factory = getattr(module, "create_tool", None)
-        frame = tk.Frame(self.content, bg=WHITE)
         if callable(factory):
             try:
                 widget = factory(frame, self)
                 widget.pack(fill="both", expand=True)
             except Exception as exc:
-                frame.destroy()
-                messagebox.showerror("PTM", f"Error al abrir {tool['name']}:\n\n{exc}")
+                self._show_tool_unavailable(tool, key, exc)
                 return
         else:
-            # Herramientas antiguas siguen siendo utilizables, aunque no puedan integrarse.
             info = tk.Frame(frame, bg=WHITE)
             info.pack(expand=True)
-            tk.Label(info, text=tool["name"], bg=WHITE, fg=BLACK,
-                     font=("Segoe UI", 20, "bold")).pack(pady=(0, 10))
-            tk.Label(info, text="Este archivo no contiene create_tool(parent, app).",
-                     bg=WHITE, fg=MUTED, font=("Segoe UI", 10)).pack(pady=5)
-            tk.Button(info, text="Ejecutar como programa externo",
-                      command=lambda p=tool["path"]: self.run_external(p),
-                      bg=TEAL, fg=ON_ACCENT, activebackground=TEAL_DARK,
-                      relief="flat", padx=16, pady=8).pack(pady=10)
+            tk.Label(
+                info,
+                text=tool["name"],
+                bg=WHITE,
+                fg=BLACK,
+                font=("Segoe UI", 20, "bold"),
+            ).pack(pady=(0, 10))
+            tk.Label(
+                info,
+                text="Este archivo no contiene create_tool(parent, app).",
+                bg=WHITE,
+                fg=MUTED,
+                font=("Segoe UI", 10),
+            ).pack(pady=5)
+            tk.Button(
+                info,
+                text="Ejecutar como programa externo",
+                command=lambda p=tool["path"]: self.run_external(p),
+                bg=TEAL,
+                fg=ON_ACCENT,
+                activebackground=TEAL_DARK,
+                relief="flat",
+                padx=16,
+                pady=8,
+            ).pack(pady=10)
 
+        meta["module"] = module
+        meta["state"] = "ready"
+        self.switch_to_tool(key)
+
+    def open_tool(self, tool):
+        key = self._tool_tab_key(tool)
+
+        if key in self.open_tabs:
+            self.switch_to_tool(key)
+            return
+
+        frame = tk.Frame(self.content, bg=WHITE)
         self.open_tabs[key] = {
-            "name": tool["name"],
+            "name": tool.get("name", "Herramienta"),
             "tool": tool,
             "frame": frame,
-            "module": module,
+            "module": None,
+            "state": "loading",
         }
-        self.switch_to_tool(key)
+
+        self._show_tool_loading(tool, key)
+        self._start_tool_download(tool, key)
 
     def switch_to_tool(self, key):
         if key not in self.open_tabs:
