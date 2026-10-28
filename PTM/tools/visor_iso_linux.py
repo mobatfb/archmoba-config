@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 
 def human_size(n):
@@ -650,7 +650,7 @@ class ISOEditor(ttk.Frame):
         if not dst.exists(): raise RuntimeError("No se genero el ISO")
 
 
-class StandaloneApp(tk.Tk):
+# Entrada explicita para PTM. PTM busca primero App/Application antes de autodetectar Frames.\n# Esto evita que editores auxiliares basados en Toplevel sean confundidos con la herramienta principal\n# cuando PTM sustituye Toplevel por un Frame embebido durante la importacion.\nApp = ISOEditor\n\n\nclass StandaloneApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{TOOL_NAME} {TOOL_VERSION}")
