@@ -19,7 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Conversor Múltiple"
 TOOL_DESCRIPTION = "Convierte archivos a Word, PDF, Excel, TXT o PNG con arrastre y modo múltiple."
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 CHILD_FLAG = "--ptm-converter-child"
 ENGINE_SHA256 = "577c938e25329bf3b4380371b4039d6abf598c15082d5c83775a993c42f629a2"
@@ -756,6 +756,132 @@ def _unique_destination(folder, name):
         index += 1
 
 
+def _managed_ptm_deps_dir():
+    """Devuelve el site-packages privado que PTM usa en Linux."""
+    if os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "ARCHMOBA" / "PTM" / "python" / "site-packages"
+    return Path.home() / ".archmoba" / "PTM" / "python" / "site-packages"
+
+
+def _patch_engine_pip_for_linux():
+    """
+    El engine original puede intentar instalar dependencias con --user e incluso
+    pywin32. En Linux se redirigen esas instalaciones al entorno privado de PTM.
+    """
+    if os.name == "nt":
+        return
+
+    deps_dir = _managed_ptm_deps_dir()
+    deps_dir.mkdir(parents=True, exist_ok=True)
+
+    if str(deps_dir) not in sys.path:
+        sys.path.insert(0, str(deps_dir))
+
+    current_pythonpath = os.environ.get("PYTHONPATH", "")
+    parts = [str(deps_dir)]
+    parts.extend(
+        part for part in current_pythonpath.split(os.pathsep)
+        if part and part != str(deps_dir)
+    )
+    os.environ["PYTHONPATH"] = os.pathsep.join(parts)
+
+    real_run = subprocess.run
+    real_check_call = subprocess.check_call
+    real_check_output = subprocess.check_output
+
+    def rewrite_pip_command(command):
+        if not isinstance(command, (list, tuple)):
+            return command, False, False
+
+        cmd = [str(item) for item in command]
+        lowered = [item.lower() for item in cmd]
+
+        try:
+            pip_index = lowered.index("pip")
+        except ValueError:
+            return command, False, False
+
+        if pip_index < 1 or lowered[pip_index - 1] != "-m":
+            return command, False, False
+        if "install" not in lowered[pip_index + 1:]:
+            return command, False, False
+
+        windows_only = {
+            "pywin32",
+            "pypiwin32",
+            "win32api",
+            "win32com",
+            "pythoncom",
+        }
+        requested = {
+            item.split("==", 1)[0].split(">=", 1)[0].split("<=", 1)[0].lower()
+            for item in cmd
+            if item and not item.startswith("-")
+        }
+        if requested & windows_only:
+            return cmd, True, True
+
+        clean = []
+        skip_next = False
+        for index, item in enumerate(cmd):
+            if skip_next:
+                skip_next = False
+                continue
+
+            low = item.lower()
+            if low == "--user":
+                continue
+
+            if low in {"--target", "-t"}:
+                skip_next = True
+                continue
+
+            clean.append(item)
+
+        install_pos = next(
+            (
+                index for index, item in enumerate(clean)
+                if item.lower() == "install"
+            ),
+            None,
+        )
+        if install_pos is not None:
+            clean[install_pos + 1:install_pos + 1] = [
+                "--upgrade",
+                "--target",
+                str(deps_dir),
+            ]
+
+        return clean, True, False
+
+    def patched_run(command, *args, **kwargs):
+        rewritten, is_pip, skip = rewrite_pip_command(command)
+        if is_pip and skip:
+            return subprocess.CompletedProcess(
+                rewritten,
+                0,
+                stdout="" if kwargs.get("text") else b"",
+                stderr="" if kwargs.get("text") else b"",
+            )
+        return real_run(rewritten, *args, **kwargs)
+
+    def patched_check_call(command, *args, **kwargs):
+        rewritten, is_pip, skip = rewrite_pip_command(command)
+        if is_pip and skip:
+            return 0
+        return real_check_call(rewritten, *args, **kwargs)
+
+    def patched_check_output(command, *args, **kwargs):
+        rewritten, is_pip, skip = rewrite_pip_command(command)
+        if is_pip and skip:
+            return "" if kwargs.get("text") or kwargs.get("universal_newlines") else b""
+        return real_check_output(rewritten, *args, **kwargs)
+
+    subprocess.run = patched_run
+    subprocess.check_call = patched_check_call
+    subprocess.check_output = patched_check_output
+
+
 def _child_convert(request_path):
     response_path = Path(request_path).with_suffix(".response.json")
     response = {"ok": False}
@@ -768,6 +894,8 @@ def _child_convert(request_path):
         inputs = [str(Path(p)) for p in request.get("inputs", []) if Path(p).is_file()]
         if not inputs:
             raise ValueError("No hay archivos válidos para convertir.")
+
+        _patch_engine_pip_for_linux()
 
         engine_root = _ensure_embedded_engine()
         package_parent = engine_root.parent
@@ -1149,11 +1277,14 @@ class ConverterTool(ttk.Frame):
             kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
         try:
+            child_env = os.environ.copy()
+
             self._process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=child_env,
                 **kwargs,
             )
         except Exception as exc:
