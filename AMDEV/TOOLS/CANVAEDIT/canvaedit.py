@@ -1,4 +1,4 @@
-# CANVAEDIT - Editor visual por capas para PYRION
+# CANVAEDIT - Editor visual por capas
 # Ruta: AMDEV/TOOLS/CANVAEDIT/canvaedit.py
 
 from dataclasses import dataclass, asdict
@@ -41,8 +41,7 @@ def list_projects():
     if not PROJECTS_DIR.is_dir():
         return []
     return sorted(
-        p.name
-        for p in PROJECTS_DIR.iterdir()
+        p.name for p in PROJECTS_DIR.iterdir()
         if p.is_dir() and (p / "layers.json").is_file()
     )
 
@@ -64,12 +63,7 @@ class Layer:
 
     @classmethod
     def create(cls, name, type="generic", **kwargs):
-        return cls(
-            id=uuid.uuid4().hex[:12],
-            name=name,
-            type=type,
-            **kwargs,
-        )
+        return cls(id=uuid.uuid4().hex[:12], name=name, type=type, **kwargs)
 
 
 class LayerManager:
@@ -96,8 +90,7 @@ class LayerManager:
         index = self._index(layer_id)
         if index is not None and index < len(self.layers) - 1:
             self.layers[index], self.layers[index + 1] = (
-                self.layers[index + 1],
-                self.layers[index],
+                self.layers[index + 1], self.layers[index]
             )
             self._normalize()
 
@@ -105,8 +98,7 @@ class LayerManager:
         index = self._index(layer_id)
         if index is not None and index > 0:
             self.layers[index], self.layers[index - 1] = (
-                self.layers[index - 1],
-                self.layers[index],
+                self.layers[index - 1], self.layers[index]
             )
             self._normalize()
 
@@ -137,7 +129,6 @@ class LayerManager:
         target = Path(path) if path else self.project_file
         target.parent.mkdir(parents=True, exist_ok=True)
         self.assets_dir.mkdir(parents=True, exist_ok=True)
-
         payload = {
             "format": "CANVAEDIT",
             "version": 1,
@@ -153,7 +144,6 @@ class LayerManager:
         target = Path(path) if path else self.project_file
         if not target.is_file():
             return False
-
         data = json.loads(target.read_text(encoding="utf-8"))
         self.project_name = data.get("project", self.project_name)
         self.project_dir = get_project_dir(self.project_name)
@@ -164,54 +154,58 @@ class LayerManager:
         return True
 
 
-class CanvaEditApp(tk.Tk):
-    def __init__(self, manager):
-        super().__init__()
-        self.manager = manager
-        self.title(f"CANVAEDIT - {manager.project_name}")
-        self.geometry("1280x760")
-        self.minsize(900, 560)
-        self.configure(bg="#14171d")
+class CanvaEditFrame(tk.Frame):
+    def __init__(self, master, project_name=DEFAULT_PROJECT, **kwargs):
+        super().__init__(master, bg="#14171d", **kwargs)
+        self.manager = LayerManager(project_name)
+        if not self.manager.load():
+            available = list_projects()
+            if available:
+                self.manager = LayerManager(available[0])
+                self.manager.load()
 
         self._source_images = {}
         self._tk_images = {}
         self._resize_job = None
+        self.project_var = tk.StringVar(value=self.manager.project_name)
 
         self._build_ui()
         self._refresh_layers_panel()
         self.after(100, self.render_layers)
 
     def _build_ui(self):
-        style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except Exception:
-            pass
-
-        style.configure("Dark.TFrame", background="#14171d")
-        style.configure("Panel.TFrame", background="#1d222b")
-        style.configure(
-            "Dark.TLabel",
-            background="#14171d",
-            foreground="#f2f5f8",
-            font=("Arial", 11),
-        )
-        style.configure(
-            "Title.TLabel",
-            background="#14171d",
-            foreground="#ffffff",
-            font=("Arial", 16, "bold"),
-        )
-
-        header = ttk.Frame(self, style="Dark.TFrame")
+        header = tk.Frame(self, bg="#14171d")
         header.pack(fill="x", padx=14, pady=(12, 8))
 
-        ttk.Label(header, text="CANVAEDIT", style="Title.TLabel").pack(side="left")
-        ttk.Label(
+        tk.Label(
             header,
-            text=f"  Proyecto: {self.manager.project_name}",
-            style="Dark.TLabel",
+            text="CANVAEDIT",
+            bg="#14171d",
+            fg="#ffffff",
+            font=("Arial", 16, "bold"),
         ).pack(side="left")
+
+        tk.Label(
+            header,
+            textvariable=self.project_var,
+            bg="#14171d",
+            fg="#aeb8c5",
+            font=("Arial", 10),
+        ).pack(side="left", padx=(12, 0))
+
+        tk.Button(
+            header,
+            text="Abrir proyectos",
+            command=self.open_projects,
+            bg="#2b3440",
+            fg="#ffffff",
+            activebackground="#384553",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        ).pack(side="right")
 
         body = tk.PanedWindow(
             self,
@@ -250,11 +244,8 @@ class CanvaEditApp(tk.Tk):
         self.layers_container = tk.Frame(panel_frame, bg="#1d222b")
         self.layers_container.pack(fill="both", expand=True, padx=10)
 
-        footer = tk.Frame(panel_frame, bg="#1d222b")
-        footer.pack(fill="x", padx=10, pady=10)
-
         tk.Button(
-            footer,
+            panel_frame,
             text="Recargar",
             command=self.reload_project,
             bg="#2b3440",
@@ -265,7 +256,7 @@ class CanvaEditApp(tk.Tk):
             padx=12,
             pady=7,
             cursor="hand2",
-        ).pack(fill="x")
+        ).pack(fill="x", padx=10, pady=10)
 
         self.status_var = tk.StringVar(value="Listo")
         tk.Label(
@@ -278,6 +269,87 @@ class CanvaEditApp(tk.Tk):
             justify="left",
             wraplength=245,
         ).pack(fill="x", padx=12, pady=(0, 12))
+
+    def open_projects(self):
+        projects = list_projects()
+        if not projects:
+            messagebox.showinfo("CANVAEDIT", "No hay proyectos disponibles.")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Abrir proyecto")
+        win.geometry("420x360")
+        win.configure(bg="#171b22")
+        win.transient(self.winfo_toplevel())
+
+        tk.Label(
+            win,
+            text="PROYECTOS",
+            bg="#171b22",
+            fg="#ffffff",
+            font=("Arial", 13, "bold"),
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+
+        listbox = tk.Listbox(
+            win,
+            bg="#222933",
+            fg="#ffffff",
+            selectbackground="#3b4655",
+            selectforeground="#ffffff",
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground="#343d49",
+            font=("Arial", 11),
+        )
+        listbox.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+        for name in projects:
+            listbox.insert("end", name)
+
+        if self.manager.project_name in projects:
+            index = projects.index(self.manager.project_name)
+            listbox.selection_set(index)
+            listbox.see(index)
+
+        def open_selected(_event=None):
+            selection = listbox.curselection()
+            if not selection:
+                return
+            self.load_project(projects[selection[0]])
+            win.destroy()
+
+        listbox.bind("<Double-Button-1>", open_selected)
+
+        tk.Button(
+            win,
+            text="Abrir",
+            command=open_selected,
+            bg="#2b3440",
+            fg="#ffffff",
+            activebackground="#384553",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=14,
+            pady=7,
+            cursor="hand2",
+        ).pack(fill="x", padx=16, pady=(0, 16))
+
+    def load_project(self, project_name):
+        manager = LayerManager(project_name)
+        if not manager.load():
+            messagebox.showerror(
+                "CANVAEDIT",
+                f"No se pudo abrir el proyecto '{project_name}'."
+            )
+            return
+
+        self.manager = manager
+        self.project_var.set(project_name)
+        self._source_images.clear()
+        self._tk_images.clear()
+        self._refresh_layers_panel()
+        self.render_layers()
+        self.status_var.set(f"Proyecto abierto: {project_name}")
 
     def _refresh_layers_panel(self):
         for child in self.layers_container.winfo_children():
@@ -343,17 +415,7 @@ class CanvaEditApp(tk.Tk):
         self._resize_job = self.after(120, self.render_layers)
 
     def reload_project(self):
-        if self.manager.load():
-            self._source_images.clear()
-            self._tk_images.clear()
-            self._refresh_layers_panel()
-            self.render_layers()
-            self.status_var.set("Proyecto recargado")
-        else:
-            messagebox.showerror(
-                "CANVAEDIT",
-                f"No se pudo cargar {self.manager.project_file}",
-            )
+        self.load_project(self.manager.project_name)
 
     def _download_image(self, url):
         with urllib.request.urlopen(url, timeout=15) as response:
@@ -364,9 +426,7 @@ class CanvaEditApp(tk.Tk):
             return self._source_images[layer.asset]
 
         if not PIL_AVAILABLE:
-            raise RuntimeError(
-                "Pillow no está instalado. CANVAEDIT necesita Pillow para mostrar JPG."
-            )
+            raise RuntimeError("Pillow no está instalado.")
 
         data = self._download_image(layer.asset)
         image = Image.open(io.BytesIO(data)).convert("RGBA")
@@ -430,12 +490,9 @@ class CanvaEditApp(tk.Tk):
 
                 tk_img = ImageTk.PhotoImage(img)
                 self._tk_images[layer.id] = tk_img
-
-                x = layer.x
-                y = layer.y
                 self.canvas.create_image(
-                    x,
-                    y,
+                    layer.x,
+                    layer.y,
                     anchor="nw",
                     image=tk_img,
                     tags=(layer.id,),
@@ -457,6 +514,18 @@ class CanvaEditApp(tk.Tk):
                 self.status_var.set(f"Error en {layer.name}: {exc}")
 
 
+class CanvaEditApp(tk.Tk):
+    def __init__(self, project_name=DEFAULT_PROJECT):
+        super().__init__()
+        self.title(f"CANVAEDIT - {project_name}")
+        self.geometry("1280x760")
+        self.minsize(900, 560)
+        self.configure(bg="#14171d")
+
+        self.editor = CanvaEditFrame(self, project_name=project_name)
+        self.editor.pack(fill="both", expand=True)
+
+
 def create_project(project_name):
     project_dir = get_project_dir(project_name)
     assets_dir = get_assets_dir(project_name)
@@ -470,15 +539,7 @@ def create_project(project_name):
 
 def main():
     project_name = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROJECT
-    manager = LayerManager(project_name)
-
-    if not manager.load():
-        available = list_projects()
-        print(f"ERROR: no existe el proyecto '{project_name}'.")
-        print("Proyectos disponibles:", ", ".join(available) if available else "(ninguno)")
-        return 1
-
-    app = CanvaEditApp(manager)
+    app = CanvaEditApp(project_name)
     app.mainloop()
     return 0
 
