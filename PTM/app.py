@@ -26,9 +26,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.38"
+APP_VERSION = "1.0.39"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "22:24"
+APP_UPDATE_TIME = "22:30"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -235,6 +235,8 @@ DARK_MODE = detect_system_dark_mode()
 # Paleta PTM adaptada automáticamente al tema del sistema.
 TEAL = "#176684"
 TEAL_DARK = "#0F536E"
+TAB_INACTIVE = "#145C77"
+TAB_HOVER = "#1B7598"
 RED = "#FF1616"
 ON_ACCENT = "#FFFFFF"
 
@@ -267,11 +269,14 @@ class TabButton(tk.Canvas):
         self.tab_height = height
         self.active = active
         self.processing = processing
+        self.hovered = False
         self.spinner_angle = 0
         self.spinner_arc = None
         self._spinner_job = None
         self.bind("<Button-1>", self._click)
         self.bind("<Button-3>", self._right_click)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
         self.bind("<Destroy>", self._on_destroy)
         self.draw()
         if self.processing:
@@ -290,12 +295,20 @@ class TabButton(tk.Canvas):
         self.delete("all")
         self.spinner_arc = None
         w, h = self.tab_width, self.tab_height
-        fill = WHITE if self.active else TEAL
-        fg = (BLACK if DARK_MODE else TEAL_DARK) if self.active else ON_ACCENT
-        outline = TEAL_DARK
+        if self.active:
+            fill = WHITE
+            fg = BLACK if DARK_MODE else TEAL_DARK
+            outline = TEAL_DARK
+            outline_width = 2
+        else:
+            fill = TAB_HOVER if self.hovered else TAB_INACTIVE
+            fg = ON_ACCENT
+            outline = TEAL_DARK
+            outline_width = 1
+
         self.create_rectangle(
             1, 1, w - 1, h - 1,
-            fill=fill, outline=outline, width=1
+            fill=fill, outline=outline, width=outline_width
         )
         self.create_polygon(
             w - 18, 1, w - 1, 1, w - 1, 18,
@@ -303,7 +316,7 @@ class TabButton(tk.Canvas):
         )
         if self.active:
             self.create_rectangle(
-                1, h - 5, w - 1, h - 1,
+                1, h - 6, w - 1, h - 1,
                 fill=RED, outline=RED
             )
 
@@ -340,6 +353,16 @@ class TabButton(tk.Canvas):
             fill=fg,
             font=("Segoe UI", 9, "bold" if self.active else "normal"),
         )
+
+    def _on_enter(self, _event=None):
+        if not self.active:
+            self.hovered = True
+            self.draw()
+
+    def _on_leave(self, _event=None):
+        if self.hovered:
+            self.hovered = False
+            self.draw()
 
     def _schedule_spinner(self):
         if self.processing and self._spinner_job is None:
