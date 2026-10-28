@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.12.0"
+TOOL_VERSION = "1.12.1"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -201,6 +201,10 @@ class PyrionConsoleTool(tk.Frame):
             button.pack(side="left", fill="y")
             self.launch_buttons[name] = button
 
+        # Reservar espacio para la versión flotante en la esquina superior
+        # derecha; no debe cubrir el botón Limpiar ni los accesos de consola.
+        tk.Frame(top, bg=TAB, width=84).pack(side="right", fill="y")
+
         tk.Button(
             top,
             text="Limpiar",
@@ -215,6 +219,21 @@ class PyrionConsoleTool(tk.Frame):
             padx=12,
             font=("DejaVu Sans", 9),
         ).pack(side="right", fill="y")
+
+        # Insignia integrada en PTM: se superpone al encabezado, no crea
+        # ventanas externas y siempre refleja TOOL_VERSION.
+        self.version_badge = tk.Label(
+            top,
+            text=f"v{TOOL_VERSION}",
+            bg="#075D79",
+            fg="#FFFFFF",
+            font=("DejaVu Sans", 9, "bold"),
+            padx=8,
+            pady=3,
+            bd=0,
+        )
+        self.version_badge.place(relx=1.0, x=-8, y=3, anchor="ne")
+        self.version_badge.lift()
 
         workspace = tk.Frame(self, bg=BG)
         workspace.pack(fill="both", expand=True, padx=2)
