@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.8"
+TOOL_VERSION = "2.0.9"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -159,28 +159,241 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
                             except Exception:
                                 pass
 
-                        elif command == "focus":
+                        elif command == "text":
+                            text_value = str(message.get("text", "") or "")
+                            if text_value:
+                                payload = json.dumps(text_value)
+                                try:
+                                    window.run_js(
+                                        """
+(() => {
+  const text = PAYLOAD;
+  const el = document.activeElement;
+  if (!el) return false;
+
+  const inputLike =
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement;
+
+  if (inputLike || el.isContentEditable) {
+    try {
+      if (document.queryCommandSupported &&
+          document.queryCommandSupported('insertText')) {
+        if (document.execCommand('insertText', false, text)) {
+          return true;
+        }
+      }
+    } catch (_) {}
+
+    if (inputLike) {
+      const value = String(el.value || '');
+      const start =
+        typeof el.selectionStart === 'number'
+          ? el.selectionStart
+          : value.length;
+      const end =
+        typeof el.selectionEnd === 'number'
+          ? el.selectionEnd
+          : start;
+      const next = value.slice(0, start) + text + value.slice(end);
+
+      const proto =
+        el instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+      const descriptor =
+        Object.getOwnPropertyDescriptor(proto, 'value');
+
+      if (descriptor && descriptor.set) {
+        descriptor.set.call(el, next);
+      } else {
+        el.value = next;
+      }
+
+      const pos = start + text.length;
+      try { el.setSelectionRange(pos, pos); } catch (_) {}
+
+      try {
+        el.dispatchEvent(
+          new InputEvent('input', {
+            bubbles: true,
+            inputType: 'insertText',
+            data: text
+          })
+        );
+      } catch (_) {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      return true;
+    }
+
+    if (el.isContentEditable) {
+      try {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount) {
+          selection.deleteFromDocument();
+          const node = document.createTextNode(text);
+          const range = selection.getRangeAt(0);
+          range.insertNode(node);
+          range.setStartAfter(node);
+          range.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
+      } catch (_) {}
+    }
+  }
+  return false;
+})()
+                                        """.replace("PAYLOAD", payload)
+                                    )
+                                except Exception:
+                                    pass
+
+                        elif command == "key":
+                            key_name = str(message.get("key", "") or "")
+                            shift = bool(message.get("shift", False))
+                            ctrl = bool(message.get("ctrl", False))
+                            payload = json.dumps(
+                                {
+                                    "key": key_name,
+                                    "shift": shift,
+                                    "ctrl": ctrl,
+                                }
+                            )
                             try:
-                                native = window.native
-                                native_webview = getattr(native, "webview", None)
-                                if native is not None and native_webview is not None:
-                                    # Carga dinamica: System pertenece a pythonnet/.NET,
-                                    # no es un paquete pip. Evita que PTM intente
-                                    # instalar una dependencia llamada "System".
-                                    System = importlib.import_module("System")
-                                    Action = getattr(System, "Action")
+                                window.run_js(
+                                    """
+(() => {
+  const info = PAYLOAD;
+  const el = document.activeElement;
+  if (!el) return false;
 
-                                    def apply_focus():
-                                        try:
-                                            native.Activate()
-                                        except Exception:
-                                            pass
-                                        try:
-                                            native_webview.Focus()
-                                        except Exception:
-                                            pass
+  const inputLike =
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement;
 
-                                    native.BeginInvoke(Action(apply_focus))
+  const fireKey = (type, key) => {
+    try {
+      el.dispatchEvent(
+        new KeyboardEvent(type, {
+          key,
+          bubbles: true,
+          cancelable: true,
+          shiftKey: !!info.shift,
+          ctrlKey: !!info.ctrl
+        })
+      );
+    } catch (_) {}
+  };
+
+  if (info.ctrl && String(info.key).toLowerCase() === 'a') {
+    if (inputLike) {
+      try {
+        el.setSelectionRange(0, String(el.value || '').length);
+        return true;
+      } catch (_) {}
+    }
+    if (el.isContentEditable) {
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return true;
+      } catch (_) {}
+    }
+  }
+
+  if (info.key === 'BackSpace') {
+    try {
+      if (document.execCommand('delete')) return true;
+    } catch (_) {}
+    if (inputLike) {
+      const value = String(el.value || '');
+      let start = el.selectionStart ?? value.length;
+      let end = el.selectionEnd ?? start;
+      if (start === end && start > 0) start -= 1;
+      const next = value.slice(0, start) + value.slice(end);
+      el.value = next;
+      try { el.setSelectionRange(start, start); } catch (_) {}
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+  }
+
+  if (info.key === 'Delete') {
+    try {
+      if (document.execCommand('forwardDelete')) return true;
+    } catch (_) {}
+    if (inputLike) {
+      const value = String(el.value || '');
+      let start = el.selectionStart ?? value.length;
+      let end = el.selectionEnd ?? start;
+      if (start === end && end < value.length) end += 1;
+      const next = value.slice(0, start) + value.slice(end);
+      el.value = next;
+      try { el.setSelectionRange(start, start); } catch (_) {}
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+  }
+
+  if (
+    inputLike &&
+    ['Left', 'Right', 'Home', 'End'].includes(info.key)
+  ) {
+    const value = String(el.value || '');
+    let start = el.selectionStart ?? value.length;
+    let end = el.selectionEnd ?? start;
+    let pos = end;
+
+    if (info.key === 'Left') pos = Math.max(0, start - 1);
+    if (info.key === 'Right') pos = Math.min(value.length, end + 1);
+    if (info.key === 'Home') pos = 0;
+    if (info.key === 'End') pos = value.length;
+
+    try { el.setSelectionRange(pos, pos); } catch (_) {}
+    return true;
+  }
+
+  if (info.key === 'Return') {
+    fireKey('keydown', 'Enter');
+
+    if (el instanceof HTMLTextAreaElement || el.isContentEditable) {
+      try {
+        if (document.execCommand('insertLineBreak')) {
+          fireKey('keyup', 'Enter');
+          return true;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      if (el.form && typeof el.form.requestSubmit === 'function') {
+        el.form.requestSubmit();
+        fireKey('keyup', 'Enter');
+        return true;
+      }
+    } catch (_) {}
+
+    fireKey('keyup', 'Enter');
+    return true;
+  }
+
+  if (info.key === 'Tab') {
+    fireKey('keydown', 'Tab');
+    fireKey('keyup', 'Tab');
+    return true;
+  }
+
+  return false;
+})()
+                                    """.replace("PAYLOAD", payload)
+                                )
                             except Exception:
                                 pass
 
@@ -344,9 +557,6 @@ class WebViewerTool(ttk.Frame):
         self._embed_attempts = 0
         self._resize_job = None
         self._last_left_button_down = False
-        self._input_threads_attached = False
-        self._ptm_input_tid = 0
-        self._web_input_tid = 0
         self._web_keyboard_mode = False
 
         self._token = secrets.token_hex(8)
@@ -548,6 +758,26 @@ class WebViewerTool(ttk.Frame):
             padx=7,
         )
         self.browser_host.grid_propagate(False)
+
+        # Proxy invisible de teclado. PTM mantiene siempre el foco real y
+        # reenvía las teclas a la web únicamente después de un clic web.
+        self.keyboard_proxy = tk.Entry(
+            self,
+            width=1,
+            bd=0,
+            relief="flat",
+            takefocus=False,
+        )
+        self.keyboard_proxy.place(
+            x=-100,
+            y=-100,
+            width=1,
+            height=1,
+        )
+        self.keyboard_proxy.bind(
+            "<KeyPress>",
+            self._on_web_proxy_keypress,
+        )
 
         self.placeholder = ttk.Frame(self.browser_host)
         self.placeholder.place(
@@ -820,7 +1050,7 @@ class WebViewerTool(ttk.Frame):
                 self.title_var.set(title[:100])
             if self._embedded:
                 self.status_var.set("Listo")
-                self.after(120, self._refresh_input_threads)
+                self.after(120, self._refresh_webview_focus_hwnd)
             self._update_favorite_button()
             self._save_state()
 
@@ -1184,128 +1414,12 @@ class WebViewerTool(ttk.Frame):
         except Exception:
             pass
 
-    # ---------- Foco teclado Win32 ----------
-    def _attach_input_threads(self):
-        """
-        Une las colas de entrada de PTM y WebView2 mientras la pestaña está
-        visible. El foco queda en manos de Windows y sigue al control clicado.
-        """
-        if (
-            os.name != "nt"
-            or not self._embedded
-            or not self._child_hwnd
-            or self._input_threads_attached
-        ):
-            return
-
-        try:
-            user32, _get_long, _set_long = self._win_api()
-
-            self._refresh_webview_focus_hwnd()
-            target_hwnd = int(
-                self._render_hwnd
-                or self._webview_hwnd
-                or self._child_hwnd
-            )
-            ptm_hwnd = int(self.winfo_toplevel().winfo_id())
-
-            ptm_pid = ctypes.c_ulong(0)
-            web_pid = ctypes.c_ulong(0)
-
-            ptm_tid = int(
-                user32.GetWindowThreadProcessId(
-                    ptm_hwnd,
-                    ctypes.byref(ptm_pid),
-                )
-            )
-            web_tid = int(
-                user32.GetWindowThreadProcessId(
-                    target_hwnd,
-                    ctypes.byref(web_pid),
-                )
-            )
-
-            if not ptm_tid or not web_tid or ptm_tid == web_tid:
-                return
-
-            if user32.AttachThreadInput(
-                ptm_tid,
-                web_tid,
-                True,
-            ):
-                self._ptm_input_tid = ptm_tid
-                self._web_input_tid = web_tid
-                self._input_threads_attached = True
-        except Exception:
-            self._input_threads_attached = False
-            self._ptm_input_tid = 0
-            self._web_input_tid = 0
-
-    def _detach_input_threads(self):
-        if (
-            os.name != "nt"
-            or not self._input_threads_attached
-            or not self._ptm_input_tid
-            or not self._web_input_tid
-        ):
-            self._input_threads_attached = False
-            self._ptm_input_tid = 0
-            self._web_input_tid = 0
-            return
-
-        try:
-            user32, _get_long, _set_long = self._win_api()
-            user32.AttachThreadInput(
-                int(self._ptm_input_tid),
-                int(self._web_input_tid),
-                False,
-            )
-        except Exception:
-            pass
-        finally:
-            self._input_threads_attached = False
-            self._ptm_input_tid = 0
-            self._web_input_tid = 0
-
-    def _refresh_input_threads(self):
-        """Reenlaza el input si Chromium recreó su HWND mientras usa teclado web."""
-        if not self._embedded:
-            return
-
-        old_tid = int(self._web_input_tid or 0)
-        self._refresh_webview_focus_hwnd()
-
-        if not self._web_keyboard_mode:
-            return
-
-        try:
-            user32, _get_long, _set_long = self._win_api()
-            target_hwnd = int(
-                self._render_hwnd
-                or self._webview_hwnd
-                or self._child_hwnd
-            )
-            pid = ctypes.c_ulong(0)
-            new_tid = int(
-                user32.GetWindowThreadProcessId(
-                    target_hwnd,
-                    ctypes.byref(pid),
-                )
-            )
-        except Exception:
-            new_tid = old_tid
-
-        if (
-            not self._input_threads_attached
-            or (new_tid and old_tid and new_tid != old_tid)
-        ):
-            self._detach_input_threads()
-            self._attach_input_threads()
-
+    # ---------- Teclado web mediante proxy Tk ----------
     def _poll_keyboard_target(self):
         """
-        Clic dentro del WebView: enlaza el teclado al proceso web.
-        Clic fuera del WebView: lo libera y devuelve el foco a Tkinter.
+        PTM conserva siempre el foco. Un clic web activa el proxy de teclado;
+        cualquier clic fuera de la web desactiva el proxy y deja a Tkinter
+        manejar el teclado normalmente.
         """
         if not self._alive:
             return
@@ -1341,20 +1455,28 @@ class WebViewerTool(ttk.Frame):
 
                         if inside_web:
                             self._web_keyboard_mode = True
-                            self._refresh_input_threads()
-                            # Refuerzo únicamente tras un clic real en la web.
-                            self._send({"cmd": "focus"})
-                        else:
-                            if (
-                                self._web_keyboard_mode
-                                or self._input_threads_attached
-                            ):
-                                self._web_keyboard_mode = False
-                                self._detach_input_threads()
 
-                            # Si el clic fue sobre un input Tkinter, devolverle
-                            # explícitamente el foco después de liberar WebView2.
-                            self._restore_tk_input_focus(point.x, point.y)
+                            def focus_proxy():
+                                try:
+                                    if (
+                                        self._alive
+                                        and self._web_keyboard_mode
+                                        and self.keyboard_proxy.winfo_exists()
+                                    ):
+                                        self.keyboard_proxy.focus_force()
+                                except Exception:
+                                    pass
+
+                            # El clic primero posiciona el caret/selección dentro
+                            # del DOM; inmediatamente después Tk recupera el foco
+                            # físico para poder reenviar el teclado.
+                            self.after(25, focus_proxy)
+                        else:
+                            self._web_keyboard_mode = False
+                            self._restore_tk_input_focus(
+                                point.x,
+                                point.y,
+                            )
 
                 self._last_left_button_down = down
         except Exception:
@@ -1368,7 +1490,10 @@ class WebViewerTool(ttk.Frame):
     def _restore_tk_input_focus(self, root_x, root_y):
         try:
             top = self.winfo_toplevel()
-            widget = top.winfo_containing(int(root_x), int(root_y))
+            widget = top.winfo_containing(
+                int(root_x),
+                int(root_y),
+            )
         except Exception:
             widget = None
 
@@ -1390,7 +1515,7 @@ class WebViewerTool(ttk.Frame):
         def apply_focus(w=widget):
             try:
                 if w.winfo_exists():
-                    w.focus_set()
+                    w.focus_force()
             except Exception:
                 pass
 
@@ -1398,6 +1523,81 @@ class WebViewerTool(ttk.Frame):
             self.after_idle(apply_focus)
         except tk.TclError:
             pass
+
+    def _on_web_proxy_keypress(self, event):
+        if not self._web_keyboard_mode:
+            return None
+
+        state = int(getattr(event, "state", 0) or 0)
+        ctrl = bool(state & 0x0004)
+        shift = bool(state & 0x0001)
+        keysym = str(getattr(event, "keysym", "") or "")
+        char = str(getattr(event, "char", "") or "")
+
+        if ctrl:
+            lower = keysym.lower()
+
+            if lower == "v":
+                try:
+                    text_value = self.clipboard_get()
+                except Exception:
+                    text_value = ""
+                if text_value:
+                    self._send(
+                        {
+                            "cmd": "text",
+                            "text": text_value,
+                        }
+                    )
+                return "break"
+
+            if lower == "a":
+                self._send(
+                    {
+                        "cmd": "key",
+                        "key": "a",
+                        "ctrl": True,
+                        "shift": shift,
+                    }
+                )
+                return "break"
+
+            # No secuestrar otros atajos de PTM.
+            return "break"
+
+        special = {
+            "BackSpace": "BackSpace",
+            "Delete": "Delete",
+            "Left": "Left",
+            "Right": "Right",
+            "Home": "Home",
+            "End": "End",
+            "Return": "Return",
+            "KP_Enter": "Return",
+            "Tab": "Tab",
+        }
+
+        if keysym in special:
+            self._send(
+                {
+                    "cmd": "key",
+                    "key": special[keysym],
+                    "shift": shift,
+                    "ctrl": False,
+                }
+            )
+            return "break"
+
+        if char and ord(char[0]) >= 32:
+            self._send(
+                {
+                    "cmd": "text",
+                    "text": char,
+                }
+            )
+            return "break"
+
+        return "break"
 
     # ---------- Navegación ----------
     def _normalize_address(self, raw):
@@ -1598,7 +1798,6 @@ class WebViewerTool(ttk.Frame):
             pass
 
     def _restart_browser(self):
-        self._detach_input_threads()
         self._stop_browser()
         self._token = secrets.token_hex(8)
         self._child_title = "PTM_WEBVIEW_" + self._token
@@ -1614,7 +1813,6 @@ class WebViewerTool(ttk.Frame):
         self.after(120, self._start_browser_process)
 
     def _stop_browser(self):
-        self._detach_input_threads()
         self._send({"cmd": "close"})
 
         conn = self._conn
@@ -1652,21 +1850,18 @@ class WebViewerTool(ttk.Frame):
     # ---------- Ciclo PTM ----------
     def on_show(self):
         self._web_keyboard_mode = False
-        self._detach_input_threads()
         self._set_embedded_visible(True)
         self.after(25, lambda: self._resize_embedded(force=True))
         self.after(100, self._refresh_webview_focus_hwnd)
 
     def on_hide(self):
         self._web_keyboard_mode = False
-        self._detach_input_threads()
         self._set_embedded_visible(False)
         self._save_state()
 
     def on_close(self):
         self._alive = False
         self._web_keyboard_mode = False
-        self._detach_input_threads()
         self._save_state()
         self._stop_browser()
 
