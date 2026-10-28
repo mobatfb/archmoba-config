@@ -13,15 +13,18 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:32"
+APP_UPDATE_TIME = "19:57"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
 REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main"
 APPS_URL = f"{REPO_RAW_BASE}/apps.json"
+SELF_CONFIG_API_URL = (
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/AMDEV/config.json?ref=main"
+)
 
 TEAL = "#176684"
 TEAL_DARK = "#0F536E"
@@ -31,6 +34,70 @@ BLACK = "#101010"
 LIGHT = "#F4F4F4"
 MID = "#D7D7D7"
 MUTED = "#666666"
+
+
+def _version_tuple(value):
+    parts = []
+    for part in str(value).strip().split("."):
+        m = re.match(r"(\d+)", part)
+        parts.append(int(m.group(1)) if m else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def check_self_update():
+    """Actualiza AMDEV desde un release_commit fijo antes de mostrar el flotante."""
+    try:
+        request = urllib.request.Request(
+            SELF_CONFIG_API_URL,
+            headers={
+                "User-Agent": f"AMDEV/{APP_VERSION}",
+                "Accept": "application/vnd.github+json",
+                "Cache-Control": "no-cache",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        encoded = str(payload.get("content", "")).replace("\n", "")
+        config = json.loads(base64.b64decode(encoded).decode("utf-8-sig"))
+
+        remote_version = str(config.get("version", "")).strip()
+        if not remote_version or _version_tuple(remote_version) <= _version_tuple(APP_VERSION):
+            return False
+
+        release_commit = str(config.get("release_commit", "")).strip()
+        app_path = str(config.get("app_path", "AMDEV/app.py")).strip().replace("\\", "/").lstrip("/")
+
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", release_commit):
+            return False
+
+        url = f"{REPO_RAW_ROOT}/{release_commit}/{app_path}?v={time.time_ns()}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": f"AMDEV/{APP_VERSION}",
+                "Cache-Control": "no-cache",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            source = response.read().decode("utf-8-sig")
+
+        match = re.search(r'''APP_VERSION\s*=\s*["']([^"']+)["']''', source)
+        if not match or match.group(1).strip() != remote_version:
+            return False
+
+        compile(source, "AMDEV/app.py", "exec")
+        current = Path(__file__).resolve()
+        temp = current.with_suffix(current.suffix + ".update")
+        temp.write_text(source, encoding="utf-8")
+        os.replace(temp, current)
+
+        subprocess.Popen([sys.executable, str(current), *sys.argv[1:]], cwd=str(current.parent))
+        return True
+    except Exception:
+        return False
 
 
 def detect_system_dark_mode():
@@ -612,6 +679,10 @@ class AMDEVApp(tk.Tk):
 
             temp = local_app.with_suffix(".py.tmp")
             temp.write_text(source, encoding="utf-8")
+            try:
+                local_app.unlink(missing_ok=True)
+            except Exception:
+                pass
             temp.replace(local_app)
 
             local_config = local_dir / "config.json"
@@ -720,5 +791,8 @@ class AMDEVApp(tk.Tk):
 
 
 if __name__ == "__main__":
+    if check_self_update():
+        raise SystemExit(0)
+
     app = AMDEVApp()
     app.mainloop()
