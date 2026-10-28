@@ -19,7 +19,7 @@ except Exception:
     PIL_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
-CANVAEDIT_VERSION = "1.0.5"
+CANVAEDIT_VERSION = "1.0.6"
 DEFAULT_PROJECT = "pyrion_desing"
 
 REPO_OWNER = "mobatfb"
@@ -592,11 +592,21 @@ class CanvaEditFrame(tk.Frame):
                     top = max(0, (new_h - target_h) // 2)
                     img = img.crop((left, top, left + target_w, top + target_h))
 
+                draw_x = layer.x
+                draw_y = layer.y
+
+                if layer.align == "bottom-center":
+                    draw_x = max(0, (width - new_w) // 2 + layer.x)
+                    draw_y = max(0, height - new_h - layer.y)
+                elif layer.align == "center":
+                    draw_x = max(0, (width - new_w) // 2 + layer.x)
+                    draw_y = max(0, (height - new_h) // 2 + layer.y)
+
                 tk_img = ImageTk.PhotoImage(img)
                 self._tk_images[layer.id] = tk_img
                 self.canvas.create_image(
-                    layer.x,
-                    layer.y,
+                    draw_x,
+                    draw_y,
                     anchor="nw",
                     image=tk_img,
                     tags=(layer.id,),

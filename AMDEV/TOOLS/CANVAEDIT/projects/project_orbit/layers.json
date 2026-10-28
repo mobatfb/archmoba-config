@@ -16,6 +16,21 @@
       "y": 0,
       "width": 0,
       "height": 0
+    },
+    {
+      "id": "app_icon",
+      "name": "APP_ICON",
+      "type": "image",
+      "visible": true,
+      "locked": false,
+      "opacity": 1,
+      "z_index": 1,
+      "asset": "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/AMDEV/TOOLS/CANVAEDIT/projects/project_orbit/assets/orbit_app_icon.png",
+      "x": 0,
+      "y": 24,
+      "width": 96,
+      "height": 96,
+      "align": "bottom-center"
     }
   ]
 }
