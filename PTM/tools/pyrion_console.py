@@ -8,7 +8,7 @@ from pathlib import Path
 
 TOOL_NAME = "PYRION CONSOLE"
 TOOL_DESCRIPTION = "Consola PYRION con KILL PY, Red, SSL, GitHub, Logs y teclado digital."
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -150,8 +150,39 @@ class PyrionConsoleTool(tk.Frame):
             font=("DejaVu Sans", 9)
         ).pack(side="right", fill="y")
 
-        self.body = tk.Frame(self, bg=BG, bd=1, relief="solid")
-        self.body.pack(fill="both", expand=True, padx=2, pady=0)
+        workspace = tk.Frame(self, bg=BG)
+        workspace.pack(fill="both", expand=True, padx=2, pady=0)
+
+        self.sidebar = tk.Frame(workspace, bg=TAB, width=118, bd=1, relief="solid")
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
+
+        tk.Label(
+            self.sidebar, text="PESTAÑAS", bg=TAB, fg=MUTED,
+            font=("DejaVu Sans", 8, "bold"), anchor="w", padx=10, pady=8
+        ).pack(fill="x")
+
+        self.side_tabs = {}
+        for label, command in (
+            ("Consola", self.show_console),
+            ("KILL PY", self.show_kill_py),
+            ("Red", self.show_red),
+            ("SSL", self.show_ssl),
+            ("GitHub", self.show_github),
+            ("Logs", self.show_logs),
+        ):
+            b = tk.Button(
+                self.sidebar, text=label, command=command,
+                bg=TAB, fg=MUTED, activebackground=TAB_ACTIVE,
+                activeforeground=FG, bd=0, relief="flat",
+                highlightthickness=0, anchor="w", padx=12, pady=7,
+                font=("DejaVu Sans", 9)
+            )
+            b.pack(fill="x")
+            self.side_tabs[label] = b
+
+        self.body = tk.Frame(workspace, bg=BG, bd=1, relief="solid")
+        self.body.pack(side="left", fill="both", expand=True)
 
         self.output = tk.Text(
             self.body,
@@ -199,11 +230,20 @@ class PyrionConsoleTool(tk.Frame):
 
     def _set_tab(self, name=None):
         self.active_tab = name
+
         for label, btn in self.tabs.items():
             btn.configure(
                 bg=TAB_ACTIVE if label == name else TAB,
                 fg=FG if label == name else MUTED
             )
+
+        side_name = "Consola" if name is None else name
+        if hasattr(self, "side_tabs"):
+            for label, btn in self.side_tabs.items():
+                btn.configure(
+                    bg=TAB_ACTIVE if label == side_name else TAB,
+                    fg=FG if label == side_name else MUTED
+                )
 
     def _write(self, text="", clear=False):
         self.output.configure(state="normal")
