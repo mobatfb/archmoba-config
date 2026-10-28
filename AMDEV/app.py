@@ -978,6 +978,7 @@ class AMDEVApp(tk.Tk):
                     if log_handle is not None:
                         try:
                             log_handle.flush()
+                            log_handle.close()
                         except Exception:
                             pass
                     return
