@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.14"
+APP_VERSION = "1.0.15"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:57"
+APP_UPDATE_TIME = "20:02"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -1793,10 +1793,9 @@ class PTMApp(tk.Tk):
         buttons = tk.Frame(holder, bg=WHITE)
         buttons.pack(pady=(8, 0))
 
-        tk.Button(
+        retry_btn = tk.Button(
             buttons,
             text="Reintentar",
-            command=lambda: self._retry_tool_download(tool, key),
             bg=TEAL,
             fg=ON_ACCENT,
             activebackground=TEAL_DARK,
@@ -1805,33 +1804,61 @@ class PTMApp(tk.Tk):
             padx=18,
             pady=7,
             cursor="hand2",
-        ).pack(side="left", padx=(0, 8))
+            takefocus=False,
+        )
+        retry_btn.pack(side="left", padx=(0, 8))
+        retry_btn.bind(
+            "<ButtonRelease-1>",
+            lambda event: self._retry_tool_download(event, tool, key),
+        )
 
-        tk.Button(
+        close_btn = tk.Button(
             buttons,
             text="Cerrar",
-            command=lambda: self.close_tool_tab(key),
             bg=LIGHT,
             fg=BLACK,
             relief="flat",
             padx=18,
             pady=7,
             cursor="hand2",
-        ).pack(side="left")
+            takefocus=False,
+        )
+        close_btn.pack(side="left")
+        close_btn.bind(
+            "<ButtonRelease-1>",
+            lambda event: self._close_failed_tool_from_click(event, key),
+        )
 
         self.switch_to_tool(key)
 
-    def _retry_tool_download(self, tool, key):
+    def _retry_tool_download(self, event, tool, key):
+        """Solo un clic físico izquierdo puede iniciar un nuevo ciclo."""
+        if event is None or getattr(event, "num", None) != 1:
+            return "break"
+
         meta = self.open_tabs.get(key)
         if not meta:
-            return
+            return "break"
 
-        # Solo se permite reintentar después de un fallo terminal.
         if meta.get("state") != "failed":
-            return
+            return "break"
+
+        if not meta.get("download_finished"):
+            return "break"
 
         self._failed_download_keys.discard(key)
-        self._begin_tool_download_session(tool, key)
+        meta["manual_retry_authorized"] = True
+        self._begin_tool_download_session(
+            tool,
+            key,
+            origin="manual_click",
+        )
+        return "break"
+
+    def _close_failed_tool_from_click(self, event, key):
+        if event is not None and getattr(event, "num", None) == 1:
+            self.close_tool_tab(key)
+        return "break"
 
     def _start_tool_download(self, tool, key):
         """Primer ciclo de descarga de la pestaña."""
@@ -1850,16 +1877,27 @@ class PTMApp(tk.Tk):
             )
             return
 
-        self._begin_tool_download_session(tool, key)
+        self._begin_tool_download_session(
+            tool,
+            key,
+            origin="initial",
+        )
 
-    def _begin_tool_download_session(self, tool, key):
-        """Crea una sesión única. El worker hace los 5 intentos completos."""
+    def _begin_tool_download_session(self, tool, key, origin="initial"):
+        """Crea una sesión; tras failed solo acepta un clic manual autorizado."""
         meta = self.open_tabs.get(key)
         if not meta:
             return
 
         if meta.get("download_worker_running"):
             return
+
+        if meta.get("state") == "failed" or key in self._failed_download_keys:
+            if origin != "manual_click" or not meta.get("manual_retry_authorized"):
+                return
+
+        if origin == "manual_click":
+            meta["manual_retry_authorized"] = False
 
         session_id = int(meta.get("download_session_id", 0)) + 1
         meta["download_session_id"] = session_id
@@ -1941,6 +1979,7 @@ class PTMApp(tk.Tk):
                     meta["download_finished"] = True
                     meta["download_attempt"] = 5
                     meta["state"] = "failed"
+                    meta["manual_retry_authorized"] = False
                     meta["last_download_error"] = exc
                     self._failed_download_keys.add(key)
                     self._show_tool_unavailable(tool, key, exc)
@@ -2093,6 +2132,7 @@ class PTMApp(tk.Tk):
             "download_session_id": 0,
             "download_worker_running": False,
             "download_finished": False,
+            "manual_retry_authorized": False,
             "last_download_error": None,
         }
 
