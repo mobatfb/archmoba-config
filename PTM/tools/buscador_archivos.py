@@ -246,7 +246,10 @@ class FileSearchTool(ttk.Frame):
         self.detener.set()
 
 
-App = FileSearchTool\n\n\ndef main():
+App = FileSearchTool
+
+
+def main():
     root = tk.Tk()
     root.title(TOOL_NAME)
     root.geometry("1080x690")
