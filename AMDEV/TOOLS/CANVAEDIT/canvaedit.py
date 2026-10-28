@@ -19,7 +19,7 @@ except Exception:
     PIL_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
-CANVAEDIT_VERSION = "1.0.4"
+CANVAEDIT_VERSION = "1.0.5"
 DEFAULT_PROJECT = "pyrion_desing"
 
 REPO_OWNER = "mobatfb"
@@ -418,63 +418,40 @@ class CanvaEditFrame(tk.Frame):
     def reload_project(self):
         self.load_project(self.manager.project_name)
 
-    def _download_image(self, url):
+    def _open_image_bytes(self, data, source_name):
+        if not PIL_AVAILABLE:
+            raise RuntimeError("Pillow no está instalado.")
+
+        try:
+            image = Image.open(io.BytesIO(data))
+            image.load()
+            return image.convert("RGBA")
+        except Exception as exc:
+            raise RuntimeError(
+                f"{source_name}: Pillow no pudo abrir la imagen: {exc}"
+            ) from exc
+
+    def _download_raw_bytes(self, url):
         request = urllib.request.Request(
             url,
             headers={
                 "User-Agent": "CANVAEDIT/1.0",
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
             },
         )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.read()
 
-        try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                data = response.read()
-
-            if self._looks_like_image(data):
-                return data
-        except Exception:
-            data = b""
-
-        # Fallback: si raw.githubusercontent.com fue interceptado o devolvio HTML,
-        # obtenemos el mismo archivo mediante la API publica de GitHub.
-        api_data = self._download_image_github_api(url)
-        if self._looks_like_image(api_data):
-            return api_data
-
-        raise RuntimeError(
-            "GitHub no devolvio una imagen valida desde RAW ni desde la API."
-        )
-
-    @staticmethod
-    def _looks_like_image(data):
-        if not data:
-            return False
-
-        signatures = (
-            b"\\xff\\xd8\\xff",          # JPEG
-            b"\\x89PNG\\r\\n\\x1a\\n", # PNG
-            b"GIF87a",
-            b"GIF89a",
-            b"RIFF",                         # WEBP se valida abajo
-        )
-
-        if data.startswith(signatures[:4]):
-            return True
-
-        if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
-            return True
-
-        return False
-
-    def _download_image_github_api(self, raw_url):
+    def _download_image_github_api_bytes(self, raw_url):
         prefix = (
             f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/"
             f"{REPO_BRANCH}/"
         )
 
         if not raw_url.startswith(prefix):
-            return b""
+            raise RuntimeError("La URL no pertenece al repositorio configurado.")
 
         repo_path = raw_url[len(prefix):]
         api_url = (
@@ -482,12 +459,15 @@ class CanvaEditFrame(tk.Frame):
             f"{repo_path}?ref={REPO_BRANCH}"
         )
 
-        # GitHub Contents API en modo RAW oficial.
+        # Primer intento: GitHub Contents API en modo RAW.
+        raw_error = None
         request = urllib.request.Request(
             api_url,
             headers={
                 "User-Agent": "CANVAEDIT/1.0",
                 "Accept": "application/vnd.github.raw",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
@@ -495,43 +475,67 @@ class CanvaEditFrame(tk.Frame):
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
                 data = response.read()
-            if self._looks_like_image(data):
+            if data:
                 return data
-        except Exception:
-            pass
+        except Exception as exc:
+            raw_error = exc
 
-        # Segundo fallback: JSON + Base64.
+        # Segundo intento: JSON + Base64.
         request = urllib.request.Request(
             api_url,
             headers={
                 "User-Agent": "CANVAEDIT/1.0",
                 "Accept": "application/vnd.github+json",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
 
-        with urllib.request.urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
 
-        import base64
+            import base64
 
-        content = payload.get("content", "")
-        if payload.get("encoding") != "base64" or not content:
-            return b""
+            content = payload.get("content", "")
+            if payload.get("encoding") != "base64" or not content:
+                raise RuntimeError("La API no devolvio contenido Base64.")
 
-        return base64.b64decode(content.replace("\\n", ""))
+            return base64.b64decode(content.replace("\n", ""))
+        except Exception as exc:
+            if raw_error is not None:
+                raise RuntimeError(
+                    f"API RAW fallo: {raw_error} | API Base64 fallo: {exc}"
+                ) from exc
+            raise
 
     def _get_source_image(self, layer):
         if layer.asset in self._source_images:
             return self._source_images[layer.asset]
 
-        if not PIL_AVAILABLE:
-            raise RuntimeError("Pillow no está instalado.")
+        raw_error = None
+        api_error = None
 
-        data = self._download_image(layer.asset)
-        image = Image.open(io.BytesIO(data)).convert("RGBA")
-        self._source_images[layer.asset] = image
-        return image
+        try:
+            raw_data = self._download_raw_bytes(layer.asset)
+            image = self._open_image_bytes(raw_data, "RAW")
+            self._source_images[layer.asset] = image
+            return image
+        except Exception as exc:
+            raw_error = exc
+
+        try:
+            api_data = self._download_image_github_api_bytes(layer.asset)
+            image = self._open_image_bytes(api_data, "GitHub API")
+            self._source_images[layer.asset] = image
+            return image
+        except Exception as exc:
+            api_error = exc
+
+        raise RuntimeError(
+            f"No se pudo cargar la imagen. RAW: {raw_error} | API: {api_error}"
+        )
 
     def render_layers(self):
         self.canvas.delete("all")
