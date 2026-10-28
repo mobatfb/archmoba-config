@@ -23,9 +23,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.27"
+APP_VERSION = "1.0.28"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "21:18"
+APP_UPDATE_TIME = "21:22"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -2549,6 +2549,23 @@ class PTMApp(tk.Tk):
                 pass
             meta["inline_dialog"] = None
 
+        # Bloquea los controles de esta herramienta mientras el modal esté abierto.
+        disabled_controls = []
+        def disable_controls(widget):
+            for child in widget.winfo_children():
+                disable_controls(child)
+                try:
+                    if "state" in child.keys():
+                        previous = str(child.cget("state"))
+                        if previous != "disabled":
+                            child.configure(state="disabled")
+                            disabled_controls.append((child, previous))
+                except (tk.TclError, AttributeError):
+                    pass
+
+        disable_controls(host)
+        meta["dialog_disabled_controls"] = disabled_controls
+
         # Tkinter no ofrece transparencia alfa por widget. Para conservar la
         # herramienta visible, el modal ya no cubre el contenido con un gris sólido.
         # Se dibuja una sombra suave alrededor de la tarjeta, dejando el fondo intacto.
@@ -2602,6 +2619,15 @@ class PTMApp(tk.Tk):
                 overlay.destroy()
             except tk.TclError:
                 pass
+
+            # Restaura exactamente el estado que tenía cada control.
+            for widget, previous in meta.pop("dialog_disabled_controls", []):
+                try:
+                    if widget.winfo_exists():
+                        widget.configure(state=previous)
+                except (tk.TclError, AttributeError):
+                    pass
+
             if callable(on_close):
                 on_close()
 
