@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.1"
+TOOL_VERSION = "2.0.2"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -57,7 +57,9 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
             width=900,
             height=620,
             min_size=(240, 180),
-            hidden=True,
+            x=-32000,
+            y=-32000,
+            hidden=False,
             frameless=True,
             easy_drag=False,
             shadow=False,
@@ -72,6 +74,7 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
             "zoom": 1.0,
             "last_url": "",
             "last_title": "",
+            "last_loaded_url": "",
         }
 
         def browser_loop():
@@ -191,6 +194,21 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
                                 conn,
                                 {
                                     "type": "state",
+                                    "url": current_url,
+                                    "title": current_title,
+                                },
+                            )
+
+                        if (
+                            page_loaded
+                            and current_url
+                            and current_url != state["last_loaded_url"]
+                        ):
+                            state["last_loaded_url"] = current_url
+                            _child_send(
+                                conn,
+                                {
+                                    "type": "loaded",
                                     "url": current_url,
                                     "title": current_title,
                                 },
@@ -727,6 +745,20 @@ class WebViewerTool(ttk.Frame):
             self.status_var.set("Integrando Edge WebView2 en PTM...")
             self._embed_attempts = 0
             self.after(20, self._attempt_embed)
+
+        elif kind == "loaded":
+            url = str(message.get("url", "") or "").strip()
+            title = str(message.get("title", "") or "").strip()
+            if url:
+                self._last_url = url
+                if self.address_entry.focus_get() is not self.address_entry:
+                    self.address_var.set(url)
+            if title:
+                self.title_var.set(title[:100])
+            if self._embedded:
+                self.status_var.set("Listo")
+            self._update_favorite_button()
+            self._save_state()
 
         elif kind == "state":
             url = str(message.get("url", "") or "").strip()
