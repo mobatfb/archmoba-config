@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.3"
+TOOL_VERSION = "1.0.4"
 
 
 def human_size(n):
@@ -56,6 +56,12 @@ def detect_compression(data):
         return "bz2"
     if data.startswith(b"\x28\xb5\x2f\xfd"):
         return "zstd"
+    if data.startswith(b"\x04\x22\x4d\x18"):
+        return "lz4"
+    if data.startswith(b"\x02\x21\x4c\x18"):
+        return "lz4-legacy"
+    if data.startswith(b"\x89LZO\x00\x0d\x0a\x1a\x0a"):
+        return "lzop"
     return "none"
 
 
@@ -72,7 +78,22 @@ def decompress_bytes(data):
             import zstandard as zstd
         except Exception as exc:
             raise RuntimeError("INITRD usa Zstandard. Instala: python -m pip install zstandard") from exc
-        return zstd.ZstdDecompressor().decompress(data), kind
+        # Los INITRD suelen omitir el tamaño descomprimido en la cabecera.
+        with zstd.ZstdDecompressor().stream_reader(io.BytesIO(data)) as reader:
+            return reader.read(), kind
+    if kind == "lz4":
+        try:
+            import lz4.frame
+        except ImportError as exc:
+            raise RuntimeError(
+                "INITRD usa LZ4. Falta la dependencia 'lz4' de PTM."
+            ) from exc
+        return lz4.frame.decompress(data), kind
+    if kind in ("lz4-legacy", "lzop"):
+        raise ValueError(
+            f"INITRD comprimido en {kind}: este formato aún no es "
+            "compatible con el editor. El archivo original no se ha modificado."
+        )
     return data, kind
 
 
@@ -89,6 +110,12 @@ def compress_bytes(data, kind):
         except Exception as exc:
             raise RuntimeError("Falta zstandard. Instala: python -m pip install zstandard") from exc
         return zstd.ZstdCompressor(level=10).compress(data)
+    if kind == "lz4":
+        try:
+            import lz4.frame
+        except ImportError as exc:
+            raise RuntimeError("Falta la dependencia 'lz4' de PTM.") from exc
+        return lz4.frame.compress(data)
     return data
 
 
@@ -96,45 +123,106 @@ def _pad4(n):
     return (4 - (n % 4)) % 4
 
 
-def parse_cpio_newc(data):
-    """Devuelve lista de entradas CPIO newc. Soporta 070701/070702."""
+def parse_cpio_newc(data, return_end=False):
+    """Lee CPIO newc/crc y, opcionalmente, devuelve la posición del trailer."""
     pos = 0
     entries = []
     total = len(data)
     while pos + 110 <= total:
-        magic = data[pos:pos+6]
+        magic = data[pos:pos + 6]
         if magic not in (b"070701", b"070702"):
-            if not entries:
-                raise ValueError("No se detecto un archivo CPIO newc compatible")
-            break
-        hdr = data[pos:pos+110]
+            raise ValueError(
+                "El contenido no es un archivo CPIO newc válido "
+                f"(offset 0x{pos:X})."
+            )
+        hdr = data[pos:pos + 110]
         pos += 110
-        vals = []
-        for i in range(13):
-            a = 6 + i * 8
-            vals.append(int(hdr[a:a+8], 16))
-        ino, mode, uid, gid, nlink, mtime, filesize, devmaj, devmin, rdevmaj, rdevmin, namesize, check = vals
-        if pos + namesize > total:
+        try:
+            vals = [int(hdr[6 + i * 8:14 + i * 8], 16) for i in range(13)]
+        except ValueError as exc:
+            raise ValueError("Cabecera CPIO dañada.") from exc
+        (ino, mode, uid, gid, nlink, mtime, filesize,
+         devmaj, devmin, rdevmaj, rdevmin, namesize, check) = vals
+        if namesize < 1 or pos + namesize > total:
             raise ValueError("CPIO truncado en nombre")
-        name_raw = data[pos:pos+namesize]
-        name = name_raw[:-1].decode("utf-8", "replace") if name_raw.endswith(b"\x00") else name_raw.decode("utf-8", "replace")
+        name_raw = data[pos:pos + namesize]
+        name = name_raw.rstrip(b"\x00").decode("utf-8", "replace")
         pos += namesize
         pos += _pad4(110 + namesize)
         if pos + filesize > total:
             raise ValueError("CPIO truncado en datos")
-        payload = data[pos:pos+filesize]
+        payload = data[pos:pos + filesize]
         pos += filesize
         pos += _pad4(filesize)
         if name == "TRAILER!!!":
-            break
+            return (entries, pos) if return_end else entries
         entries.append({
             "name": name, "ino": ino, "mode": mode, "uid": uid, "gid": gid,
             "nlink": nlink, "mtime": mtime, "data": payload,
             "devmaj": devmaj, "devmin": devmin, "rdevmaj": rdevmaj,
             "rdevmin": rdevmin, "check": check,
         })
-    return entries
+    raise ValueError("CPIO incompleto: no se encontró TRAILER!!!")
 
+
+def load_initrd_payload(raw):
+    """Desempaqueta INITRD y conserva CPIO iniciales (microcódigo) intactos.
+
+    Algunos initrd.img incluyen un CPIO sin comprimir seguido de otro CPIO
+    comprimido. El prefijo se conserva exactamente al volver a guardar.
+    Nunca se descartan datos concatenados que no sepamos interpretar.
+    """
+    prefix = b""
+    offset = 0
+    while raw[offset:offset + 6] in (b"070701", b"070702"):
+        entries, used = parse_cpio_newc(raw[offset:], return_end=True)
+        next_pos = offset + used
+        while next_pos < len(raw) and raw[next_pos] == 0:
+            next_pos += 1
+        if next_pos == len(raw):
+            return entries, "none", prefix
+        prefix = raw[:next_pos]
+        offset = next_pos
+
+    payload = raw[offset:]
+    kind = detect_compression(payload)
+    if kind == "none":
+        raise ValueError(
+            "No se reconoció un INITRD CPIO o comprimido compatible. "
+            f"Cabecera: {payload[:12].hex(' ').upper()}. "
+            "El archivo original no se ha modificado."
+        )
+    unpacked, kind = decompress_bytes(payload)
+    entries, used = parse_cpio_newc(unpacked, return_end=True)
+    if unpacked[used:].strip(b"\x00"):
+        raise ValueError(
+            "El INITRD contiene varios archivos CPIO concatenados dentro "
+            "de la compresión. Para evitar pérdida de datos no se editará."
+        )
+    return entries, kind, prefix
+
+
+def detect_container_type(path):
+    """Identifica INITRD por nombre o contenido antes de comprobar FAT."""
+    name = path.name.lower()
+    if "initrd" in name or "initramfs" in name or ".cpio" in name:
+        return "initrd"
+    with path.open("rb") as stream:
+        head = stream.read(512)
+    if head[:6] in (b"070701", b"070702"):
+        return "initrd"
+    if detect_compression(head) != "none":
+        return "initrd"
+    if len(head) >= 512:
+        # Un .img no es necesariamente FAT: comprobar salto de arranque,
+        # firma del sector, tamaño de sector y número de tablas FAT.
+        jump = head[0] in (0xEB, 0xE9)
+        boot_sig = head[510:512] == b"\x55\xaa"
+        sector_size = int.from_bytes(head[11:13], "little")
+        fats = head[16]
+        if jump and boot_sig and sector_size in (512, 1024, 2048, 4096) and fats in (1, 2):
+            return "fat"
+    return "unknown"
 
 def build_cpio_newc(entries):
     out = bytearray()
@@ -173,6 +261,7 @@ class InitrdEditor(ttk.Frame):
         self.path = Path(path)
         self.entries = []
         self.compression = "none"
+        self.prefix = b""
         self._build()
         self._load()
 
@@ -196,10 +285,12 @@ class InitrdEditor(ttk.Frame):
 
     def _load(self):
         raw = self.path.read_bytes()
-        data, self.compression = decompress_bytes(raw)
-        self.entries = parse_cpio_newc(data)
+        self.entries, self.compression, self.prefix = load_initrd_payload(raw)
         self.refresh()
-        self.info.config(text=f"{len(self.entries)} entradas | compresion: {self.compression}")
+        extra = " | microcódigo preservado" if self.prefix else ""
+        self.info.config(
+            text=f"{len(self.entries)} entradas | {self.compression}{extra}"
+        )
 
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
@@ -244,7 +335,9 @@ class InitrdEditor(ttk.Frame):
     def save(self):
         try:
             raw = build_cpio_newc(self.entries)
-            self.path.write_bytes(compress_bytes(raw, self.compression))
+            # Preservar exactamente las capas CPIO iniciales no editadas.
+            updated = self.prefix + compress_bytes(raw, self.compression)
+            self.path.write_bytes(updated)
             messagebox.showinfo("INITRD", "Cambios guardados en la copia de trabajo.", parent=self)
             self.owner.refresh_tree()
         except Exception as exc:
@@ -615,18 +708,28 @@ class ISOEditor(ttk.Frame):
         p = self.selected_path()
         if not p or p.is_dir(): return
         n = p.name.lower()
-        if n.endswith(".img"):
-            try:
-                self._open_container_editor(FatEditor, p)
-            except Exception as exc:
-                messagebox.showerror("FAT", str(exc), parent=self)
-        elif "initrd" in n or n.endswith((".cpio", ".cpio.gz", ".cpio.xz")):
-            try:
+        try:
+            kind = detect_container_type(p)
+            if kind == "initrd":
                 self._open_container_editor(InitrdEditor, p)
-            except Exception as exc:
-                messagebox.showerror("INITRD", str(exc), parent=self)
-        else:
-            messagebox.showinfo("Contenedor", "Este archivo se trata como binario. Puede reemplazarlo, extraerlo o inspeccionarlo en HEX.", parent=self)
+            elif kind == "fat":
+                self._open_container_editor(FatEditor, p)
+            else:
+                messagebox.showinfo(
+                    "Contenedor",
+                    f"{p.name} no tiene una cabecera FAT ni INITRD "
+                    "reconocible. No se abrirá como FAT por su extensión "
+                    ".img. Puedes inspeccionarlo en HEX, reemplazarlo o "
+                    "extraerlo sin modificar el original.",
+                    parent=self,
+                )
+        except Exception as exc:
+            messagebox.showerror(
+                "Abrir contenedor",
+                f"No se pudo abrir {p.name}:\n"
+                f"{type(exc).__name__}: {exc}",
+                parent=self,
+            )
 
     def save_iso_copy(self):
         if not self.iso_path or not self.work_dir: return
