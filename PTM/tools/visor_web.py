@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Navegador web real integrado en PTM con Edge WebView2/Chromium, "
     "JavaScript, CSS, imagenes, historial del navegador, favoritos y zoom."
 )
-TOOL_VERSION = "2.0.3"
+TOOL_VERSION = "2.0.4"
 
 HOME_URL = "https://www.google.com/"
 SEARCH_URL = "https://www.google.com/search?q={query}"
@@ -164,7 +164,11 @@ def _browser_child(port, auth_hex, window_title, start_url, storage_dir):
                                 native = window.native
                                 native_webview = getattr(native, "webview", None)
                                 if native is not None and native_webview is not None:
-                                    from System import Action
+                                    # Carga dinamica: System pertenece a pythonnet/.NET,
+                                    # no es un paquete pip. Evita que PTM intente
+                                    # instalar una dependencia llamada "System".
+                                    System = importlib.import_module("System")
+                                    Action = getattr(System, "Action")
 
                                     def apply_focus():
                                         try:
