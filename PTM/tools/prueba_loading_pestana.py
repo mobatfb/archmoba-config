@@ -4,7 +4,7 @@ import time
 import tkinter as tk
 
 
-def create_tool(parent, app):
+def App(parent, app):
     tool_key = app.current_key
     frame = tk.Frame(parent, bg="#FFFFFF")
     frame.columnconfigure(0, weight=1)
