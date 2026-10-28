@@ -11,9 +11,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "18:51"
+APP_UPDATE_TIME = "19:02"
 
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main"
 APPS_URL = f"{REPO_RAW_BASE}/apps.json"
@@ -87,7 +87,14 @@ class FloatingAMDEV(tk.Toplevel):
         self.canvas.create_polygon(self.w - 20, 2, self.w - 2, 2, self.w - 2, 20, fill=RED, outline=RED)
         self.canvas.create_rectangle(2, self.h - 9, self.w - 2, self.h - 2, fill=RED, outline=RED)
         self.canvas.create_text(self.w / 2, 20, text=APP_SHORT, fill=WHITE, font=("Segoe UI", 18, "bold"))
-        self.canvas.create_text(self.w / 2, self.h - 6, text=APP_NAME, fill=WHITE, font=("Segoe UI", 5, "bold"))
+        selected_name = self.app.get_selected_app_name()
+        footer_text = selected_name if selected_name else "Sin selección"
+        self.canvas.create_text(
+            self.w / 2, self.h - 6,
+            text=footer_text,
+            fill=WHITE,
+            font=("Segoe UI", 6, "bold"),
+        )
 
     def _place_default(self):
         self.update_idletasks()
@@ -107,9 +114,9 @@ class FloatingAMDEV(tk.Toplevel):
             self._dragging = True
         self.geometry(f"+{self._origin[0] + dx}+{self._origin[1] + dy}")
 
-    def _up(self, event):
+    def _up(self, _event):
         if not self._dragging:
-            self.app.show_app_menu(event.x_root, event.y_root)
+            self.app.run_selected_app()
 
     def _menu(self, _event):
         self.app.show_app_menu(self.winfo_pointerx(), self.winfo_pointery())
@@ -133,6 +140,8 @@ class AMDEVApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.hide_main)
 
         self.apps = []
+        self.selected_app = None
+        self.running_processes = {}
         self._build_ui()
         self.load_apps()
 
@@ -247,6 +256,19 @@ class AMDEVApp(tk.Tk):
                 item for item in payload.get("apps", [])
                 if item.get("active", True)
             ]
+
+            if self.selected_app:
+                selected_id = str(self.selected_app.get("id", ""))
+                refreshed = next(
+                    (
+                        item for item in self.apps
+                        if str(item.get("id", "")) == selected_id
+                    ),
+                    None,
+                )
+                self.selected_app = dict(refreshed) if refreshed else None
+                if hasattr(self, "floating") and self.floating.winfo_exists():
+                    self.floating._draw()
         except Exception as exc:
             self.status.configure(text=f"apps.json no es válido: {exc}")
             return
@@ -295,7 +317,50 @@ class AMDEVApp(tk.Tk):
         for widget in (card, left, name, desc, arrow):
             widget.bind("<Button-1>", lambda _e, app=item: self.launch_app(app))
 
-    def launch_app(self, item):
+    def get_selected_app_name(self):
+        if not self.selected_app:
+            return ""
+        return str(
+            self.selected_app.get(
+                "name",
+                self.selected_app.get("id", "")
+            )
+        ).strip()
+
+    def select_app(self, item):
+        """Marca una app como seleccionada sin ejecutarla."""
+        self.selected_app = dict(item)
+        if hasattr(self, "floating") and self.floating.winfo_exists():
+            self.floating._draw()
+
+        name = self.get_selected_app_name() or "App"
+        self.status.configure(
+            text=f"{name} seleccionada. Clic izquierdo en AMDEV para actualizar y ejecutar."
+        )
+
+    def run_selected_app(self):
+        """Reinicia la app seleccionada, descarga su última versión y la ejecuta."""
+        if not self.selected_app:
+            # La selección se realiza exclusivamente desde el clic derecho.
+            return
+
+        item = self.selected_app
+        app_id = str(item.get("id", "app")).strip() or "app"
+        previous = self.running_processes.get(app_id)
+
+        if previous is not None and previous.poll() is None:
+            try:
+                previous.terminate()
+                previous.wait(timeout=2)
+            except Exception:
+                try:
+                    previous.kill()
+                except Exception:
+                    pass
+
+        self.launch_app(item, force_update=True)
+
+    def launch_app(self, item, force_update=False):
         config_path = str(item.get("config", "")).strip().replace("\\", "/").lstrip("/")
         if not config_path:
             messagebox.showerror(APP_SHORT, "La aplicación no tiene config.json definido.")
@@ -337,10 +402,19 @@ class AMDEVApp(tk.Tk):
             self.status.configure(
                 text=f"Ejecutando {config.get('name', item.get('name', app_id))} v{config.get('version', '')}..."
             )
-            subprocess.Popen(
+            process = subprocess.Popen(
                 [sys.executable, str(local_app)],
                 cwd=str(local_dir),
             )
+            self.running_processes[app_id] = process
+
+            if force_update:
+                self.status.configure(
+                    text=(
+                        f"{config.get('name', item.get('name', app_id))} "
+                        f"actualizada y reiniciada · v{config.get('version', '')}"
+                    )
+                )
         except Exception as exc:
             messagebox.showerror(APP_SHORT, f"No se pudo iniciar la aplicación:\n\n{exc}")
             self.status.configure(text=f"Error: {exc}")
@@ -363,11 +437,17 @@ class AMDEVApp(tk.Tk):
         if not self.apps:
             menu.add_command(label="No hay aplicaciones disponibles", state="disabled")
         else:
+            selected_id = (
+                str(self.selected_app.get("id", ""))
+                if self.selected_app else ""
+            )
             for item in self.apps:
-                name = item.get("name", item.get("id", "App"))
+                item_id = str(item.get("id", ""))
+                name = item.get("name", item_id or "App")
+                prefix = "✓ " if item_id and item_id == selected_id else "   "
                 menu.add_command(
-                    label=name,
-                    command=lambda app_item=item: self.launch_app(app_item),
+                    label=f"{prefix}{name}",
+                    command=lambda app_item=item: self.select_app(app_item),
                 )
 
         menu.add_separator()
