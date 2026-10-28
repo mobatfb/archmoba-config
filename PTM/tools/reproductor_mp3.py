@@ -217,17 +217,13 @@ class Mp3PlayerTool(ttk.Frame):
                 pass
 
 
-def create_tool(parent, app=None):
-    return Mp3PlayerTool(parent, app)
-
-
-def main():
+App = Mp3PlayerTool\n\n\ndef main():
     root = tk.Tk()
     root.title(TOOL_NAME)
     root.geometry("820x430")
     root.minsize(680, 360)
 
-    tool = create_tool(root)
+    tool = App(root)
     tool.pack(fill="both", expand=True, padx=16, pady=16)
 
     def close_window():
