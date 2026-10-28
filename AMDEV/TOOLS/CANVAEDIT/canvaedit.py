@@ -19,7 +19,7 @@ except Exception:
     PIL_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
-CANVAEDIT_VERSION = "1.0.2"
+CANVAEDIT_VERSION = "1.0.3"
 DEFAULT_PROJECT = "pyrion_desing"
 
 REPO_OWNER = "mobatfb"
@@ -482,11 +482,31 @@ class CanvaEditFrame(tk.Frame):
             f"{repo_path}?ref={REPO_BRANCH}"
         )
 
+        # GitHub Contents API en modo RAW oficial.
+        request = urllib.request.Request(
+            api_url,
+            headers={
+                "User-Agent": "CANVAEDIT/1.0",
+                "Accept": "application/vnd.github.raw",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                data = response.read()
+            if self._looks_like_image(data):
+                return data
+        except Exception:
+            pass
+
+        # Segundo fallback: JSON + Base64.
         request = urllib.request.Request(
             api_url,
             headers={
                 "User-Agent": "CANVAEDIT/1.0",
                 "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
             },
         )
 
@@ -499,7 +519,7 @@ class CanvaEditFrame(tk.Frame):
         if payload.get("encoding") != "base64" or not content:
             return b""
 
-        return base64.b64decode(content)
+        return base64.b64decode(content.replace("\\n", ""))
 
     def _get_source_image(self, layer):
         if layer.asset in self._source_images:
