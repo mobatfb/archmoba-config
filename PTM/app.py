@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.49"
+APP_VERSION = "1.0.50"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "00:47"
+APP_UPDATE_TIME = "00:56"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -535,6 +535,8 @@ class PTMApp(tk.Tk):
         self._command_cache = {}
         self._self_update_events = queue.Queue()
         self._self_update_check_running = False
+        self._tool_autofit_jobs = {}
+        self._tool_autofit_state = {}
         self.pinned = False
         self._outside_click_count = 0
         self._outside_click_last = 0.0
@@ -3345,6 +3347,266 @@ class PTMApp(tk.Tk):
 
         return roots, TkProxy()
 
+    def _iter_tool_widgets(self, root):
+        """Recorre widgets de una herramienta sin modificar su logica de scroll."""
+        stack = [root]
+        while stack:
+            widget = stack.pop()
+            yield widget
+            try:
+                stack.extend(reversed(widget.winfo_children()))
+            except Exception:
+                pass
+
+    def _remember_tool_widget_style(self, widget, state):
+        if widget in state["widgets"]:
+            return
+
+        info = {
+            "font": None,
+            "manager": None,
+            "manager_info": {},
+            "place": None,
+        }
+
+        try:
+            if "font" in widget.keys():
+                font_value = widget.cget("font")
+                if font_value:
+                    f = tkfont.Font(font=font_value)
+                    actual = f.actual()
+                    info["font"] = {
+                        "family": actual.get("family", "Segoe UI"),
+                        "size": int(actual.get("size", 9) or 9),
+                        "weight": actual.get("weight", "normal"),
+                        "slant": actual.get("slant", "roman"),
+                        "underline": int(actual.get("underline", 0) or 0),
+                        "overstrike": int(actual.get("overstrike", 0) or 0),
+                    }
+        except Exception:
+            pass
+
+        try:
+            manager = widget.winfo_manager()
+            info["manager"] = manager
+            if manager == "pack":
+                info["manager_info"] = dict(widget.pack_info())
+            elif manager == "grid":
+                info["manager_info"] = dict(widget.grid_info())
+            elif manager == "place":
+                p = dict(widget.place_info())
+                info["manager_info"] = p
+                info["place"] = p
+        except Exception:
+            pass
+
+        state["widgets"][widget] = info
+
+    @staticmethod
+    def _scale_pad_value(value, scale):
+        try:
+            if isinstance(value, (tuple, list)):
+                return tuple(max(0, int(float(v) * scale)) for v in value)
+            text = str(value).strip()
+            if not text:
+                return value
+            parts = text.split()
+            if len(parts) > 1:
+                return tuple(max(0, int(float(v) * scale)) for v in parts)
+            return max(0, int(float(text) * scale))
+        except Exception:
+            return value
+
+    def _restore_tool_autofit(self, root, state):
+        for widget in self._iter_tool_widgets(root):
+            self._remember_tool_widget_style(widget, state)
+            info = state["widgets"].get(widget, {})
+
+            font = info.get("font")
+            if font:
+                try:
+                    widget.configure(
+                        font=(
+                            font["family"],
+                            font["size"],
+                            font["weight"],
+                            font["slant"],
+                        )
+                    )
+                except Exception:
+                    pass
+
+            manager = info.get("manager")
+            opts = dict(info.get("manager_info") or {})
+            try:
+                if manager == "pack" and widget.winfo_manager() == "pack":
+                    clean = {
+                        k: v for k, v in opts.items()
+                        if k in {"side", "fill", "expand", "anchor", "padx", "pady", "ipadx", "ipady"}
+                    }
+                    widget.pack_configure(**clean)
+                elif manager == "grid" and widget.winfo_manager() == "grid":
+                    clean = {
+                        k: v for k, v in opts.items()
+                        if k in {"row", "column", "rowspan", "columnspan", "sticky", "padx", "pady", "ipadx", "ipady"}
+                    }
+                    widget.grid_configure(**clean)
+                elif manager == "place" and widget.winfo_manager() == "place":
+                    clean = {
+                        k: v for k, v in opts.items()
+                        if k in {"x", "y", "width", "height", "relx", "rely", "relwidth", "relheight", "anchor", "bordermode"}
+                    }
+                    widget.place_configure(**clean)
+            except Exception:
+                pass
+
+    def _apply_tool_autofit_scale(self, root, state, scale):
+        protected = (tk.Canvas, tk.Text, tk.Listbox, tk.Scrollbar, ttk.Scrollbar)
+
+        for widget in self._iter_tool_widgets(root):
+            self._remember_tool_widget_style(widget, state)
+            info = state["widgets"].get(widget, {})
+
+            font = info.get("font")
+            if font:
+                try:
+                    size = int(font["size"])
+                    sign = -1 if size < 0 else 1
+                    new_size = sign * max(7, int(abs(size) * scale))
+                    widget.configure(
+                        font=(
+                            font["family"],
+                            new_size,
+                            font["weight"],
+                            font["slant"],
+                        )
+                    )
+                except Exception:
+                    pass
+
+            manager = info.get("manager")
+            opts = dict(info.get("manager_info") or {})
+
+            # Los widgets que gestionan scroll conservan intacta su geometria y
+            # sus comandos de desplazamiento.
+            if isinstance(widget, protected):
+                continue
+
+            try:
+                if manager == "pack" and widget.winfo_manager() == "pack":
+                    changes = {}
+                    for key_name in ("padx", "pady", "ipadx", "ipady"):
+                        if key_name in opts:
+                            changes[key_name] = self._scale_pad_value(opts[key_name], scale)
+                    if changes:
+                        widget.pack_configure(**changes)
+
+                elif manager == "grid" and widget.winfo_manager() == "grid":
+                    changes = {}
+                    for key_name in ("padx", "pady", "ipadx", "ipady"):
+                        if key_name in opts:
+                            changes[key_name] = self._scale_pad_value(opts[key_name], scale)
+                    if changes:
+                        widget.grid_configure(**changes)
+
+                elif manager == "place" and widget.winfo_manager() == "place":
+                    changes = {}
+                    for key_name in ("x", "y", "width", "height"):
+                        value = opts.get(key_name)
+                        if str(value).strip():
+                            try:
+                                changes[key_name] = int(float(value) * scale)
+                            except Exception:
+                                pass
+                    if changes:
+                        widget.place_configure(**changes)
+            except Exception:
+                pass
+
+    def _apply_tool_autofit(self, key):
+        meta = self.open_tabs.get(key)
+        if not meta or meta.get("state") not in {"ready", "processing"}:
+            return
+
+        frame = meta.get("frame")
+        root = meta.get("autofit_root")
+        if frame is None or root is None:
+            return
+
+        try:
+            if not frame.winfo_exists() or not root.winfo_exists():
+                return
+            if frame.winfo_width() <= 20 or frame.winfo_height() <= 20:
+                return
+        except tk.TclError:
+            return
+
+        state = self._tool_autofit_state.setdefault(
+            key,
+            {"widgets": {}, "scale": 1.0},
+        )
+
+        self._restore_tool_autofit(root, state)
+
+        try:
+            frame.update_idletasks()
+            available_w = max(1, frame.winfo_width() - 6)
+            available_h = max(1, frame.winfo_height() - 6)
+            requested_w = max(1, root.winfo_reqwidth())
+            requested_h = max(1, root.winfo_reqheight())
+        except tk.TclError:
+            return
+
+        # Solo reducir cuando hay desborde. Nunca ampliar una herramienta.
+        scale = min(
+            1.0,
+            available_w / requested_w,
+            available_h / requested_h,
+        )
+        scale = max(0.68, scale)
+
+        # Evita microcambios continuos al redimensionar.
+        if scale > 0.985:
+            scale = 1.0
+
+        self._apply_tool_autofit_scale(root, state, scale)
+        state["scale"] = scale
+
+    def _schedule_tool_autofit(self, key, delay=70):
+        old_job = self._tool_autofit_jobs.pop(key, None)
+        if old_job is not None:
+            try:
+                self.after_cancel(old_job)
+            except Exception:
+                pass
+
+        def run():
+            self._tool_autofit_jobs.pop(key, None)
+            self._apply_tool_autofit(key)
+
+        try:
+            self._tool_autofit_jobs[key] = self.after(delay, run)
+        except tk.TclError:
+            pass
+
+    def _setup_tool_autofit(self, key, root):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        meta["autofit_root"] = root
+        self._tool_autofit_state[key] = {"widgets": {}, "scale": 1.0}
+
+        def resized(_event=None):
+            self._schedule_tool_autofit(key)
+
+        try:
+            meta["frame"].bind("<Configure>", resized, add="+")
+        except Exception:
+            pass
+
+        self._schedule_tool_autofit(key, delay=120)
+
     def _load_tool_into_tab(self, tool, key):
         meta = self.open_tabs.get(key)
         if not meta:
@@ -3427,6 +3689,7 @@ class PTMApp(tk.Tk):
         meta["module"] = module
         meta["state"] = "ready"
         meta["loading_status"] = None
+        self._setup_tool_autofit(key, widget)
         self._activate_tool_if_foreground(key)
 
     def _activate_tool_if_foreground(self, key):
@@ -3485,6 +3748,7 @@ class PTMApp(tk.Tk):
         # Si la herramienta expuso un único widget hijo, lo usamos para callbacks opcionales.
         children = meta["frame"].winfo_children()
         self.current_tool_widget = children[0] if len(children) == 1 else meta["frame"]
+        self._schedule_tool_autofit(key, delay=40)
         try:
             if hasattr(self.current_tool_widget, "on_show"):
                 self.current_tool_widget.on_show()
@@ -3695,6 +3959,13 @@ class PTMApp(tk.Tk):
                     child.on_close()
         except Exception:
             pass
+        job = self._tool_autofit_jobs.pop(key, None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._tool_autofit_state.pop(key, None)
         frame.destroy()
         del self.open_tabs[key]
         if self.current_key == key:
