@@ -104,6 +104,7 @@ def create_tool(parent, app):
     def finish_success(output):
         status_var.set(f"Conversión completada: {output}")
         set_busy(False)
+        app.set_tool_processing(False)
         messagebox.showinfo(
             "Convertidor PDF a Word",
             "El documento Word se generó correctamente.",
@@ -112,6 +113,7 @@ def create_tool(parent, app):
     def finish_error(exc):
         status_var.set("No se pudo completar la conversión.")
         set_busy(False)
+        app.set_tool_processing(False)
         messagebox.showerror(
             "Convertidor PDF a Word",
             f"Error durante la conversión:\n\n{exc}",
@@ -132,6 +134,7 @@ def create_tool(parent, app):
             target_var.set(target)
 
         set_busy(True)
+        app.set_tool_processing(True)
         status_var.set("Convirtiendo PDF a Word...")
 
         def worker():
