@@ -24,12 +24,12 @@ import urllib.request
 import unicodedata
 import zipfile
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.53"
+APP_VERSION = "1.0.54"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "01:17"
+APP_UPDATE_TIME = "01:25"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -659,6 +659,64 @@ class PTMApp(tk.Tk):
         self.footer.pack(fill="x", padx=10, pady=(0, 9))
         self.footer.pack_propagate(False)
 
+        self.zoom_box = tk.Frame(self.footer, bg=WHITE)
+
+        self.zoom_minus = tk.Button(
+            self.zoom_box,
+            text="−",
+            command=lambda: self._zoom_current_tool(-0.05),
+            bg=WHITE,
+            fg=BLACK,
+            relief="flat",
+            bd=0,
+            padx=7,
+            pady=1,
+            cursor="hand2",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.zoom_minus.pack(side="left")
+
+        self.zoom_label = tk.Label(
+            self.zoom_box,
+            text="100%",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            width=6,
+            anchor="center",
+        )
+        self.zoom_label.pack(side="left", padx=2)
+
+        self.zoom_plus = tk.Button(
+            self.zoom_box,
+            text="+",
+            command=lambda: self._zoom_current_tool(0.05),
+            bg=WHITE,
+            fg=BLACK,
+            relief="flat",
+            bd=0,
+            padx=7,
+            pady=1,
+            cursor="hand2",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.zoom_plus.pack(side="left")
+
+        self.zoom_fit = tk.Button(
+            self.zoom_box,
+            text="Ajustar",
+            command=self._fit_current_tool,
+            bg=WHITE,
+            fg=TEAL,
+            relief="flat",
+            bd=0,
+            padx=8,
+            pady=1,
+            cursor="hand2",
+            font=("Segoe UI", 8, "bold"),
+        )
+        self.zoom_fit.pack(side="left", padx=(4, 0))
+
         self.version_box = tk.Frame(self.footer, bg=WHITE)
         self.version_box.pack(side="right", padx=(0, 4), pady=(0, 3))
 
@@ -767,6 +825,8 @@ class PTMApp(tk.Tk):
     # ---------- Inicio ----------
     def show_home(self):
         self.current_key = "home"
+        if hasattr(self, "zoom_box"):
+            self.zoom_box.pack_forget()
         self.current_tool_widget = None
         self.current_tool_module = None
         self._clear_content()
@@ -3493,8 +3553,470 @@ class PTMApp(tk.Tk):
             except Exception:
                 pass
 
+    @staticmethod
+    def _zoom_number(value, factor, minimum=0):
+        try:
+            return max(minimum, int(round(float(value) * factor)))
+        except Exception:
+            return value
+
+    def _zoom_padding(self, value, factor):
+        try:
+            parts = self.tk.splitlist(value)
+            if not parts:
+                return value
+            scaled = [
+                str(max(0, int(round(float(part) * factor))))
+                for part in parts
+            ]
+            if len(scaled) == 1:
+                return scaled[0]
+            return " ".join(scaled)
+        except Exception:
+            return value
+
+    def _capture_zoom_font(self, font_value):
+        try:
+            f = tkfont.Font(font=font_value)
+            actual = f.actual()
+            return {
+                "family": actual.get("family", "Segoe UI"),
+                "size": int(actual.get("size", 9) or 9),
+                "weight": actual.get("weight", "normal"),
+                "slant": actual.get("slant", "roman"),
+                "underline": int(actual.get("underline", 0) or 0),
+                "overstrike": int(actual.get("overstrike", 0) or 0),
+            }
+        except Exception:
+            return None
+
+    def _scaled_font_tuple(self, info, factor):
+        if not info:
+            return None
+        size = int(info.get("size", 9) or 9)
+        sign = -1 if size < 0 else 1
+        scaled_size = sign * max(5, int(round(abs(size) * factor)))
+        return (
+            info.get("family", "Segoe UI"),
+            scaled_size,
+            info.get("weight", "normal"),
+            info.get("slant", "roman"),
+        )
+
+    def _capture_tool_zoom_state(self, key):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        root = meta.get("tool_widget")
+        host = meta.get("tool_host")
+        if root is None or host is None:
+            return
+
+        try:
+            host.update_idletasks()
+            root.update_idletasks()
+        except Exception:
+            return
+
+        style = ttk.Style(self)
+        widgets = {}
+        paned = []
+        token = re.sub(r"[^A-Za-z0-9]", "", str(abs(hash(key))))
+
+        for index, widget in enumerate(self._iter_viewport_widgets(root)):
+            info = {
+                "font": None,
+                "manager": "",
+                "manager_info": {},
+                "options": {},
+                "ttk_style": None,
+                "zoom_style": None,
+            }
+
+            try:
+                info["manager"] = widget.winfo_manager()
+                if info["manager"] == "pack":
+                    info["manager_info"] = dict(widget.pack_info())
+                elif info["manager"] == "grid":
+                    info["manager_info"] = dict(widget.grid_info())
+                elif info["manager"] == "place":
+                    info["manager_info"] = dict(widget.place_info())
+            except Exception:
+                pass
+
+            try:
+                keys = set(widget.keys())
+            except Exception:
+                keys = set()
+
+            if "font" in keys:
+                try:
+                    info["font"] = self._capture_zoom_font(widget.cget("font"))
+                except Exception:
+                    pass
+
+            for option in (
+                "width", "height", "padx", "pady",
+                "wraplength", "borderwidth", "highlightthickness",
+            ):
+                if option in keys:
+                    try:
+                        info["options"][option] = widget.cget(option)
+                    except Exception:
+                        pass
+
+            if isinstance(widget, ttk.Widget):
+                try:
+                    original_style = str(widget.cget("style") or "").strip()
+                except Exception:
+                    original_style = ""
+                base_style = original_style or widget.winfo_class()
+                zoom_style = f"PTMZoom{token}_{index}.{widget.winfo_class()}"
+
+                info["ttk_style"] = base_style
+                info["zoom_style"] = zoom_style
+
+                try:
+                    config = dict(style.configure(base_style) or {})
+                    if config:
+                        style.configure(zoom_style, **config)
+                except Exception:
+                    pass
+
+                try:
+                    maps = dict(style.map(base_style) or {})
+                    if maps:
+                        style.map(zoom_style, **maps)
+                except Exception:
+                    pass
+
+                try:
+                    layout = style.layout(base_style)
+                    if layout:
+                        style.layout(zoom_style, layout)
+                except Exception:
+                    pass
+
+                try:
+                    style_font = style.lookup(base_style, "font")
+                    if style_font:
+                        info["style_font"] = self._capture_zoom_font(style_font)
+                except Exception:
+                    pass
+
+                try:
+                    padding = style.lookup(base_style, "padding")
+                    if padding not in ("", None):
+                        info["style_padding"] = padding
+                except Exception:
+                    pass
+
+                try:
+                    rowheight = style.lookup(base_style, "rowheight")
+                    if rowheight not in ("", None):
+                        info["style_rowheight"] = rowheight
+                except Exception:
+                    pass
+
+            if isinstance(widget, ttk.Panedwindow):
+                try:
+                    panes = widget.panes()
+                    positions = [
+                        widget.sashpos(i)
+                        for i in range(max(0, len(panes) - 1))
+                    ]
+                    paned.append((widget, "ttk", positions))
+                except Exception:
+                    pass
+            elif isinstance(widget, tk.PanedWindow):
+                try:
+                    panes = widget.panes()
+                    positions = [
+                        widget.sash_coord(i)
+                        for i in range(max(0, len(panes) - 1))
+                    ]
+                    paned.append((widget, "tk", positions))
+                except Exception:
+                    pass
+
+            widgets[widget] = info
+
+        natural_w = max(
+            1,
+            root.winfo_reqwidth(),
+            host.winfo_reqwidth(),
+        )
+        natural_h = max(
+            1,
+            root.winfo_reqheight(),
+            host.winfo_reqheight(),
+        )
+
+        meta["zoom_state"] = {
+            "widgets": widgets,
+            "paned": paned,
+            "natural_w": natural_w,
+            "natural_h": natural_h,
+            "last_factor": 1.0,
+        }
+
+    def _restore_tool_zoom_base(self, key):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+        state = meta.get("zoom_state")
+        if not state:
+            return
+
+        style = ttk.Style(self)
+
+        for widget, info in list(state["widgets"].items()):
+            try:
+                if not widget.winfo_exists():
+                    continue
+            except Exception:
+                continue
+
+            try:
+                if info.get("ttk_style") and isinstance(widget, ttk.Widget):
+                    original = str(widget.cget("style") or "").strip()
+                    # Empty style means class default; restoring empty is correct.
+                    captured = info.get("ttk_style", "")
+                    if captured == widget.winfo_class():
+                        widget.configure(style="")
+                    else:
+                        widget.configure(style=captured)
+            except Exception:
+                pass
+
+            if info.get("font"):
+                try:
+                    widget.configure(font=self._scaled_font_tuple(info["font"], 1.0))
+                except Exception:
+                    pass
+
+            for option, value in info.get("options", {}).items():
+                try:
+                    widget.configure(**{option: value})
+                except Exception:
+                    pass
+
+            manager = info.get("manager")
+            mgr = dict(info.get("manager_info") or {})
+            try:
+                if manager == "pack" and widget.winfo_manager() == "pack":
+                    clean = {
+                        k: v for k, v in mgr.items()
+                        if k in {
+                            "side", "fill", "expand", "anchor",
+                            "padx", "pady", "ipadx", "ipady",
+                        }
+                    }
+                    widget.pack_configure(**clean)
+                elif manager == "grid" and widget.winfo_manager() == "grid":
+                    clean = {
+                        k: v for k, v in mgr.items()
+                        if k in {
+                            "row", "column", "rowspan", "columnspan",
+                            "sticky", "padx", "pady", "ipadx", "ipady",
+                        }
+                    }
+                    widget.grid_configure(**clean)
+                elif manager == "place" and widget.winfo_manager() == "place":
+                    clean = {
+                        k: v for k, v in mgr.items()
+                        if k in {
+                            "x", "y", "width", "height",
+                            "relx", "rely", "relwidth", "relheight",
+                            "anchor", "bordermode",
+                        }
+                    }
+                    widget.place_configure(**clean)
+            except Exception:
+                pass
+
+        try:
+            meta.get("tool_host").update_idletasks()
+        except Exception:
+            pass
+
+        for widget, kind, positions in state.get("paned", []):
+            try:
+                if kind == "ttk":
+                    for i, pos in enumerate(positions):
+                        widget.sashpos(i, int(pos))
+                else:
+                    for i, pos in enumerate(positions):
+                        widget.sash_place(i, int(pos[0]), int(pos[1]))
+            except Exception:
+                pass
+
+    def _apply_tool_zoom(self, key, factor):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+        state = meta.get("zoom_state")
+        if not state:
+            return
+
+        factor = max(0.50, min(1.25, float(factor)))
+        self._restore_tool_zoom_base(key)
+        style = ttk.Style(self)
+
+        for widget, info in list(state["widgets"].items()):
+            try:
+                if not widget.winfo_exists():
+                    continue
+            except Exception:
+                continue
+
+            if isinstance(widget, ttk.Widget) and info.get("zoom_style"):
+                zoom_style = info["zoom_style"]
+                style_updates = {}
+
+                if info.get("style_font"):
+                    style_updates["font"] = self._scaled_font_tuple(
+                        info["style_font"], factor
+                    )
+
+                if "style_padding" in info:
+                    style_updates["padding"] = self._zoom_padding(
+                        info["style_padding"], factor
+                    )
+
+                if "style_rowheight" in info:
+                    style_updates["rowheight"] = max(
+                        1,
+                        self._zoom_number(
+                            info["style_rowheight"], factor, minimum=1
+                        ),
+                    )
+
+                try:
+                    if style_updates:
+                        style.configure(zoom_style, **style_updates)
+                    widget.configure(style=zoom_style)
+                except Exception:
+                    pass
+
+            if info.get("font"):
+                try:
+                    widget.configure(
+                        font=self._scaled_font_tuple(info["font"], factor)
+                    )
+                except Exception:
+                    pass
+
+            for option, value in info.get("options", {}).items():
+                try:
+                    if option in {"padx", "pady"}:
+                        scaled = self._zoom_padding(value, factor)
+                    else:
+                        numeric = float(value)
+                        if option in {"width", "height"}:
+                            # 0 significa "automatico" y debe seguir siendolo.
+                            if numeric == 0:
+                                continue
+                            scaled = max(1, int(round(numeric * factor)))
+                        else:
+                            scaled = max(0, int(round(numeric * factor)))
+                    widget.configure(**{option: scaled})
+                except Exception:
+                    pass
+
+            manager = info.get("manager")
+            mgr = dict(info.get("manager_info") or {})
+
+            try:
+                if manager == "pack" and widget.winfo_manager() == "pack":
+                    changes = {}
+                    for name in ("padx", "pady", "ipadx", "ipady"):
+                        if name in mgr:
+                            changes[name] = self._zoom_padding(mgr[name], factor)
+                    if changes:
+                        widget.pack_configure(**changes)
+
+                elif manager == "grid" and widget.winfo_manager() == "grid":
+                    changes = {}
+                    for name in ("padx", "pady", "ipadx", "ipady"):
+                        if name in mgr:
+                            changes[name] = self._zoom_padding(mgr[name], factor)
+                    if changes:
+                        widget.grid_configure(**changes)
+
+                elif manager == "place" and widget.winfo_manager() == "place":
+                    changes = {}
+                    for name in ("x", "y", "width", "height"):
+                        raw = mgr.get(name)
+                        if str(raw).strip():
+                            changes[name] = self._zoom_number(raw, factor)
+                    if changes:
+                        widget.place_configure(**changes)
+            except Exception:
+                pass
+
+        try:
+            meta.get("tool_host").update_idletasks()
+        except Exception:
+            pass
+
+        for widget, kind, positions in state.get("paned", []):
+            try:
+                if kind == "ttk":
+                    for i, pos in enumerate(positions):
+                        widget.sashpos(i, max(1, int(round(pos * factor))))
+                else:
+                    for i, pos in enumerate(positions):
+                        widget.sash_place(
+                            i,
+                            max(1, int(round(pos[0] * factor))),
+                            max(1, int(round(pos[1] * factor))),
+                        )
+            except Exception:
+                pass
+
+        state["last_factor"] = factor
+        meta["zoom"] = factor
+
+    def _zoom_current_tool(self, delta):
+        key = self.current_key
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        current = float(meta.get("zoom", 1.0) or 1.0)
+        meta["zoom_mode"] = "manual"
+        meta["zoom"] = max(0.50, min(1.25, current + float(delta)))
+        self._schedule_tool_viewport(key, delay=10, allow_grow=False)
+
+    def _fit_current_tool(self):
+        key = self.current_key
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+        meta["zoom_mode"] = "fit"
+        self._schedule_tool_viewport(key, delay=10, allow_grow=False)
+
+    def _update_zoom_footer(self, key=None):
+        if not hasattr(self, "zoom_box"):
+            return
+
+        if not key or key == "home" or key not in self.open_tabs:
+            self.zoom_box.pack_forget()
+            return
+
+        if not self.zoom_box.winfo_manager():
+            self.zoom_box.pack(side="left", padx=(4, 0), pady=(2, 0))
+
+        meta = self.open_tabs[key]
+        factor = float(meta.get("zoom", 1.0) or 1.0)
+        mode = meta.get("zoom_mode", "fit")
+        suffix = " Auto" if mode == "fit" else ""
+        self.zoom_label.configure(text=f"{int(round(factor * 100))}%{suffix}")
+
     def _refresh_tool_viewport(self, key, allow_grow=False):
-        """Ajusta PTM al contenido y usa scroll externo solo si aun no cabe."""
+        """Ajusta la herramienta con zoom; scroll solo queda como respaldo."""
         meta = self.open_tabs.get(key)
         if not meta or meta.get("state") not in {"ready", "processing"}:
             return
@@ -3504,51 +4026,57 @@ class PTMApp(tk.Tk):
         window_id = meta.get("viewport_window_id")
         hbar = meta.get("viewport_hbar")
         vbar = meta.get("viewport_vbar")
+        state = meta.get("zoom_state")
 
-        if not all((canvas, host, window_id, hbar, vbar)):
+        if not all((canvas, host, window_id, hbar, vbar)) or not state:
             return
 
         try:
             if not canvas.winfo_exists() or not host.winfo_exists():
                 return
 
+            # Empezar sin barras para aprovechar todo el panel al calcular zoom.
+            hbar.grid_remove()
+            vbar.grid_remove()
+            canvas.update_idletasks()
+
+            available_w = max(1, canvas.winfo_width() - 4)
+            available_h = max(1, canvas.winfo_height() - 4)
+
+            natural_w = max(1, int(state.get("natural_w", 1)))
+            natural_h = max(1, int(state.get("natural_h", 1)))
+
+            mode = meta.get("zoom_mode", "fit")
+            if mode == "fit":
+                factor = min(
+                    1.0,
+                    available_w / natural_w,
+                    available_h / natural_h,
+                )
+                # Un pequeño margen evita que bordes ttk hagan aparecer scroll
+                # por uno o dos pixeles.
+                if factor < 0.995:
+                    factor *= 0.97
+                factor = max(0.50, min(1.0, factor))
+            else:
+                factor = max(
+                    0.50,
+                    min(1.25, float(meta.get("zoom", 1.0) or 1.0)),
+                )
+
+            self._apply_tool_zoom(key, factor)
             host.update_idletasks()
+
             requested_w = max(1, host.winfo_reqwidth())
             requested_h = max(1, host.winfo_reqheight())
 
-            if allow_grow:
-                grew = self._grow_window_for_tool(requested_w, requested_h)
-                if grew:
-                    self.after(
-                        90,
-                        lambda k=key: self._refresh_tool_viewport(
-                            k, allow_grow=False
-                        ),
-                    )
-                    return
+            need_h = requested_w > available_w + 3
+            need_v = requested_h > available_h + 3
 
-            canvas.update_idletasks()
-            available_w = max(1, canvas.winfo_width())
-            available_h = max(1, canvas.winfo_height())
-
-            # Resolver la interdependencia de las dos barras: una barra puede
-            # hacer necesaria la otra. Dos pasadas son suficientes.
-            bar_w = max(14, vbar.winfo_reqwidth())
-            bar_h = max(14, hbar.winfo_reqheight())
-
-            need_h = requested_w > available_w + 2
-            need_v = requested_h > available_h + 2
-
-            for _ in range(2):
-                effective_w = max(1, available_w - (bar_w if need_v else 0))
-                effective_h = max(1, available_h - (bar_h if need_h else 0))
-                need_h = requested_w > effective_w + 2
-                need_v = requested_h > effective_h + 2
-
+            # Si el zoom minimo aun no alcanza, solo entonces aparece scroll.
             if need_h:
                 hbar.grid()
             else:
-                hbar.grid_remove()
                 try:
                     canvas.xview_moveto(0)
                 except Exception:
@@ -3557,7 +4085,6 @@ class PTMApp(tk.Tk):
             if need_v:
                 vbar.grid()
             else:
-                vbar.grid_remove()
                 try:
                     canvas.yview_moveto(0)
                 except Exception:
@@ -3567,8 +4094,6 @@ class PTMApp(tk.Tk):
             available_w = max(1, canvas.winfo_width())
             available_h = max(1, canvas.winfo_height())
 
-            # Si no hay desborde en un eje, el host usa todo el viewport.
-            # Si hay desborde, conserva su tamaño natural y se desplaza.
             target_w = requested_w if need_h else available_w
             target_h = requested_h if need_v else available_h
 
@@ -3578,17 +4103,19 @@ class PTMApp(tk.Tk):
                 height=max(1, target_h),
             )
             canvas.configure(
-                scrollregion=(0, 0, max(target_w, requested_w), max(target_h, requested_h))
+                scrollregion=(
+                    0, 0,
+                    max(target_w, requested_w),
+                    max(target_h, requested_h),
+                )
             )
 
             meta["viewport_need_h"] = bool(need_h)
             meta["viewport_need_v"] = bool(need_v)
-            meta["tool_has_internal_hscroll"] = self._tool_has_internal_scroll(
-                host, "x"
-            )
-            meta["tool_has_internal_vscroll"] = self._tool_has_internal_scroll(
-                host, "y"
-            )
+            meta["zoom"] = factor
+
+            if self.current_key == key:
+                self._update_zoom_footer(key)
         except tk.TclError:
             return
 
@@ -3678,8 +4205,9 @@ class PTMApp(tk.Tk):
         meta["state"] = "ready"
         meta["loading_status"] = None
         meta["tool_widget"] = widget
+        self._capture_tool_zoom_state(key)
         self._activate_tool_if_foreground(key)
-        self._schedule_tool_viewport(key, delay=100, allow_grow=True)
+        self._schedule_tool_viewport(key, delay=100, allow_grow=False)
 
     def _activate_tool_if_foreground(self, key):
         """Actualiza la pestaña sin robar el foco si fue abierta en segundo plano."""
@@ -3717,6 +4245,9 @@ class PTMApp(tk.Tk):
             "download_finished": False,
             "manual_retry_authorized": False,
             "last_download_error": None,
+            "zoom_mode": "fit",
+            "zoom": 1.0,
+            "zoom_state": None,
         }
 
         self._render_tabs()
@@ -3735,6 +4266,7 @@ class PTMApp(tk.Tk):
         meta["frame"].pack(fill="both", expand=True)
         self.current_tool_module = meta["module"]
         self.current_tool_widget = meta.get("tool_widget") or meta["frame"]
+        self._update_zoom_footer(key)
         self._schedule_tool_viewport(key, delay=50, allow_grow=False)
         try:
             if hasattr(self.current_tool_widget, "on_show"):
