@@ -7,6 +7,7 @@ import importlib.metadata
 import io
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -21,9 +22,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 APP_UPDATE_DATE = "27/10/2026"
-APP_UPDATE_TIME = "19:32"
+APP_UPDATE_TIME = "19:44"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -350,6 +351,7 @@ class PTMApp(tk.Tk):
         self.current_key = "home"
         self.current_tool_widget = None
         self.current_tool_module = None
+        self._tool_download_events = queue.Queue()
 
         self._apply_responsive_geometry()
         self.overrideredirect(True)
@@ -361,6 +363,7 @@ class PTMApp(tk.Tk):
 
         self.floating = FloatingPTM(self)
         self.bind("<Escape>", lambda _e: self.hide_main())
+        self.after(100, self._poll_tool_download_events)
 
     # ---------- Ventana / proporción ----------
     def _apply_responsive_geometry(self):
@@ -1801,22 +1804,51 @@ class PTMApp(tk.Tk):
         self._start_tool_download(tool, key)
 
     def _start_tool_download(self, tool, key):
+        meta = self.open_tabs.get(key)
+        if not meta:
+            return
+
+        token = int(meta.get("download_token", 0)) + 1
+        meta["download_token"] = token
+
         def worker():
             try:
                 local_path = self._ensure_tool_local(tool)
-            except Exception as exc:
-                self.after(
-                    0,
-                    lambda err=exc: self._show_tool_unavailable(tool, key, err),
+                self._tool_download_events.put(
+                    ("ok", key, token, tool, local_path, None)
                 )
-                return
-
-            self.after(
-                0,
-                lambda path=local_path: self._tool_download_ready(tool, key, path),
-            )
+            except Exception as exc:
+                self._tool_download_events.put(
+                    ("error", key, token, tool, None, exc)
+                )
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_tool_download_events(self):
+        """Procesa en el hilo principal los resultados de las descargas."""
+        try:
+            while True:
+                kind, key, token, tool, local_path, exc = self._tool_download_events.get_nowait()
+
+                meta = self.open_tabs.get(key)
+                if not meta:
+                    continue
+
+                # Ignorar respuestas viejas de intentos anteriores.
+                if int(meta.get("download_token", 0)) != int(token):
+                    continue
+
+                if kind == "ok":
+                    self._tool_download_ready(tool, key, local_path)
+                else:
+                    self._show_tool_unavailable(tool, key, exc)
+        except queue.Empty:
+            pass
+
+        try:
+            self.after(100, self._poll_tool_download_events)
+        except tk.TclError:
+            pass
 
     def _tool_download_ready(self, tool, key, local_path):
         if key not in self.open_tabs:
@@ -1952,6 +1984,7 @@ class PTMApp(tk.Tk):
             "frame": frame,
             "module": None,
             "state": "loading",
+            "download_token": 0,
         }
 
         self._show_tool_loading(tool, key)
