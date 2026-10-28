@@ -24,7 +24,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.35"
+APP_VERSION = "1.0.36"
 APP_UPDATE_DATE = "27/10/2026"
 APP_UPDATE_TIME = "22:16"
 
@@ -1701,6 +1701,18 @@ class PTMApp(tk.Tk):
                 right = tk.Frame(row, bg=LIGHT)
                 right.pack(side="right", padx=(4, 9), pady=7)
 
+                author = tool.get("author", "").strip() or "Sin autor"
+                author_label = tk.Label(
+                    right,
+                    text=author,
+                    bg=LIGHT,
+                    fg=BLACK,
+                    font=("Segoe UI", 8, "bold"),
+                    anchor="e",
+                    justify="right",
+                )
+                author_label.pack(anchor="e")
+
                 category = tool.get("category", "").strip() or "Sin categoría"
                 version = tool.get("version", "").strip() or "-"
                 meta = tk.Label(
@@ -1712,14 +1724,13 @@ class PTMApp(tk.Tk):
                     anchor="e",
                     justify="right",
                 )
-                meta.pack(anchor="e")
+                meta.pack(anchor="e", pady=(2, 0))
 
                 mode = tool.get("mode", "").strip() or "Integrado"
                 dependencies = tool.get("dependencies", "").strip() or "Sin dependencias"
-                author = tool.get("author", "").strip() or "Sin autor"
                 extra = tk.Label(
                     right,
-                    text=f"{author} · {mode} · {dependencies}",
+                    text=f"{mode} · {dependencies}",
                     bg=LIGHT,
                     fg=MUTED,
                     font=("Segoe UI", 8),
@@ -1728,7 +1739,7 @@ class PTMApp(tk.Tk):
                 )
                 extra.pack(anchor="e", pady=(4, 0))
 
-                clickable = (row, left, right, label, desc, meta, extra)
+                clickable = (row, left, right, label, desc, author_label, meta, extra)
             else:
                 # Resultado compacto durante la escritura.
                 label = tk.Label(
