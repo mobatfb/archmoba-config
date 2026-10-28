@@ -10,7 +10,7 @@ TOOL_DESCRIPTION = (
     "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.5.0"
+TOOL_VERSION = "1.6.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -197,7 +197,7 @@ class PyrionConsoleTool(tk.Frame):
         self.sidebar = tk.Frame(
             workspace,
             bg=TAB,
-            width=122,
+            width=150,
             bd=1,
             relief="solid",
         )
@@ -325,15 +325,17 @@ class PyrionConsoleTool(tk.Frame):
             text="×",
             command=lambda t=tab_id: self.close_tab(t),
             bg=TAB,
-            fg=MUTED,
+            fg=RED,
             activebackground=TAB_ACTIVE,
-            activeforeground=RED,
+            activeforeground="#FFFFFF",
             bd=0,
             relief="flat",
             width=2,
-            font=("DejaVu Sans", 9, "bold"),
+            padx=0,
+            pady=7,
+            font=("DejaVu Sans", 10, "bold"),
         )
-        close_button.pack(side="left", fill="y")
+        close_button.pack(side="left", fill="y", padx=(4, 0))
 
         button = tk.Button(
             row,
@@ -347,13 +349,13 @@ class PyrionConsoleTool(tk.Frame):
             relief="flat",
             highlightthickness=0,
             anchor="w",
-            padx=8,
+            padx=3,
             pady=7,
             font=("DejaVu Sans", 9),
         )
         button.pack(side="left", fill="x", expand=True)
 
-        self.side_buttons[tab_id] = (row, button)
+        self.side_buttons[tab_id] = (row, button, close_button)
 
     def close_tab(self, tab_id):
         if tab_id not in self.open_tabs:
@@ -365,7 +367,7 @@ class PyrionConsoleTool(tk.Frame):
         self.tab_types.pop(tab_id, None)
         self.tab_labels.pop(tab_id, None)
 
-        row, _button = self.side_buttons.pop(tab_id)
+        row, _button, _close = self.side_buttons.pop(tab_id)
         row.destroy()
 
         if was_active:
@@ -386,11 +388,15 @@ class PyrionConsoleTool(tk.Frame):
         self.active_tab = tab_id
         tab_type = self.tab_types.get(tab_id, "Consola")
 
-        for current_id, (_row, button) in self.side_buttons.items():
+        for current_id, (_row, button, close_button) in self.side_buttons.items():
             selected = current_id == tab_id
             button.configure(
                 bg=TAB_ACTIVE if selected else TAB,
                 fg=FG if selected else MUTED,
+            )
+            close_button.configure(
+                bg=TAB_ACTIVE if selected else TAB,
+                fg=RED,
             )
 
         self._render_history()
