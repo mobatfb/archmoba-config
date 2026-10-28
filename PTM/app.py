@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.56"
+APP_VERSION = "1.0.57"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "01:55"
+APP_UPDATE_TIME = "02:08"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
@@ -3453,6 +3453,77 @@ class PTMApp(tk.Tk):
         meta["tool_host"] = host
         meta["viewport_window_id"] = window_id
         meta["tool_widget"] = None
+        meta["first_fit_complete"] = False
+
+        # Mantener la pantalla de carga visible mientras la herramienta se
+        # crea, se mide y PTM calcula/aplica su primer zoom.
+        overlay = tk.Frame(shell, bg=WHITE)
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+
+        loading_holder = tk.Frame(overlay, bg=WHITE)
+        loading_holder.place(relx=0.5, rely=0.5, anchor="center")
+
+        loading_spinner = tk.Canvas(
+            loading_holder,
+            width=48,
+            height=48,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+        )
+        loading_spinner.pack(pady=(0, 12))
+        loading_arc = loading_spinner.create_arc(
+            7, 7, 41, 41,
+            start=0,
+            extent=265,
+            style="arc",
+            outline=TEAL,
+            width=4,
+        )
+
+        tool_info = meta.get("tool") or {}
+        tk.Label(
+            loading_holder,
+            text=tool_info.get("name", "Herramienta"),
+            bg=WHITE,
+            fg=BLACK,
+            font=("Segoe UI", 15, "bold"),
+        ).pack()
+
+        loading_status = tk.Label(
+            loading_holder,
+            text="Cargando y ajustando interfaz...",
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+        )
+        loading_status.pack(pady=(6, 0))
+
+        meta["viewport_loading_overlay"] = overlay
+        meta["loading_status"] = loading_status
+
+        def animate_loading(angle=0, k=key):
+            current = self.open_tabs.get(k)
+            if not current or current.get("first_fit_complete"):
+                return
+            current_overlay = current.get("viewport_loading_overlay")
+            try:
+                if (
+                    current_overlay is None
+                    or not current_overlay.winfo_exists()
+                    or not loading_spinner.winfo_exists()
+                ):
+                    return
+                loading_spinner.itemconfigure(loading_arc, start=angle)
+                loading_spinner.after(
+                    45,
+                    lambda: animate_loading((angle - 18) % 360, k),
+                )
+            except tk.TclError:
+                return
+
+        animate_loading()
 
         def changed(event=None, k=key):
             meta_now = self.open_tabs.get(k)
@@ -4025,6 +4096,10 @@ class PTMApp(tk.Tk):
             self.zoom_box.pack(side="left", padx=(4, 0), pady=(2, 0))
 
         meta = self.open_tabs[key]
+        if not meta.get("first_fit_complete"):
+            self.zoom_box.pack_forget()
+            return
+
         factor = float(meta.get("zoom", 1.0) or 1.0)
         mode = meta.get("zoom_mode", "fit")
         suffix = " Auto" if mode == "fit" else ""
@@ -4099,6 +4174,39 @@ class PTMApp(tk.Tk):
                 break
 
         return horizontal, vertical
+
+    def _finish_tool_first_fit(self, key):
+        """Revela la herramienta solo despues de completar el primer ajuste."""
+        meta = self.open_tabs.get(key)
+        if not meta or meta.get("first_fit_complete"):
+            return
+
+        meta["first_fit_complete"] = True
+        overlay = meta.get("viewport_loading_overlay")
+
+        def reveal():
+            current = self.open_tabs.get(key)
+            if not current:
+                return
+
+            current_overlay = current.pop("viewport_loading_overlay", None)
+            if current_overlay is not None:
+                try:
+                    if current_overlay.winfo_exists():
+                        current_overlay.destroy()
+                except tk.TclError:
+                    pass
+
+            current["loading_status"] = None
+            if self.current_key == key:
+                self._update_zoom_footer(key)
+
+        # Dar a Tk un ciclo de dibujo con la geometria final antes de retirar
+        # la capa evita mostrar el salto 100% -> zoom ajustado.
+        try:
+            self.after(45, reveal)
+        except tk.TclError:
+            reveal()
 
     def _refresh_tool_viewport(self, key, allow_grow=False):
         """Aplica zoom y comprime el layout al viewport; scroll solo ante desborde real."""
@@ -4236,7 +4344,9 @@ class PTMApp(tk.Tk):
             meta["viewport_need_v"] = bool(need_v)
             meta["zoom"] = factor
 
-            if self.current_key == key:
+            if not meta.get("first_fit_complete"):
+                self._finish_tool_first_fit(key)
+            elif self.current_key == key:
                 self._update_zoom_footer(key)
         except tk.TclError:
             return
@@ -4374,6 +4484,8 @@ class PTMApp(tk.Tk):
             "zoom_state": None,
             "zoom_updating": False,
             "last_viewport_size": None,
+            "first_fit_complete": False,
+            "viewport_loading_overlay": None,
         }
 
         self._render_tabs()
