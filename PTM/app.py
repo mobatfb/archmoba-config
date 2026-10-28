@@ -27,9 +27,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.65"
+APP_VERSION = "1.0.66"
 APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "05:58"
+APP_UPDATE_TIME = "18:05"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -3031,6 +3031,7 @@ class PTMApp(tk.Tk):
         if not meta:
             return
 
+        meta["failure_stage"] = "dependencies"
         try:
             missing = self._collect_missing_dependencies(tool)
         except Exception as exc:
@@ -3416,6 +3417,10 @@ class PTMApp(tk.Tk):
         failure_stage = meta.get("failure_stage")
         if failure_stage == "dependencies":
             title = "No se pudieron preparar las dependencias"
+        elif isinstance(exc, ImportError):
+            title = "Falta una librería o dependencia"
+        elif failure_stage == "execution":
+            title = "No se pudo iniciar"
         else:
             title = "No está disponible" if is_404 else "No se pudo descargar"
 
@@ -3427,29 +3432,71 @@ class PTMApp(tk.Tk):
             font=("Segoe UI", 11, "bold"),
         ).pack(pady=(5, 2))
 
-        detail = ""
-        if exc is not None and not is_404:
-            detail = str(exc).strip()
-        if detail:
-            if len(detail) > 260:
-                detail = detail[:257] + "..."
-            tk.Label(
-                holder,
-                text=detail,
-                bg=WHITE,
-                fg=MUTED,
-                font=("Segoe UI", 8),
-                wraplength=430,
-                justify="center",
-            ).pack(pady=(2, 8))
-        else:
-            tk.Label(
-                holder,
-                text="El archivo no se encuentra disponible en este momento.",
-                bg=WHITE,
-                fg=MUTED,
-                font=("Segoe UI", 8),
-            ).pack(pady=(2, 8))
+        # El texto mostrado puede abreviarse; la copia conserva el error completo.
+        display_detail = (
+            str(exc).strip()
+            if exc is not None and not is_404
+            else "El archivo no se encuentra disponible en este momento."
+        ) or "No se proporcionaron detalles adicionales."
+        copy_detail = (
+            f"{type(exc).__name__}: {str(exc).strip()}"
+            if exc is not None
+            else display_detail
+        )
+        error_report = (
+            f"Programa: {tool.get('name', 'Herramienta')}\\n"
+            f"Motivo: {title}\\n"
+            f"Detalle: {copy_detail}"
+        )
+        detail_preview = (
+            display_detail[:257] + "..."
+            if len(display_detail) > 260
+            else display_detail
+        )
+        detail_row = tk.Frame(holder, bg=WHITE)
+        detail_row.pack(pady=(2, 8))
+        tk.Label(
+            detail_row,
+            text=detail_preview,
+            bg=WHITE,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            wraplength=390,
+            justify="center",
+        ).pack(side="left")
+
+        # Icono vectorial: no depende de fuentes o emojis en MiniLinux.
+        copy_icon = tk.Canvas(
+            detail_row,
+            width=28,
+            height=26,
+            bg=WHITE,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+            takefocus=True,
+        )
+        copy_icon.pack(side="left", padx=(7, 0))
+        copy_icon.create_rectangle(5, 8, 18, 22, outline=TEAL, width=2)
+        copy_icon.create_rectangle(10, 3, 23, 17, outline=TEAL, width=2)
+
+        def copy_error(_event=None):
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(error_report)
+                self.update()
+            except tk.TclError:
+                return "break"
+            if copy_icon.winfo_exists():
+                copy_icon.delete("all")
+                copy_icon.create_line(
+                    5, 13, 11, 19, 23, 5, fill=TEAL, width=2,
+                )
+            return "break"
+
+        copy_icon.bind("<Button-1>", copy_error)
+        copy_icon.bind("<Return>", copy_error)
+        copy_icon.bind("<space>", copy_error)
 
         buttons = tk.Frame(holder, bg=WHITE)
         buttons.pack(pady=(8, 0))
@@ -3566,6 +3613,7 @@ class PTMApp(tk.Tk):
         meta["download_finished"] = False
         meta["download_attempt"] = 0
         meta["state"] = "loading"
+        meta["failure_stage"] = None
         meta["last_download_error"] = None
 
         self._show_tool_loading(
@@ -4823,6 +4871,7 @@ class PTMApp(tk.Tk):
         if not meta:
             return
 
+        meta["failure_stage"] = "execution"
         frame = meta["frame"]
 
         if str(tool.get("mode", "")).strip().lower() == "externo":
@@ -4901,6 +4950,7 @@ class PTMApp(tk.Tk):
             widget.pack(fill="both", expand=True)
 
         meta["module"] = module
+        meta["failure_stage"] = None
         meta["state"] = "ready"
         meta["loading_status"] = None
         meta["tool_widget"] = widget
