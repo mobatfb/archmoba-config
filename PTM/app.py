@@ -507,6 +507,7 @@ class PTMApp(tk.Tk):
         self._catalog_search_request_id = 0
         self._catalog_search_inflight = 0
         self._search_debounce_job = None
+        self._command_cache = {}
         self._self_update_events = queue.Queue()
         self._self_update_check_running = False
 
@@ -1097,6 +1098,7 @@ class PTMApp(tk.Tk):
         else:
             favorites.append(key)
         self._save_user_state()
+        self._rebuild_command_cache()
         if hasattr(self, "results_frame") and self.results_frame.winfo_exists():
             self.refresh_results()
         self._render_tabs()
@@ -1117,12 +1119,48 @@ class PTMApp(tk.Tk):
         except (TypeError, ValueError):
             usage[key] = 1
         self._save_user_state()
+        self._rebuild_command_cache()
 
     def _tool_by_state_key(self):
         return {
             self._tool_state_key(tool): tool
             for tool in self.tools
             if self._tool_state_key(tool)
+        }
+
+    def _rebuild_command_cache(self):
+        """Precalcula los filtros especiales para evitar ordenar en cada búsqueda."""
+        by_key = self._tool_by_state_key()
+        usage = self.user_state.get("usage", {})
+
+        self._command_cache = {
+            "%recents%": [
+                by_key[key]
+                for key in self.user_state.get("recents", [])
+                if key in by_key
+            ][:10],
+            "%favorites%": [
+                by_key[key]
+                for key in self.user_state.get("favorites", [])
+                if key in by_key
+            ],
+            "%used%": sorted(
+                [
+                    tool for key, tool in by_key.items()
+                    if int(usage.get(key, 0) or 0) > 0
+                ],
+                key=lambda tool: (
+                    -int(usage.get(self._tool_state_key(tool), 0) or 0),
+                    tool["name"].lower(),
+                ),
+            )[:10],
+            "%recommended%": sorted(
+                self.tools,
+                key=lambda tool: (
+                    -int(tool.get("visits", 0)),
+                    tool["name"].lower(),
+                ),
+            )[:20],
         }
 
     def _set_search_command(self, command):
@@ -1322,6 +1360,8 @@ class PTMApp(tk.Tk):
                     if part
                 ),
             })
+
+        self._rebuild_command_cache()
 
         if (
             refresh
@@ -1651,41 +1691,8 @@ class PTMApp(tk.Tk):
             return []
 
         command = raw_query.lower()
-        by_key = self._tool_by_state_key()
-
-        if command == "%recents%":
-            return [
-                by_key[key]
-                for key in self.user_state.get("recents", [])
-                if key in by_key
-            ]
-        if command == "%favorites%":
-            return [
-                by_key[key]
-                for key in self.user_state.get("favorites", [])
-                if key in by_key
-            ]
-        if command == "%used%":
-            usage = self.user_state.get("usage", {})
-            used = [
-                tool for key, tool in by_key.items()
-                if int(usage.get(key, 0) or 0) > 0
-            ]
-            return sorted(
-                used,
-                key=lambda tool: (
-                    -int(usage.get(self._tool_state_key(tool), 0) or 0),
-                    tool["name"].lower(),
-                ),
-            )[:10]
-        if command == "%recommended%":
-            return sorted(
-                self.tools,
-                key=lambda tool: (
-                    -int(tool.get("visits", 0)),
-                    tool["name"].lower(),
-                ),
-            )[:20]
+        if command in self._command_cache:
+            return list(self._command_cache.get(command, []))
 
         normalized_query = self._normalize_search_text(raw_query)
         if not normalized_query:
