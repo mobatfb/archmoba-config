@@ -19,6 +19,7 @@ except Exception:
     PIL_AVAILABLE = False
 
 BASE_DIR = Path(__file__).resolve().parent
+CANVAEDIT_VERSION = "1.0.1"
 DEFAULT_PROJECT = "pyrion_desing"
 
 REPO_OWNER = "mobatfb"
@@ -180,7 +181,7 @@ class CanvaEditFrame(tk.Frame):
 
         tk.Label(
             header,
-            text="CANVAEDIT",
+            text=f"CANVAEDIT  v{CANVAEDIT_VERSION}",
             bg="#14171d",
             fg="#ffffff",
             font=("Arial", 16, "bold"),
