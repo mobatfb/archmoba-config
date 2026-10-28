@@ -682,7 +682,7 @@ class PTMApp(tk.Tk):
             bg=WHITE,
             fg=MUTED,
             font=("Segoe UI", 8),
-            width=6,
+            width=9,
             anchor="center",
         )
         self.zoom_label.pack(side="left", padx=2)
@@ -3657,7 +3657,7 @@ class PTMApp(tk.Tk):
                     pass
 
             for option in (
-                "width", "height", "padx", "pady",
+                "width", "height", "padx", "pady", "padding",
                 "wraplength", "borderwidth", "highlightthickness",
             ):
                 if option in keys:
@@ -3910,7 +3910,7 @@ class PTMApp(tk.Tk):
 
             for option, value in info.get("options", {}).items():
                 try:
-                    if option in {"padx", "pady"}:
+                    if option in {"padx", "pady", "padding"}:
                         scaled = self._zoom_padding(value, factor)
                     else:
                         numeric = float(value)
