@@ -77,24 +77,37 @@
     } finally {clearTimeout(timer);}
   }
 
+  // Refresca el catalogo desde la API antes de consultar el CDN RAW,
+  // porque los nombres de models.json pueden permanecer en cache.
+  async function apiJson(path, nonce) {
+    const response = await fetchJson(API + path + '?ref=main&_=' + nonce);
+    if (response.encoding !== 'base64' || typeof response.content !== 'string') {
+      throw new Error('GitHub API no entregó un archivo Base64');
+    }
+    const binary = atob(response.content.replace(/\s+/g, ''));
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
   async function repoJson(path) {
     if (!validPath(path)) throw new Error('Ruta de archivo no permitida: ' + path);
-    let firstError;
-    try {
-      return await fetchJson(RAW + path + '?v=' + Date.now());
-    } catch (e) {firstError = e;}
-    try {
-      const response = await fetchJson(API + path + '?ref=main');
-      if (response.encoding !== 'base64' || typeof response.content !== 'string') {
-        throw new Error('GitHub API no entregó el archivo en Base64');
-      }
-      const binary = atob(response.content.replace(/\s+/g, ''));
-      const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-      return JSON.parse(new TextDecoder().decode(bytes));
-    } catch (e) {
-      throw new Error('No se pudo leer ' + path.split('/').pop() +
-        ' desde GitHub (RAW: ' + firstError.message + '; API: ' + e.message + ')');
+    const nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+    const attempts = path === MODELS_PATH
+      ? [
+          ['GitHub API', () => apiJson(path, nonce)],
+          ['GitHub RAW', () => fetchJson(RAW + path + '?_=' + nonce)]
+        ]
+      : [
+          ['GitHub RAW', () => fetchJson(RAW + path + '?_=' + nonce)],
+          ['GitHub API', () => apiJson(path, nonce)]
+        ];
+    const errors = [];
+    for (const [source, load] of attempts) {
+      try { return await load(); }
+      catch (error) { errors.push(source + ': ' + error.message); }
     }
+    throw new Error('No se pudo leer ' + path.split('/').pop() +
+      ' desde GitHub (' + errors.join('; ') + ')');
   }
 
   function sphereGeometry(params) {
