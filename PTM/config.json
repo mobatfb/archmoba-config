@@ -2,8 +2,8 @@
   "app": "PTM",
   "name": "PTM",
   "description": "Buscador y lanzador de herramientas Python",
-  "version": "1.0.70",
+  "version": "1.0.71",
   "app_path": "PTM/app.py",
-  "release_commit": "d7ebf4a75b296ca4a4ec7ab9e48f5a73507cb824",
+  "release_commit": "711e4ee002cf6ae2380ccfe513e419151191efce",
   "maintenance": false
 }
