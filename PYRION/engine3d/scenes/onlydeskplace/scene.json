@@ -1,0 +1,158 @@
+{
+  "format": "pyrion.scene",
+  "version": 1,
+  "name": "OnlyDeskPlace",
+  "units": "world",
+  "coordinate_system": {
+    "handedness": "right",
+    "up_axis": "Y"
+  },
+  "bounds": {
+    "type": "aabb",
+    "min": [
+      -10,
+      -10,
+      -10
+    ],
+    "max": [
+      10,
+      10,
+      10
+    ],
+    "visible": false,
+    "enforcement": "configurable"
+  },
+  "background": {
+    "color": "#050917"
+  },
+  "objects": [
+    {
+      "id": "sphere",
+      "name": "Sphere",
+      "model": "models/sphere.mesh",
+      "position": [
+        -1.72,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.75,
+        0.75,
+        0.75
+      ],
+      "visible": true,
+      "animation": {
+        "type": "spin",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "speed_degrees_per_second": 30
+      },
+      "material": "materials/gold_reflective.mat"
+    },
+    {
+      "id": "purple_crystal",
+      "name": "Purple Crystal",
+      "model": "models/crystal.mesh",
+      "material": "materials/crystal_purple.mat",
+      "position": [
+        0,
+        0.02,
+        0
+      ],
+      "rotation": [
+        0,
+        25,
+        0
+      ],
+      "scale": [
+        0.72,
+        0.77,
+        0.72
+      ],
+      "visible": true,
+      "animation": {
+        "type": "spin",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "speed_degrees_per_second": 16
+      }
+    },
+    {
+      "id": "dark_gem",
+      "name": "Dark Graphite Gem",
+      "model": "models/gem.mesh",
+      "material": "materials/gem_dark.mat",
+      "position": [
+        1.68,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.43,
+        0.46,
+        0.43
+      ],
+      "visible": true,
+      "animation": {
+        "type": "spin",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "speed_degrees_per_second": 11
+      }
+    }
+  ],
+  "ambient_light": 0.56,
+  "lights": [
+    {
+      "id": "spot_principal",
+      "type": "spot",
+      "enabled": true,
+      "position": [
+        -0.6,
+        3.6,
+        4.4
+      ],
+      "target": [
+        0,
+        0,
+        0
+      ],
+      "color": "#FFE6C7",
+      "intensity": 2,
+      "range": 10,
+      "angle_degrees": 100,
+      "softness": 0.3
+    }
+  ],
+  "navigation": {
+    "camera_position": [
+      0,
+      0,
+      3.85
+    ],
+    "camera_yaw_degrees": 0,
+    "camera_pitch_degrees": 0,
+    "walk_speed": 1.9,
+    "turn_speed_degrees": 95,
+    "look_speed_degrees": 115
+  }
+}
