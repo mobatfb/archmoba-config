@@ -2,6 +2,8 @@
 import io
 import json
 import os
+import queue
+import threading
 import time
 import tkinter as tk
 from pathlib import Path
@@ -9,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.5"
+TOOL_VERSION = "2.0.6"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -25,6 +27,15 @@ class Mp3PlayerTool(ttk.Frame):
 
         self.playlist = []
         self.recent_tracks = []  # Historial local de canciones reproducidas.
+        self.favorite_tracks = []  # Favoritos persistentes, independientes de recientes.
+        self.all_tracks = {}  # Ruta -> duracion; solo MP3 de mas de 60 segundos.
+        self._all_index = {}  # Cache de metadatos de todos los MP3 encontrados.
+        self._scan_queue = queue.Queue(maxsize=64)
+        self._scan_cancel = threading.Event()
+        self._scan_thread = None
+        self._scan_started = False
+        self._all_render_token = 0
+        self._all_rendering = False
         self.current_index = -1
         self.loaded_path = None
         self.duration = 0.0
@@ -47,18 +58,24 @@ class Mp3PlayerTool(ttk.Frame):
         self.volume = tk.DoubleVar(value=70)
         self.progress = tk.DoubleVar(value=0)
         self.search_var = tk.StringVar()
-        self.current_count_var = tk.StringVar(value="0 canciones")
+        self.queue_count_var = tk.StringVar(value="Cola: 0")
         self.recent_count_var = tk.StringVar(value="0 escuchadas")
+        self.favorite_count_var = tk.StringVar(value="0 favoritos")
+        self.all_count_var = tk.StringVar(value="0 MP3 de más de 1 minuto")
+        self.scan_status_var = tk.StringVar(value="Abre All para buscar MP3 en el equipo")
 
         self.state_path = self._state_file()
         self._build_ui()
         self._init_drag_drop()
         self._init_backends()
         self._load_state()
+        self._load_scan_cache()
         self._refresh_playlist()
         self._refresh_recent()
+        self._refresh_favorites()
         self._apply_volume()
         self.after(250, self._tick)
+        self.after(150, self._poll_scan_queue)
 
     # ---------- Estado persistente ----------
     def _state_file(self):
@@ -98,6 +115,16 @@ class Mp3PlayerTool(ttk.Frame):
                     self.recent_tracks.append(path)
                 if len(self.recent_tracks) >= 40:
                     break
+            self.favorite_tracks = []
+            seen_favorites = set()
+            raw_favorites = data.get("favorite_tracks", [])
+            if not isinstance(raw_favorites, list):
+                raw_favorites = []
+            for raw in raw_favorites[:5000]:
+                path = str(Path(str(raw)).expanduser())
+                if path not in seen_favorites:
+                    seen_favorites.add(path)
+                    self.favorite_tracks.append(path)
             self._resume_positions = {
                 str(k): max(0.0, float(v))
                 for k, v in dict(data.get("positions", {})).items()
@@ -117,6 +144,7 @@ class Mp3PlayerTool(ttk.Frame):
                 "version": 3,
                 "playlist": self.playlist,
                 "recent_tracks": self.recent_tracks[:40],
+                "favorite_tracks": self.favorite_tracks,
                 "last_track": self.current_path() or "",
                 "positions": self._resume_positions,
                 "volume": int(float(self.volume.get())),
@@ -161,105 +189,100 @@ class Mp3PlayerTool(ttk.Frame):
         body = ttk.Panedwindow(self, orient="horizontal")
         body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 6))
 
-        # Biblioteca / playlist
+        # Biblioteca con tres pestañas, como en el diseño de referencia.
         left = ttk.Frame(body, padding=6)
         body.add(left, weight=2)
         left.columnconfigure(0, weight=1)
         left.rowconfigure(4, weight=1)
 
+        title_row = ttk.Frame(left)
+        title_row.grid(row=0, column=0, sticky="ew")
+        title_row.columnconfigure(0, weight=1)
         ttk.Label(
-            left, text="Biblioteca MP3", font=("Segoe UI", 11, "bold")
+            title_row, text="Biblioteca MP3", font=("Segoe UI", 11, "bold")
         ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            title_row, textvariable=self.queue_count_var, style="Muted.TLabel"
+        ).grid(row=0, column=1, sticky="e")
 
         actions = ttk.Frame(left)
         actions.grid(row=1, column=0, sticky="ew", pady=(6, 5))
-        ttk.Button(actions, text="+ Archivos", command=self.add_files).pack(side="left")
+        ttk.Button(actions, text="+ MP3", command=self.add_files).pack(side="left")
         ttk.Button(actions, text="+ Carpeta", command=self.add_folder).pack(
-            side="left", padx=5
+            side="left", padx=(5, 0)
         )
-        ttk.Button(actions, text="Quitar", command=self.remove_selected).pack(side="left")
-        ttk.Button(actions, text="Limpiar", command=self.clear_playlist).pack(
-            side="left", padx=5
+        ttk.Button(actions, text="Escanear equipo", command=self.start_scan).pack(
+            side="left", padx=(5, 0)
         )
+        self.stop_scan_btn = ttk.Button(
+            actions, text="Detener", command=self.stop_scan, state="disabled"
+        )
+        self.stop_scan_btn.pack(side="left", padx=(5, 0))
 
         self.drop_hint = ttk.Label(
-            left,
-            text="Arrastra aqui archivos MP3 o carpetas",
-            style="Muted.TLabel",
-            anchor="w",
+            left, textvariable=self.scan_status_var, style="Muted.TLabel",
+            anchor="w", wraplength=400,
         )
         self.drop_hint.grid(row=2, column=0, sticky="ew", pady=(0, 4))
 
         search = ttk.Entry(left, textvariable=self.search_var)
         search.grid(row=3, column=0, sticky="ew", pady=(0, 5))
-        self.search_var.trace_add("write", lambda *_: self._refresh_playlist())
+        self.search_var.trace_add("write", lambda *_: self._refresh_active_tab())
 
-        # Paneles verticales independientes: lista actual y recientes.
-        self.library_panels = ttk.Panedwindow(left, orient="vertical")
-        self.library_panels.grid(row=4, column=0, sticky="nsew")
-
-        current_panel = ttk.Frame(self.library_panels, padding=(0, 3))
-        current_panel.columnconfigure(0, weight=1)
-        current_panel.rowconfigure(1, weight=1)
-        self.library_panels.add(current_panel, weight=3)
-        current_header = ttk.Frame(current_panel)
-        current_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        current_header.columnconfigure(0, weight=1)
-        ttk.Label(
-            current_header, text="Lista actual", font=("Segoe UI", 10, "bold")
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            current_header, textvariable=self.current_count_var, style="Muted.TLabel"
-        ).grid(row=0, column=1, sticky="e")
-
-        list_frame = ttk.Frame(current_panel)
-        list_frame.grid(row=1, column=0, sticky="nsew")
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-        self.listbox = tk.Listbox(
-            list_frame, activestyle="none", selectmode="extended",
-            bd=0, highlightthickness=1, font=("Segoe UI", 9),
+        style.configure(
+            "MP3.TNotebook", background="#D6E3FF", borderwidth=0
         )
-        self.listbox.grid(row=0, column=0, sticky="nsew")
-        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
-        scroll.grid(row=0, column=1, sticky="ns")
-        self.listbox.configure(yscrollcommand=scroll.set)
-        self.listbox.bind("<Double-Button-1>", self._open_selected)
-        self.listbox.bind("<Return>", self._open_selected)
-
-        recent_panel = ttk.Frame(self.library_panels, padding=(0, 3))
-        recent_panel.columnconfigure(0, weight=1)
-        recent_panel.rowconfigure(1, weight=1)
-        self.library_panels.add(recent_panel, weight=2)
-        recent_header = ttk.Frame(recent_panel)
-        recent_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        recent_header.columnconfigure(0, weight=1)
-        ttk.Label(
-            recent_header, text="Recientes", font=("Segoe UI", 10, "bold")
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            recent_header, textvariable=self.recent_count_var, style="Muted.TLabel"
-        ).grid(row=0, column=1, sticky="e", padx=(4, 8))
-        ttk.Button(
-            recent_header, text="Borrar historial", command=self.clear_recent
-        ).grid(row=0, column=2, sticky="e")
-
-        recent_frame = ttk.Frame(recent_panel)
-        recent_frame.grid(row=1, column=0, sticky="nsew")
-        recent_frame.columnconfigure(0, weight=1)
-        recent_frame.rowconfigure(0, weight=1)
-        self.recent_listbox = tk.Listbox(
-            recent_frame, activestyle="none", selectmode="browse",
-            bd=0, highlightthickness=1, font=("Segoe UI", 9),
+        style.configure(
+            "MP3.TNotebook.Tab", padding=(15, 8),
+            font=("Segoe UI", 10), background="#D5E2FA",
         )
-        self.recent_listbox.grid(row=0, column=0, sticky="nsew")
-        recent_scroll = ttk.Scrollbar(
-            recent_frame, orient="vertical", command=self.recent_listbox.yview,
+        style.map(
+            "MP3.TNotebook.Tab",
+            background=[("selected", "#FFFFFF"), ("!selected", "#D5E2FA")],
+            foreground=[("selected", "#172638"), ("!selected", "#34445D")],
         )
-        recent_scroll.grid(row=0, column=1, sticky="ns")
-        self.recent_listbox.configure(yscrollcommand=recent_scroll.set)
-        self.recent_listbox.bind("<Double-Button-1>", self._open_recent)
-        self.recent_listbox.bind("<Return>", self._open_recent)
+
+        self.library_tabs = ttk.Notebook(left, style="MP3.TNotebook")
+        self.library_tabs.grid(row=4, column=0, sticky="nsew")
+        self.tab_recent = ttk.Frame(self.library_tabs, padding=6)
+        self.tab_favorites = ttk.Frame(self.library_tabs, padding=6)
+        self.tab_all = ttk.Frame(self.library_tabs, padding=6)
+        self.library_tabs.add(self.tab_recent, text="Recientes")
+        self.library_tabs.add(self.tab_favorites, text="Favoritos")
+        self.library_tabs.add(self.tab_all, text="All")
+        self.library_tabs.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        self.recent_listbox = self._make_tab_list(
+            self.tab_recent, self.recent_count_var,
+            "Borrar historial", self.clear_recent,
+        )
+        self.favorite_listbox = self._make_tab_list(
+            self.tab_favorites, self.favorite_count_var,
+        )
+        self.all_listbox = self._make_tab_list(
+            self.tab_all, self.all_count_var,
+        )
+        for tab, widget in (
+            ("recent", self.recent_listbox),
+            ("favorites", self.favorite_listbox),
+            ("all", self.all_listbox),
+        ):
+            widget.bind(
+                "<Double-Button-1>",
+                lambda event, source=tab: self._open_tab_selected(source, event),
+            )
+            widget.bind(
+                "<Return>",
+                lambda event, source=tab: self._open_tab_selected(source, event),
+            )
+            widget.bind(
+                "<Button-3>",
+                lambda event, source=tab: self._tab_context_menu(source, event),
+            )
+            widget.bind(
+                "<Control-Button-1>",
+                lambda event, source=tab: self._tab_context_menu(source, event),
+            )
 
         # Reproductor compacto y responsivo para la altura real de una pestaña PTM.
         right = ttk.Frame(body, padding=(14, 4))
@@ -358,31 +381,168 @@ class Mp3PlayerTool(ttk.Frame):
             wraplength=480,
         ).grid(row=7, column=0, sticky="ew", pady=(3, 0))
 
+    def _make_tab_list(self, parent, count_var, action_text=None, action=None):
+        """Construye una pestaña con encabezado, contador y scroll."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        header = ttk.Frame(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        header.columnconfigure(0, weight=1)
+        ttk.Label(
+            header, textvariable=count_var, style="Muted.TLabel"
+        ).grid(row=0, column=0, sticky="w")
+        if action_text and action:
+            ttk.Button(header, text=action_text, command=action).grid(
+                row=0, column=1, sticky="e"
+            )
+        holder = ttk.Frame(parent)
+        holder.grid(row=1, column=0, sticky="nsew")
+        holder.columnconfigure(0, weight=1)
+        holder.rowconfigure(0, weight=1)
+        widget = tk.Listbox(
+            holder, selectmode="browse", activestyle="none",
+            bd=0, highlightthickness=1, font=("Segoe UI", 9),
+        )
+        widget.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(
+            holder, orient="vertical", command=widget.yview,
+        )
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        widget.configure(yscrollcommand=scrollbar.set)
+        return widget
+
+    def _on_tab_changed(self, _event=None):
+        if self.library_tabs.select() == str(self.tab_all):
+            self._refresh_all()
+            if not self._scan_started:
+                self.start_scan()
+        elif self.library_tabs.select() == str(self.tab_favorites):
+            self._refresh_favorites()
+        else:
+            self._refresh_recent()
+
+    def _refresh_active_tab(self):
+        selected = self.library_tabs.select()
+        if selected == str(self.tab_all):
+            self._refresh_all()
+        elif selected == str(self.tab_favorites):
+            self._refresh_favorites()
+        else:
+            self._refresh_recent()
+
+    @staticmethod
+    def _matches_search(path, query):
+        if not query:
+            return True
+        return query in str(path).casefold()
+
+    def _refresh_favorites(self):
+        self.favorite_listbox.delete(0, "end")
+        q = self.search_var.get().strip().casefold()
+        self._visible_favorite_paths = [
+            path for path in self.favorite_tracks
+            if self._matches_search(path, q)
+        ]
+        self.favorite_count_var.set(
+            f"{len(self._visible_favorite_paths)} de {len(self.favorite_tracks)}"
+            if q else f"{len(self.favorite_tracks)} favoritos"
+        )
+        if not self._visible_favorite_paths:
+            self.favorite_listbox.insert("end", "Todavía no tienes favoritos")
+            return
+        for i, path in enumerate(self._visible_favorite_paths, 1):
+            marker = "▶ " if path == self.loaded_path and self.playing else "★ "
+            self.favorite_listbox.insert(
+                "end", f"{marker}{i:02d}. {Path(path).stem}"
+            )
+
+    def _tab_widget_paths(self, source):
+        if source == "recent":
+            return self.recent_listbox, self._visible_recent_paths
+        if source == "favorites":
+            return self.favorite_listbox, self._visible_favorite_paths
+        return self.all_listbox, self._visible_all_paths
+
+    def _open_tab_selected(self, source, _event=None):
+        widget, paths = self._tab_widget_paths(source)
+        selection = widget.curselection()
+        if selection and selection[0] < len(paths):
+            self._play_path(paths[selection[0]])
+
+    def _play_path(self, path):
+        if not Path(path).is_file():
+            messagebox.showwarning(
+                "MP3 no disponible",
+                "No se encontró el archivo:\n" + str(path), parent=self,
+            )
+            return
+        if path not in self.playlist:
+            self.playlist.append(path)
+        self._load_track(self.playlist.index(path), autoplay=True)
+
+    def _tab_context_menu(self, source, event):
+        widget, paths = self._tab_widget_paths(source)
+        if not paths:
+            return
+        index = widget.nearest(event.y)
+        bounds = widget.bbox(index)
+        if not bounds or not (bounds[1] <= event.y < bounds[1] + bounds[3]):
+            return
+        if index < 0 or index >= len(paths):
+            return
+        widget.selection_clear(0, "end")
+        widget.selection_set(index)
+        widget.activate(index)
+        path = paths[index]
+        menu = tk.Menu(widget, tearoff=0)
+        menu.add_command(
+            label="▶ Reproducir",
+            command=lambda selected=path: self._play_path(selected),
+        )
+        if path in self.favorite_tracks:
+            menu.add_command(
+                label="★ Quitar de favoritos",
+                command=lambda selected=path: self._toggle_favorite(selected),
+            )
+        else:
+            menu.add_command(
+                label="☆ Añadir a favoritos",
+                command=lambda selected=path: self._toggle_favorite(selected),
+            )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
+
+    def _toggle_favorite(self, path):
+        if path in self.favorite_tracks:
+            self.favorite_tracks.remove(path)
+            self.status_var.set("Quitado de favoritos: " + Path(path).stem)
+        else:
+            self.favorite_tracks.insert(0, path)
+            self.status_var.set("Añadido a favoritos: " + Path(path).stem)
+        self._refresh_favorites()
+        self._refresh_recent()
+        self._update_all_row(path)
+        self._schedule_save()
+
     def _init_drag_drop(self):
-        """Activa arrastrar y soltar archivos/carpetas sobre la playlist."""
+        """Admite arrastrar MP3 y carpetas a cualquiera de las tres pestañas."""
         try:
             from tkinterdnd2 import DND_FILES, TkinterDnD
 
             root = self.winfo_toplevel()
             TkinterDnD._require(root)
-
-            # Los widgets tkinter normales pueden usar directamente el wrapper
-            # de tkinterdnd2 una vez cargado tkdnd en el interprete Tcl.
-            TkinterDnD.DnDWrapper.drop_target_register(self.listbox, DND_FILES)
-            TkinterDnD.DnDWrapper.dnd_bind(
-                self.listbox, "<<Drop>>", self._on_drop_files
-            )
-            TkinterDnD.DnDWrapper.drop_target_register(self.drop_hint, DND_FILES)
-            TkinterDnD.DnDWrapper.dnd_bind(
-                self.drop_hint, "<<Drop>>", self._on_drop_files
-            )
-            self.drop_hint.configure(
-                text="Arrastra aqui archivos MP3 o carpetas"
-            )
+            for widget in (
+                self.recent_listbox, self.favorite_listbox, self.all_listbox
+            ):
+                TkinterDnD.DnDWrapper.drop_target_register(widget, DND_FILES)
+                TkinterDnD.DnDWrapper.dnd_bind(
+                    widget, "<<Drop>>", self._on_drop_files
+                )
         except Exception:
-            self.drop_hint.configure(
-                text="Arrastrar y soltar no disponible · usa + Archivos / + Carpeta"
-            )
+            pass
 
     def _on_drop_files(self, event):
         try:
@@ -482,54 +642,42 @@ class Mp3PlayerTool(ttk.Frame):
             self._load_track(0, autoplay=False)
 
     def _filtered_indices(self):
-        q = self.search_var.get().strip().lower()
+        """Compatibilidad con la cola de reproduccion existente."""
+        q = self.search_var.get().strip().casefold()
         if not q:
             return list(range(len(self.playlist)))
-        result = []
-        for i, path in enumerate(self.playlist):
-            if q in Path(path).stem.lower():
-                result.append(i)
-        return result
+        return [
+            i for i, path in enumerate(self.playlist)
+            if q in Path(path).stem.casefold()
+        ]
 
     def _refresh_playlist(self):
-        self.listbox.delete(0, "end")
-        self._visible_indices = self._filtered_indices()
-        self.current_count_var.set(
-            f"{len(self.playlist)} canciones"
-            if not self.search_var.get().strip()
-            else f"{len(self._visible_indices)} de {len(self.playlist)}"
-        )
-        for number, idx in enumerate(self._visible_indices, start=1):
-            p = Path(self.playlist[idx])
-            marker = "▶ " if idx == self.current_index else ""
-            self.listbox.insert("end", f"{marker}{number:02d}. {p.stem}")
-        if self.current_index in self._visible_indices:
-            pos = self._visible_indices.index(self.current_index)
-            self.listbox.selection_clear(0, "end")
-            self.listbox.selection_set(pos)
-            self.listbox.see(pos)
+        """La cola sigue activa para Anterior/Siguiente, pero no ocupa otra pestaña."""
+        self.queue_count_var.set(f"Cola: {len(self.playlist)}")
 
     def _open_selected(self, _event=None):
-        sel = self.listbox.curselection()
-        if not sel:
-            return
-        visible = self._visible_indices[sel[0]]
-        self._load_track(visible, autoplay=True)
-
-    # ---------- Historial de canciones escuchadas ----------
+        """Compatibilidad con versiones anteriores: reproduce la pista de la cola."""
+        if self.playlist:
+            index = self.current_index if self.current_index >= 0 else 0
+            self._load_track(index, autoplay=True)
 
     def _refresh_recent(self):
-        """Refresca el panel sin alterar la lista actual."""
         self.recent_listbox.delete(0, "end")
-        self._visible_recent_paths = list(self.recent_tracks)
-        self.recent_count_var.set(f"{len(self._visible_recent_paths)} escuchadas")
+        q = self.search_var.get().strip().casefold()
+        self._visible_recent_paths = [
+            path for path in self.recent_tracks if self._matches_search(path, q)
+        ]
+        self.recent_count_var.set(
+            f"{len(self._visible_recent_paths)} de {len(self.recent_tracks)}"
+            if q else f"{len(self.recent_tracks)} escuchadas"
+        )
         if not self._visible_recent_paths:
-            self.recent_listbox.insert("end", "Aún no hay canciones escuchadas")
+            self.recent_listbox.insert("end", "Aún no hay canciones recientes")
             return
-        for number, path in enumerate(self._visible_recent_paths, start=1):
+        for i, path in enumerate(self._visible_recent_paths, 1):
             marker = "▶ " if path == self.loaded_path and self.playing else ""
             self.recent_listbox.insert(
-                "end", f"{marker}{number:02d}. {Path(path).stem}",
+                "end", f"{marker}{i:02d}. {Path(path).stem}"
             )
 
     def _mark_recent(self, path):
@@ -544,28 +692,7 @@ class Mp3PlayerTool(ttk.Frame):
         self._schedule_save()
 
     def _open_recent(self, _event=None):
-        """Reproduce un reciente y lo incorpora a la lista actual si hace falta."""
-        selection = self.recent_listbox.curselection()
-        if not selection:
-            return
-        index = selection[0]
-        if index >= len(self._visible_recent_paths):
-            return
-        path = self._visible_recent_paths[index]
-        if not Path(path).is_file():
-            self.recent_tracks = [p for p in self.recent_tracks if p != path]
-            self._refresh_recent()
-            self._schedule_save()
-            messagebox.showwarning(
-                "Archivo no disponible",
-                "La canción ya no está en su ubicación original:\n" + path,
-                parent=self,
-            )
-            return
-        if path not in self.playlist:
-            self.playlist.append(path)
-            self._refresh_playlist()
-        self._load_track(self.playlist.index(path), autoplay=True)
+        self._open_tab_selected("recent", _event)
 
     def clear_recent(self):
         """Borra el historial sin eliminar canciones ni modificar la playlist."""
@@ -584,18 +711,12 @@ class Mp3PlayerTool(ttk.Frame):
         self.status_var.set("Historial de recientes borrado")
 
     def remove_selected(self):
-        selected = list(self.listbox.curselection())
-        if not selected:
+        """Compatibilidad: elimina la pista actual de la cola, no del disco."""
+        path = self.current_path()
+        if not path:
             return
-        actual = sorted({self._visible_indices[i] for i in selected}, reverse=True)
-        current_path = self.current_path()
-        for idx in actual:
-            path = self.playlist.pop(idx)
-            if path not in self.recent_tracks:
-                self._resume_positions.pop(path, None)
-        if current_path and current_path in self.playlist:
-            self.current_index = self.playlist.index(current_path)
-        elif self.playlist:
+        self.playlist.remove(path)
+        if self.playlist:
             self.current_index = min(self.current_index, len(self.playlist) - 1)
             self._load_track(self.current_index, autoplay=False)
         else:
@@ -755,6 +876,7 @@ class Mp3PlayerTool(ttk.Frame):
         self._update_time_label(position)
         self.status_var.set(f"Reproduciendo · {self.title_var.get()}")
         self._mark_recent(self.loaded_path)
+        self._refresh_favorites()
         return True
 
 
@@ -992,7 +1114,293 @@ class Mp3PlayerTool(ttk.Frame):
             seconds = 0
         return f"{seconds // 60}:{seconds % 60:02d}"
 
+    # ---------- Escaneo completo del equipo y cache ----------
+
+    def _scan_cache_path(self):
+        return self.state_path.with_name("all_mp3_cache.json")
+
+    def _load_scan_cache(self):
+        """Carga el indice persistente sin volver a leer cada MP3."""
+        try:
+            cache_path = self._scan_cache_path()
+            if not cache_path.is_file():
+                return
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("version") != 1:
+                return
+            for item in data.get("tracks", []):
+                if not isinstance(item, dict):
+                    continue
+                path = item.get("path")
+                if not isinstance(path, str) or not path.lower().endswith(".mp3"):
+                    continue
+                duration = float(item.get("duration", 0))
+                entry = {
+                    "path": path,
+                    "duration": duration,
+                    "size": int(item.get("size", -1)),
+                    "mtime_ns": int(item.get("mtime_ns", -1)),
+                }
+                self._all_index[path] = entry
+                if duration > 60.0:
+                    self.all_tracks[path] = duration
+            self.scan_status_var.set(
+                f"Caché cargada: {len(self.all_tracks)} MP3 de más de 1 minuto"
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            self._all_index = {}
+            self.all_tracks = {}
+
+    def _scan_roots(self):
+        """Discos locales Windows; en Linux incluye / y montajes accesibles."""
+        if os.name != "nt":
+            return [os.path.abspath(os.sep)]
+        try:
+            import ctypes
+            kernel = ctypes.windll.kernel32
+            mask = int(kernel.GetLogicalDrives())
+            roots = []
+            for i in range(26):
+                if not (mask & (1 << i)):
+                    continue
+                drive = chr(ord("A") + i) + ":\\"
+                # 2 extraible, 3 fijo, 5 CD/DVD. Evita unidades de red.
+                if kernel.GetDriveTypeW(drive) in (2, 3, 5):
+                    roots.append(drive)
+            return roots
+        except Exception:
+            return [os.path.abspath(os.sep)]
+
+    def start_scan(self):
+        """Inicia una busqueda real sin bloquear Tkinter."""
+        if self._scan_thread and self._scan_thread.is_alive():
+            self.status_var.set("Ya hay un escaneo en curso")
+            return
+        self._scan_started = True
+        self._scan_cancel.clear()
+        self.stop_scan_btn.configure(state="normal")
+        self.scan_status_var.set("Escaneando discos locales · MP3 > 1 minuto...")
+        self._scan_thread = threading.Thread(
+            target=self._scan_worker, daemon=True, name="PTM-MP3-Scan"
+        )
+        self._scan_thread.start()
+
+    def stop_scan(self):
+        if self._scan_thread and self._scan_thread.is_alive():
+            self._scan_cancel.set()
+            self.scan_status_var.set("Deteniendo búsqueda...")
+
+    def _queue_scan_message(self, message):
+        """La hebra nunca toca widgets; publica resultados mediante una cola."""
+        while not self._scan_cancel.is_set():
+            try:
+                self._scan_queue.put(message, timeout=0.2)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _scan_worker(self):
+        """Explora todos los discos accesibles y mide duración con mutagen."""
+        try:
+            from mutagen.mp3 import MP3
+        except Exception as exc:
+            self._queue_scan_message(("error", "Instala mutagen: " + str(exc)))
+            return
+        previous = dict(self._all_index)
+        indexed = {}
+        eligible = {}
+        batch = []
+        directories = 0
+        found_mp3 = 0
+        skip_root_dirs = {"proc", "sys", "dev"}
+        try:
+            for root in self._scan_roots():
+                for folder, dirs, files in os.walk(
+                    root, topdown=True, followlinks=False,
+                    onerror=lambda _err: None,
+                ):
+                    if self._scan_cancel.is_set():
+                        return
+                    if os.name != "nt" and folder == os.path.abspath(os.sep):
+                        dirs[:] = [
+                            d for d in dirs if d not in skip_root_dirs
+                        ]
+                    dirs[:] = [
+                        d for d in dirs
+                        if not os.path.islink(os.path.join(folder, d))
+                    ]
+                    directories += 1
+                    for filename in files:
+                        if self._scan_cancel.is_set():
+                            return
+                        if not filename.lower().endswith(".mp3"):
+                            continue
+                        path = os.path.join(folder, filename)
+                        try:
+                            stat = os.stat(path)
+                        except OSError:
+                            continue
+                        found_mp3 += 1
+                        cached = previous.get(path)
+                        if (cached and cached.get("size") == stat.st_size
+                                and cached.get("mtime_ns") == stat.st_mtime_ns):
+                            duration = float(cached.get("duration", 0))
+                        else:
+                            try:
+                                duration = float(MP3(path).info.length)
+                            except Exception:
+                                duration = 0.0
+                        entry = {
+                            "path": path,
+                            "duration": duration,
+                            "size": stat.st_size,
+                            "mtime_ns": stat.st_mtime_ns,
+                        }
+                        indexed[path] = entry
+                        if duration > 60.0:
+                            eligible[path] = duration
+                            batch.append((path, duration))
+                        if len(batch) >= 80:
+                            if not self._queue_scan_message(("batch", batch)):
+                                return
+                            batch = []
+                    if directories % 200 == 0:
+                        if not self._queue_scan_message(
+                            ("progress", directories, found_mp3, len(eligible))
+                        ):
+                            return
+            if batch and not self._queue_scan_message(("batch", batch)):
+                return
+            if self._scan_cancel.is_set():
+                return
+            # Cache atomica de rutas, tamano, fecha y duracion.
+            cache_path = self._scan_cache_path()
+            tmp = cache_path.with_suffix(".tmp")
+            try:
+                tmp.write_text(
+                    json.dumps(
+                        {"version": 1, "tracks": list(indexed.values())},
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, cache_path)
+            except OSError:
+                pass
+            self._queue_scan_message(("done", indexed, eligible, directories))
+        except Exception as exc:
+            self._queue_scan_message(("error", str(exc)))
+
+    def _poll_scan_queue(self):
+        """Procesa lotes en el hilo Tk y mantiene la interfaz responsiva."""
+        try:
+            for _ in range(24):
+                try:
+                    message = self._scan_queue.get_nowait()
+                except queue.Empty:
+                    break
+                kind = message[0]
+                if kind == "batch":
+                    self._append_all_batch(message[1])
+                elif kind == "progress":
+                    _, directories, mp3_count, eligible_count = message
+                    self.scan_status_var.set(
+                        f"Buscando... {directories} carpetas · "
+                        f"{mp3_count} MP3 · {eligible_count} de más de 1 minuto"
+                    )
+                elif kind == "done":
+                    _, index, eligible, directories = message
+                    self._all_index = index
+                    self.all_tracks = eligible
+                    self._refresh_all()
+                    self.scan_status_var.set(
+                        f"Escaneo finalizado: {len(eligible)} MP3 válidos "
+                        f"en {directories} carpetas"
+                    )
+                    self.stop_scan_btn.configure(state="disabled")
+                elif kind == "error":
+                    self.scan_status_var.set("Error de escaneo: " + message[1])
+                    self.stop_scan_btn.configure(state="disabled")
+            if self._scan_thread and not self._scan_thread.is_alive():
+                self.stop_scan_btn.configure(state="disabled")
+                if self._scan_cancel.is_set():
+                    self.scan_status_var.set("Escaneo cancelado")
+        except tk.TclError:
+            return
+        try:
+            if self.winfo_exists():
+                self.after(150, self._poll_scan_queue)
+        except tk.TclError:
+            pass
+
+    def _all_row_text(self, path):
+        duration = self.all_tracks.get(path, 0)
+        star = "★ " if path in self.favorite_tracks else ""
+        return f"{star}{Path(path).stem}   ·   {self._fmt_time(duration)}"
+
+    def _refresh_all(self):
+        """Pinta el listado en lotes para evitar congelar la interfaz."""
+        self._all_render_token += 1
+        token = self._all_render_token
+        self._all_rendering = True
+        self.all_listbox.delete(0, "end")
+        q = self.search_var.get().strip().casefold()
+        self._visible_all_paths = sorted(
+            (path for path in self.all_tracks if self._matches_search(path, q)),
+            key=lambda path: (Path(path).name.casefold(), path.casefold()),
+        )
+        self.all_count_var.set(
+            f"{len(self._visible_all_paths)} de {len(self.all_tracks)} MP3"
+            if q else f"{len(self.all_tracks)} MP3 de más de 1 minuto"
+        )
+        if not self._visible_all_paths:
+            self._all_rendering = False
+            self.all_listbox.insert("end", "Sin MP3 encontrados · pulsa Escanear")
+            return
+        self._render_all_chunk(token, 0)
+
+    def _render_all_chunk(self, token, offset):
+        if token != self._all_render_token:
+            return
+        end = min(offset + 300, len(self._visible_all_paths))
+        for path in self._visible_all_paths[offset:end]:
+            self.all_listbox.insert("end", self._all_row_text(path))
+        if end < len(self._visible_all_paths):
+            self.after(1, lambda: self._render_all_chunk(token, end))
+        else:
+            self._all_rendering = False
+
+    def _append_all_batch(self, batch):
+        """Muestra coincidencias durante el escaneo sin esperar al final."""
+        q = self.search_var.get().strip().casefold()
+        for path, duration in batch:
+            old = self.all_tracks.get(path)
+            self.all_tracks[path] = duration
+            if old is not None or not self._matches_search(path, q):
+                continue
+            if not self._all_rendering:
+                if not self._visible_all_paths:
+                    self.all_listbox.delete(0, "end")
+                self._visible_all_paths.append(path)
+                self.all_listbox.insert("end", self._all_row_text(path))
+        self.all_count_var.set(
+            f"{len(self._visible_all_paths)} de {len(self.all_tracks)} MP3"
+            if q else f"{len(self.all_tracks)} MP3 de más de 1 minuto"
+        )
+
+    def _update_all_row(self, path):
+        try:
+            i = self._visible_all_paths.index(path)
+            if i < self.all_listbox.size():
+                self.all_listbox.delete(i)
+                self.all_listbox.insert(i, self._all_row_text(path))
+        except (ValueError, tk.TclError):
+            pass
+
     def on_close(self):
+        self._scan_cancel.set()
+        self._all_render_token += 1
         self._remember_position()
         self._save_state()
         if self.audio_ok:
