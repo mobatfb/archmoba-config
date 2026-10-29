@@ -1,10 +1,10 @@
 {
   "app": "PYRION",
   "name": "PYRION OS",
-  "description": "Visor 3D carga scene_selected.json, escena y modelos .mesh",
-  "version": "0.4.2",
+  "description": "Monitor 3D compacto y diagnostico con boton DETALLES y atajo F3",
+  "version": "0.4.3",
   "app_path": "PYRION/app.py",
-  "release_commit": "da345f6cb3b67f6781f3ed5fd8ffa664fe8268a4",
+  "release_commit": "0e616d15a40a0e462710bbd2be406055008f03b9",
   "maintenance": false,
   "engine_version": "0.1.0"
 }
