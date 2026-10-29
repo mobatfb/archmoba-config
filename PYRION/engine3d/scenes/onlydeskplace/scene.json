@@ -56,6 +56,37 @@
         "speed_degrees_per_second": 30
       },
       "material": "materials/gold_reflective.mat"
+    },
+    {
+      "id": "purple_crystal",
+      "name": "Purple Crystal",
+      "model": "models/crystal.mesh",
+      "material": "materials/crystal_purple.mat",
+      "position": [
+        1.68,
+        0.02,
+        0
+      ],
+      "rotation": [
+        0,
+        25,
+        0
+      ],
+      "scale": [
+        0.72,
+        0.77,
+        0.72
+      ],
+      "visible": true,
+      "animation": {
+        "type": "spin",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "speed_degrees_per_second": 16
+      }
     }
   ]
 }

@@ -24,7 +24,8 @@ class SoftwareRenderer:
     def __init__(self, mesh, material=None):
         self.mesh = mesh
         self.material = material if isinstance(material, dict) else {}
-        self._pbr = self.material.get("shader") == "pbr"
+        self._gem = self.material.get("shader") == "gem"
+        self._pbr = self.material.get("shader") in ("pbr", "gem")
         color = str(self.material.get("base_color", "#2767d7"))
         if len(color) != 7 or not color.startswith("#"):
             raise ValueError("Invalid material base_color")
@@ -54,12 +55,13 @@ class SoftwareRenderer:
         self._light_a = _unit((-0.42, 0.77, 0.53))
         self._light_b = _unit((0.74, -0.29, 0.47))
         self._lines = []
-        for i, phi in enumerate((0.0, 2.05, 4.09)):
-            self._lines.append((mesh.meridian(phi, steps=42),
-                                "#456caa" if i % 2 else "#62b4ed"))
-        for i, t in enumerate((0.92, 1.57, 2.23)):
-            self._lines.append((mesh.latitude(t, steps=50),
-                                "#305a9a" if i % 2 else "#4366a6"))
+        if hasattr(mesh, "meridian") and hasattr(mesh, "latitude"):
+            for i, phi in enumerate((0.0, 2.05, 4.09)):
+                self._lines.append((mesh.meridian(phi, steps=42),
+                                    "#456caa" if i % 2 else "#62b4ed"))
+            for i, t in enumerate((0.92, 1.57, 2.23)):
+                self._lines.append((mesh.latitude(t, steps=50),
+                                    "#305a9a" if i % 2 else "#4366a6"))
         self._material = [self._surface_pattern(f.longitude, f.latitude)
                           for f in mesh.faces]
         self._decorative_path = [
@@ -92,6 +94,19 @@ class SoftwareRenderer:
         """CPU approximation of metallic PBR with environment-like highlights."""
         a = max(0.0, _dot(normal, self._light_a))
         b = max(0.0, _dot(normal, self._light_b))
+        if self._gem:
+            base = self._base_rgb
+            if self.material_mode == "img" and texel is not None:
+                base = tuple(0.12 * base[k] + 0.88 * texel[k] for k in range(3))
+            facet = 0.30 + 0.65 * a + 0.24 * b + 0.21 * accent
+            glint = max(0.0, _dot(normal, _unit((-0.28, 0.74, 0.62)))) ** 13
+            white = max(0.0, _dot(normal, _unit((0.42, 0.68, 0.53)))) ** 38
+            rim = (1.0 - max(0.0, front)) ** 3
+            return _rgb((
+                base[0] * facet + 102 * glint + 108 * white + 30 * rim,
+                base[1] * facet + 115 * glint + 130 * white + 23 * rim,
+                base[2] * (facet + 0.12) + 135 * glint + 125 * white + 44 * rim,
+            ))
         if not self._pbr:
             edge = (1.0 - front) ** 1.9
             spec = max(0.0, _dot(normal, _unit((-0.13, 0.62, 0.78)))) ** 24
@@ -151,7 +166,16 @@ class SoftwareRenderer:
             center = ((a[0] + b[0] + c[0]) / 3,
                       (a[1] + b[1] + c[1]) / 3,
                       (a[2] + b[2] + c[2]) / 3)
-            normal = _unit(center)
+            if getattr(self.mesh, "flat_shading", False):
+                edge_a = tuple(b[k] - a[k] for k in range(3))
+                edge_b = tuple(c[k] - a[k] for k in range(3))
+                normal = _unit((
+                    edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
+                    edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
+                    edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0],
+                ))
+            else:
+                normal = _unit(center)
             towards_camera = _unit((-
                 center[0], -center[1], self.camera_distance - center[2]))
             front = _dot(normal, towards_camera)

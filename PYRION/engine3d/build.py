@@ -46,7 +46,7 @@ def bundle():
         "import math", "import json", "import urllib.request",
         "from pathlib import Path", "import os", "import sys",
         "import time", "import tkinter as tk",
-        "from .mesh import SphereMesh",
+        "from .mesh import SphereMesh, TriangleMesh",
         "from .renderer import SoftwareRenderer",
     ):
         scene = re.sub(r"(?m)^" + re.escape(statement) + r"\n", "", scene, count=1)

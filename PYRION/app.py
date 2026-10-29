@@ -1,4 +1,4 @@
-"""PYRION OS 0.4.9 - standalone PYRION 3D Engine.
+"""PYRION OS 0.4.10 - standalone PYRION 3D Engine.
 
 Mesh geometry, perspective projection, and Tk software renderer.
 Previous desktop preserved under PYRION/release/v0.3.0.
@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.9"
+APP_VERSION = "0.4.10"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -147,6 +147,7 @@ def check_self_update(restart=True):
 
 
 
+
 """3D mesh primitives for PYRION Engine - Python standard library only."""
 
 
@@ -237,6 +238,54 @@ class SphereMesh:
     def signature(self):
         return (self.rings, self.segments, self.vertex_count,
                 self.triangle_count)
+ 
+class TriangleMesh:
+    """Explicit triangular 3D mesh for faceted or imported low-poly objects."""
+
+    flat_shading = True
+
+    def __init__(self, vertices, faces, scale=(1.0, 1.0, 1.0)):
+        if not (3 <= len(vertices) <= 12000 and 1 <= len(faces) <= 20000):
+            raise ValueError("Invalid triangle mesh size")
+        if len(scale) != 3 or any(
+            not math.isfinite(float(value)) or float(value) <= 0 for value in scale
+        ):
+            raise ValueError("Invalid model scale")
+        self.vertices = []
+        for xyz in vertices:
+            if len(xyz) != 3:
+                raise ValueError("Mesh vertex must have 3 coordinates")
+            xyz = tuple(float(xyz[k]) * float(scale[k]) for k in range(3))
+            if not all(math.isfinite(v) for v in xyz):
+                raise ValueError("Nonfinite mesh vertex")
+            self.vertices.append(xyz)
+        self.radius = max(math.sqrt(sum(k * k for k in xyz)) for xyz in self.vertices)
+        low = min(xyz[1] for xyz in self.vertices)
+        high = max(xyz[1] for xyz in self.vertices)
+        height = max(high - low, 1e-6)
+        self.faces = []
+        for face in faces:
+            if len(face) != 3 or any(
+                type(index) is not int or index < 0 or index >= len(self.vertices)
+                for index in face
+            ):
+                raise ValueError("Invalid mesh triangle")
+            a, b, c = (self.vertices[i] for i in face)
+            centroid = tuple((a[k] + b[k] + c[k]) / 3.0 for k in range(3))
+            lon = math.atan2(centroid[2], centroid[0]) % (2 * math.pi)
+            lat = math.pi * (1.0 - (centroid[1] - low) / height)
+            self.faces.append(Face(tuple(face), lon, lat, 0))
+
+    @property
+    def vertex_count(self):
+        return len(self.vertices)
+
+    @property
+    def triangle_count(self):
+        return len(self.faces)
+
+    def signature(self):
+        return ("triangle_mesh", self.vertex_count, self.triangle_count)
 
 """Software 3D triangle projection and shading for a Tkinter canvas."""
 
@@ -263,7 +312,8 @@ class SoftwareRenderer:
     def __init__(self, mesh, material=None):
         self.mesh = mesh
         self.material = material if isinstance(material, dict) else {}
-        self._pbr = self.material.get("shader") == "pbr"
+        self._gem = self.material.get("shader") == "gem"
+        self._pbr = self.material.get("shader") in ("pbr", "gem")
         color = str(self.material.get("base_color", "#2767d7"))
         if len(color) != 7 or not color.startswith("#"):
             raise ValueError("Invalid material base_color")
@@ -293,12 +343,13 @@ class SoftwareRenderer:
         self._light_a = _unit((-0.42, 0.77, 0.53))
         self._light_b = _unit((0.74, -0.29, 0.47))
         self._lines = []
-        for i, phi in enumerate((0.0, 2.05, 4.09)):
-            self._lines.append((mesh.meridian(phi, steps=42),
-                                "#456caa" if i % 2 else "#62b4ed"))
-        for i, t in enumerate((0.92, 1.57, 2.23)):
-            self._lines.append((mesh.latitude(t, steps=50),
-                                "#305a9a" if i % 2 else "#4366a6"))
+        if hasattr(mesh, "meridian") and hasattr(mesh, "latitude"):
+            for i, phi in enumerate((0.0, 2.05, 4.09)):
+                self._lines.append((mesh.meridian(phi, steps=42),
+                                    "#456caa" if i % 2 else "#62b4ed"))
+            for i, t in enumerate((0.92, 1.57, 2.23)):
+                self._lines.append((mesh.latitude(t, steps=50),
+                                    "#305a9a" if i % 2 else "#4366a6"))
         self._material = [self._surface_pattern(f.longitude, f.latitude)
                           for f in mesh.faces]
         self._decorative_path = [
@@ -331,6 +382,19 @@ class SoftwareRenderer:
         """CPU approximation of metallic PBR with environment-like highlights."""
         a = max(0.0, _dot(normal, self._light_a))
         b = max(0.0, _dot(normal, self._light_b))
+        if self._gem:
+            base = self._base_rgb
+            if self.material_mode == "img" and texel is not None:
+                base = tuple(0.12 * base[k] + 0.88 * texel[k] for k in range(3))
+            facet = 0.30 + 0.65 * a + 0.24 * b + 0.21 * accent
+            glint = max(0.0, _dot(normal, _unit((-0.28, 0.74, 0.62)))) ** 13
+            white = max(0.0, _dot(normal, _unit((0.42, 0.68, 0.53)))) ** 38
+            rim = (1.0 - max(0.0, front)) ** 3
+            return _rgb((
+                base[0] * facet + 102 * glint + 108 * white + 30 * rim,
+                base[1] * facet + 115 * glint + 130 * white + 23 * rim,
+                base[2] * (facet + 0.12) + 135 * glint + 125 * white + 44 * rim,
+            ))
         if not self._pbr:
             edge = (1.0 - front) ** 1.9
             spec = max(0.0, _dot(normal, _unit((-0.13, 0.62, 0.78)))) ** 24
@@ -390,7 +454,16 @@ class SoftwareRenderer:
             center = ((a[0] + b[0] + c[0]) / 3,
                       (a[1] + b[1] + c[1]) / 3,
                       (a[2] + b[2] + c[2]) / 3)
-            normal = _unit(center)
+            if getattr(self.mesh, "flat_shading", False):
+                edge_a = tuple(b[k] - a[k] for k in range(3))
+                edge_b = tuple(c[k] - a[k] for k in range(3))
+                normal = _unit((
+                    edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
+                    edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
+                    edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0],
+                ))
+            else:
+                normal = _unit(center)
             towards_camera = _unit((-
                 center[0], -center[1], self.camera_distance - center[2]))
             front = _dot(normal, towards_camera)
@@ -419,19 +492,10 @@ class SoftwareRenderer:
 The desktop has no panels, labels, orbital rings or visible UI controls.
 The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
-import base64
-import math
-import json
-import urllib.request
-from pathlib import Path
-import os
-import sys
-import time
-import tkinter as tk
 
 
-ENGINE_VERSION = "0.2.1"
-DESKTOP_VERSION = "0.4.9"
+ENGINE_VERSION = "0.3.0"
+DESKTOP_VERSION = "0.4.10"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -448,7 +512,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.9"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.10"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -486,7 +550,7 @@ def _scene_texture(relative_path):
         else:
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
-                url, headers={"User-Agent": "PYRION/0.4.9"})
+                url, headers={"User-Agent": "PYRION/0.4.10"})
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
@@ -519,16 +583,25 @@ def load_selected_scene():
             continue
         model_path = (scene_path.parent / obj["model"]).as_posix()
         model = _scene_json(model_path)
-        if model.get("format") != "pyrion.mesh" or model.get("primitive") != "uv_sphere":
+        if model.get("format") != "pyrion.mesh":
             raise ValueError("Unsupported model: " + model_path)
-        params = model["parameters"]
         scale = obj.get("scale", [1, 1, 1])
-        if len(scale) != 3 or any(float(s) <= 0 for s in scale):
+        if len(scale) != 3 or any(
+            not math.isfinite(float(value)) or float(value) <= 0 for value in scale
+        ):
             raise ValueError("Invalid model scale")
-        # The current software renderer supports uniform sphere scaling.
-        radius = float(params["radius"]) * sum(map(float, scale)) / 3
-        mesh = SphereMesh(rings=int(params["rings"]),
-                          segments=int(params["segments"]), radius=radius)
+        primitive = model.get("primitive")
+        if primitive == "uv_sphere":
+            params = model["parameters"]
+            # Preserve the original sphere geometry and rendering scale.
+            radius = float(params["radius"]) * sum(map(float, scale)) / 3
+            mesh = SphereMesh(rings=int(params["rings"]),
+                              segments=int(params["segments"]), radius=radius)
+        elif primitive == "triangle_mesh":
+            mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale)
+            radius = mesh.radius
+        else:
+            raise ValueError("Unsupported mesh primitive: " + str(primitive))
         position = tuple(float(v) for v in obj.get("position", [0, 0, 0]))
         if len(position) != 3:
             raise ValueError("Invalid model position")

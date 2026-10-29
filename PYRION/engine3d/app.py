@@ -13,11 +13,11 @@ import sys
 import time
 import tkinter as tk
 
-from .mesh import SphereMesh
+from .mesh import SphereMesh, TriangleMesh
 from .renderer import SoftwareRenderer
 
-ENGINE_VERSION = "0.2.1"
-DESKTOP_VERSION = "0.4.9"
+ENGINE_VERSION = "0.3.0"
+DESKTOP_VERSION = "0.4.10"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -34,7 +34,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.9"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.10"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -72,7 +72,7 @@ def _scene_texture(relative_path):
         else:
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
-                url, headers={"User-Agent": "PYRION/0.4.9"})
+                url, headers={"User-Agent": "PYRION/0.4.10"})
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
@@ -105,16 +105,25 @@ def load_selected_scene():
             continue
         model_path = (scene_path.parent / obj["model"]).as_posix()
         model = _scene_json(model_path)
-        if model.get("format") != "pyrion.mesh" or model.get("primitive") != "uv_sphere":
+        if model.get("format") != "pyrion.mesh":
             raise ValueError("Unsupported model: " + model_path)
-        params = model["parameters"]
         scale = obj.get("scale", [1, 1, 1])
-        if len(scale) != 3 or any(float(s) <= 0 for s in scale):
+        if len(scale) != 3 or any(
+            not math.isfinite(float(value)) or float(value) <= 0 for value in scale
+        ):
             raise ValueError("Invalid model scale")
-        # The current software renderer supports uniform sphere scaling.
-        radius = float(params["radius"]) * sum(map(float, scale)) / 3
-        mesh = SphereMesh(rings=int(params["rings"]),
-                          segments=int(params["segments"]), radius=radius)
+        primitive = model.get("primitive")
+        if primitive == "uv_sphere":
+            params = model["parameters"]
+            # Preserve the original sphere geometry and rendering scale.
+            radius = float(params["radius"]) * sum(map(float, scale)) / 3
+            mesh = SphereMesh(rings=int(params["rings"]),
+                              segments=int(params["segments"]), radius=radius)
+        elif primitive == "triangle_mesh":
+            mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale)
+            radius = mesh.radius
+        else:
+            raise ValueError("Unsupported mesh primitive: " + str(primitive))
         position = tuple(float(v) for v in obj.get("position", [0, 0, 0]))
         if len(position) != 3:
             raise ValueError("Invalid model position")

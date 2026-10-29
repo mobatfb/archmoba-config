@@ -90,3 +90,51 @@ class SphereMesh:
     def signature(self):
         return (self.rings, self.segments, self.vertex_count,
                 self.triangle_count)
+ 
+class TriangleMesh:
+    """Explicit triangular 3D mesh for faceted or imported low-poly objects."""
+
+    flat_shading = True
+
+    def __init__(self, vertices, faces, scale=(1.0, 1.0, 1.0)):
+        if not (3 <= len(vertices) <= 12000 and 1 <= len(faces) <= 20000):
+            raise ValueError("Invalid triangle mesh size")
+        if len(scale) != 3 or any(
+            not math.isfinite(float(value)) or float(value) <= 0 for value in scale
+        ):
+            raise ValueError("Invalid model scale")
+        self.vertices = []
+        for xyz in vertices:
+            if len(xyz) != 3:
+                raise ValueError("Mesh vertex must have 3 coordinates")
+            xyz = tuple(float(xyz[k]) * float(scale[k]) for k in range(3))
+            if not all(math.isfinite(v) for v in xyz):
+                raise ValueError("Nonfinite mesh vertex")
+            self.vertices.append(xyz)
+        self.radius = max(math.sqrt(sum(k * k for k in xyz)) for xyz in self.vertices)
+        low = min(xyz[1] for xyz in self.vertices)
+        high = max(xyz[1] for xyz in self.vertices)
+        height = max(high - low, 1e-6)
+        self.faces = []
+        for face in faces:
+            if len(face) != 3 or any(
+                type(index) is not int or index < 0 or index >= len(self.vertices)
+                for index in face
+            ):
+                raise ValueError("Invalid mesh triangle")
+            a, b, c = (self.vertices[i] for i in face)
+            centroid = tuple((a[k] + b[k] + c[k]) / 3.0 for k in range(3))
+            lon = math.atan2(centroid[2], centroid[0]) % (2 * math.pi)
+            lat = math.pi * (1.0 - (centroid[1] - low) / height)
+            self.faces.append(Face(tuple(face), lon, lat, 0))
+
+    @property
+    def vertex_count(self):
+        return len(self.vertices)
+
+    @property
+    def triangle_count(self):
+        return len(self.faces)
+
+    def signature(self):
+        return ("triangle_mesh", self.vertex_count, self.triangle_count)
