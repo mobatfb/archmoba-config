@@ -6,9 +6,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-TOOL_NAME = "PTM - 1000 Propuestas Sociales"
-TOOL_DESCRIPTION = "Catalogo de 1000 propuestas orientadas a necesidades reales de la sociedad: hogar, educacion, empleo, negocios, familia, comunidad, accesibilidad, creatividad, juegos y tecnologia."
-TOOL_VERSION = "4.0.0"
+TOOL_NAME = "PTM - 10000 Propuestas Sociales"
+TOOL_DESCRIPTION = "Catalogo de 10000 propuestas orientadas a necesidades reales de la sociedad: hogar, educacion, empleo, negocios, familia, comunidad, accesibilidad, creatividad, juegos y tecnologia."
+TOOL_VERSION = "5.0.0"
 APP_NAME = TOOL_NAME
 CACHE_DIR = Path.home() / ".ptm"
 CACHE_FILE = CACHE_DIR / "propuestas_catalogo_social_v4_cache.json"
@@ -198,7 +198,31 @@ for area, concepts in _SOCIAL_AREAS:
                 f"{area}: aplicacion completa para {base_desc}. Enfoque {suffix}: {approach}.",
             )
 
-assert len(PROPOSALS) == 1000
+# Ampliacion 1001-10000: se conservan intactas las primeras 1000 propuestas
+# para mantener compatible el progreso de la version 4.0.0. Cada una recibe
+# nueve contextos sociales adicionales que cambian prioridades y requisitos.
+_BASE_1000 = list(PROPOSALS)
+
+_CONTEXTS = [
+    ("Rural", "prioriza funcionamiento offline, equipos modestos, datos locales y uso comunitario"),
+    ("Urbano", "prioriza rapidez, alta cantidad de informacion, movilidad y uso cotidiano"),
+    ("Familiar", "prioriza perfiles del hogar, uso compartido, simplicidad y privacidad local"),
+    ("Escolar", "prioriza estudiantes, docentes, actividades guiadas y organizacion educativa"),
+    ("Comunitario", "prioriza grupos, asociaciones, actividades compartidas y gestion sencilla"),
+    ("Microemprendimiento", "prioriza costos bajos, ventas, organizacion, reportes y operacion diaria"),
+    ("Joven", "prioriza experiencia visual, retos, gamificacion, rapidez y personalizacion"),
+    ("Adulto Mayor", "prioriza accesibilidad, texto grande, pasos simples y controles claros"),
+    ("Sin Internet", "prioriza funcionamiento completamente local, exportacion manual y respaldo"),
+]
+
+for base_id, base_title, base_desc in _BASE_1000:
+    for context_name, context_desc in _CONTEXTS:
+        _add(
+            f"{base_title} - {context_name}",
+            f"{base_desc} Contexto {context_name}: {context_desc}.",
+        )
+
+assert len(PROPOSALS) == 10000
 
 
 class ProposalTool(tk.Frame):
@@ -216,6 +240,7 @@ class ProposalTool(tk.Frame):
         self.progress_text = tk.StringVar()
         self.card_title = tk.StringVar()
         self.card_desc = tk.StringVar()
+        self.current_tab = "Propuestas"
 
         self.build_ui()
         self.refresh_all()
@@ -417,6 +442,7 @@ class ProposalTool(tk.Frame):
             self.rejected_inner = inner
 
     def show_tab(self, name):
+        self.current_tab = name
         for view in (self.proposals_view, self.accepted_view, self.rejected_view):
             view.pack_forget()
 
@@ -477,7 +503,8 @@ class ProposalTool(tk.Frame):
             self.reject_button.configure(state="disabled")
 
         self.back_button.configure(state="normal" if self.index > 0 else "disabled")
-        self.refresh_lists()
+        if self.current_tab in ("Aceptados", "Rechazados"):
+            self.refresh_lists()
 
     def refresh_lists(self):
         if not hasattr(self, "accepted_inner"):
