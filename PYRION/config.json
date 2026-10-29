@@ -1,9 +1,10 @@
 {
   "app": "PYRION",
   "name": "PYRION OS",
-  "description": "Escritorio PYRION 2030 interactivo, con paneles, esfera 3D, controles reales y diseno adaptable",
-  "version": "0.3.0",
+  "description": "PYRION OS con motor 3D propio: malla de esfera y rotacion infinita",
+  "version": "0.4.0",
   "app_path": "PYRION/app.py",
-  "release_commit": "8dde8be19fe009d7a87e3a23ab7d06ed42a0f606",
-  "maintenance": false
+  "release_commit": "6443c79c4c5185d6c2c43d8318ac7f1cb240b4cc",
+  "maintenance": false,
+  "engine_version": "0.1.0"
 }
