@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Visor multimedia tipo VLC integrado en PTM para imagenes, videos y musica, "
     "con playlist, arrastrar y soltar, progreso, volumen, velocidad y repeticion."
 )
-TOOL_VERSION = "1.1.3"
+TOOL_VERSION = "1.1.4"
 
 CHILD_FLAG = "--ptm-media-child"
 
@@ -1044,7 +1044,7 @@ class MultimediaViewerTool(ttk.Frame):
         prefix = {"image": "[IMG]", "audio": "[AUD]", "video": "[VID]"}
         label = f"{prefix.get(kind, '[---]')} {Path(path).name}"
         if kind in ("audio", "video") and self.all_tracks.get(path, 0) > 0:
-            label += f"  ·  {self._format_ms(self.all_tracks[path] * 1000)}
+            label += f"  ·  {self._format_ms(self.all_tracks[path] * 1000)}"
         return label
 
     def _mark_recent(self, path):
