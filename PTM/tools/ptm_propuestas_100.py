@@ -7,8 +7,8 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 
 TOOL_NAME = "PTM - 100 Propuestas de Tools"
-TOOL_DESCRIPTION = "Catalogo interactivo de 100 ideas para nuevas tools PTM con seleccion persistente y exportacion CSV."
-TOOL_VERSION = "1.0.0"
+TOOL_DESCRIPTION = "Revisor secuencial de 100 ideas para nuevas tools PTM con aceptar, rechazar, regreso, listas y progreso persistente."
+TOOL_VERSION = "1.1.0"
 APP_NAME = TOOL_NAME
 CACHE_DIR = Path.home() / ".ptm"
 CACHE_FILE = CACHE_DIR / "propuestas_tools_cache.json"
@@ -122,175 +122,313 @@ class ProposalTool(tk.Frame):
         super().__init__(parent)
         self.app = app
 
-        self.vars = {}
-        self.rows = []
-        self.search_var = tk.StringVar()
-        self.count_var = tk.StringVar()
+        self.state = self.load_cache()
+        self.decisions = self.state.get("decisions", {})
+        self.index = int(self.state.get("index", 0))
+        self.index = max(0, min(self.index, len(PROPOSALS)))
 
-        self.cache = self.load_cache()
+        self.accepted_count = tk.StringVar()
+        self.rejected_count = tk.StringVar()
+        self.progress_text = tk.StringVar()
+        self.card_title = tk.StringVar()
+        self.card_desc = tk.StringVar()
+
         self.build_ui()
-        self.populate()
-        self.search_var.trace_add("write", lambda *_: self.apply_filter())
-        self.update_count()
+        self.refresh_all()
 
     def load_cache(self):
         try:
             if CACHE_FILE.exists():
                 data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    return data
+                    if "decisions" in data:
+                        return data
+                    # Migracion desde la primera version basada en checkbox.
+                    decisions = {}
+                    for key, value in data.items():
+                        if str(key).isdigit() and value is True:
+                            decisions[str(key)] = "accepted"
+                    return {"index": 0, "decisions": decisions}
         except Exception:
             pass
-        return {}
+        return {"index": 0, "decisions": {}}
 
     def save_cache(self):
         try:
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            data = {str(pid): bool(var.get()) for pid, var in self.vars.items()}
-            CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload = {
+                "index": self.index,
+                "decisions": self.decisions,
+            }
+            CACHE_FILE.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         except Exception as exc:
             messagebox.showerror("Error", f"No se pudo guardar el cache:\n{exc}")
 
-    def on_check(self):
-        self.save_cache()
-        self.update_count()
-
     def build_ui(self):
         top = tk.Frame(self)
-        top.pack(fill="x", padx=12, pady=(12, 8))
+        top.pack(fill="x", padx=14, pady=(12, 8))
 
-        tk.Label(top, text=APP_NAME, font=("Segoe UI", 16, "bold")).pack(side="left")
-        tk.Label(top, textvariable=self.count_var, font=("Segoe UI", 10, "bold")).pack(side="right")
+        tk.Label(
+            top,
+            text=APP_NAME,
+            font=("Segoe UI", 16, "bold"),
+        ).pack(side="left")
 
-        search_bar = tk.Frame(self)
-        search_bar.pack(fill="x", padx=12, pady=(0, 8))
-        tk.Label(search_bar, text="Buscar:").pack(side="left")
-        tk.Entry(search_bar, textvariable=self.search_var).pack(side="left", fill="x", expand=True, padx=(8, 8))
-        tk.Button(search_bar, text="Limpiar", command=lambda: self.search_var.set("")).pack(side="left")
+        counters = tk.Frame(top)
+        counters.pack(side="right")
+        tk.Label(
+            counters,
+            textvariable=self.accepted_count,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(0, 10))
+        tk.Label(
+            counters,
+            textvariable=self.rejected_count,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
 
-        body = tk.Frame(self)
-        body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.tabs = tk.Frame(self)
+        self.tabs.pack(fill="x", padx=14, pady=(0, 8))
 
-        self.canvas = tk.Canvas(body, highlightthickness=0)
-        scroll = tk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scroll.set)
+        self.tab_buttons = {}
+        for name in ("Propuestas", "Aceptados", "Rechazados"):
+            btn = tk.Button(
+                self.tabs,
+                text=name,
+                command=lambda n=name: self.show_tab(n),
+                padx=14,
+                pady=5,
+            )
+            btn.pack(side="left", padx=(0, 4))
+            self.tab_buttons[name] = btn
+
+        self.content = tk.Frame(self)
+        self.content.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+
+        self.proposals_view = tk.Frame(self.content)
+        self.accepted_view = tk.Frame(self.content)
+        self.rejected_view = tk.Frame(self.content)
+
+        self.build_proposals_view()
+        self.build_list_view(self.accepted_view, "Aceptados")
+        self.build_list_view(self.rejected_view, "Rechazados")
+
+        self.show_tab("Propuestas")
+
+    def build_proposals_view(self):
+        self.proposals_view.pack(fill="both", expand=True)
+
+        tk.Label(
+            self.proposals_view,
+            textvariable=self.progress_text,
+            font=("Segoe UI", 10, "bold"),
+        ).pack(pady=(10, 12))
+
+        card = tk.Frame(
+            self.proposals_view,
+            bd=1,
+            relief="solid",
+            padx=28,
+            pady=28,
+        )
+        card.pack(fill="both", expand=True, padx=50, pady=(0, 18))
+
+        tk.Label(
+            card,
+            textvariable=self.card_title,
+            font=("Segoe UI", 20, "bold"),
+            anchor="center",
+            justify="center",
+            wraplength=760,
+        ).pack(fill="x", pady=(20, 18))
+
+        tk.Label(
+            card,
+            textvariable=self.card_desc,
+            font=("Segoe UI", 11),
+            anchor="center",
+            justify="center",
+            wraplength=760,
+        ).pack(fill="both", expand=True)
+
+        actions = tk.Frame(self.proposals_view)
+        actions.pack(pady=(0, 8))
+
+        self.back_button = tk.Button(
+            actions,
+            text="Regresar",
+            command=self.go_back,
+            width=14,
+            pady=8,
+        )
+        self.back_button.pack(side="left", padx=6)
+
+        self.accept_button = tk.Button(
+            actions,
+            text="Aceptar",
+            command=lambda: self.decide("accepted"),
+            width=16,
+            pady=8,
+        )
+        self.accept_button.pack(side="left", padx=6)
+
+        self.reject_button = tk.Button(
+            actions,
+            text="Rechazar",
+            command=lambda: self.decide("rejected"),
+            width=16,
+            pady=8,
+        )
+        self.reject_button.pack(side="left", padx=6)
+
+    def build_list_view(self, parent, kind):
+        title = tk.Label(parent, text=kind, font=("Segoe UI", 15, "bold"))
+        title.pack(anchor="w", pady=(8, 8))
+
+        body = tk.Frame(parent)
+        body.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(body, highlightthickness=0)
+        scroll = tk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
 
         scroll.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
+        canvas.pack(side="left", fill="both", expand=True)
 
-        self.inner = tk.Frame(self.canvas)
-        self.window_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.window_id, width=e.width))
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        inner = tk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        bottom = tk.Frame(self)
-        bottom.pack(fill="x", padx=12, pady=(0, 12))
+        inner.bind(
+            "<Configure>",
+            lambda _e, c=canvas: c.configure(scrollregion=c.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e, c=canvas, w=window_id: c.itemconfigure(w, width=e.width),
+        )
 
-        tk.Button(bottom, text="Marcar visibles", command=self.check_visible).pack(side="left")
-        tk.Button(bottom, text="Desmarcar visibles", command=self.uncheck_visible).pack(side="left", padx=(6, 0))
-        tk.Button(bottom, text="Exportar seleccionados a CSV", command=self.export_csv).pack(side="right")
+        if kind == "Aceptados":
+            self.accepted_inner = inner
+        else:
+            self.rejected_inner = inner
 
-    def _on_mousewheel(self, event):
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    def show_tab(self, name):
+        for view in (self.proposals_view, self.accepted_view, self.rejected_view):
+            view.pack_forget()
 
-    def populate(self):
-        for pid, title, desc in PROPOSALS:
-            var = tk.BooleanVar(value=bool(self.cache.get(str(pid), False)))
-            self.vars[pid] = var
+        if name == "Propuestas":
+            self.proposals_view.pack(fill="both", expand=True)
+        elif name == "Aceptados":
+            self.accepted_view.pack(fill="both", expand=True)
+        else:
+            self.rejected_view.pack(fill="both", expand=True)
 
-            row = tk.Frame(self.inner, bd=1, relief="solid", padx=8, pady=6)
-            row.pack(fill="x", pady=2)
+        for tab_name, button in self.tab_buttons.items():
+            button.configure(relief="sunken" if tab_name == name else "raised")
 
-            cb = tk.Checkbutton(
-                row,
-                variable=var,
-                command=self.on_check,
-                anchor="n",
+        self.refresh_lists()
+
+    def decide(self, decision):
+        if self.index >= len(PROPOSALS):
+            return
+
+        pid = PROPOSALS[self.index][0]
+        self.decisions[str(pid)] = decision
+        self.index += 1
+        self.save_cache()
+        self.refresh_all()
+
+    def go_back(self):
+        if self.index <= 0:
+            return
+        self.index -= 1
+        pid = PROPOSALS[self.index][0]
+        self.decisions.pop(str(pid), None)
+        self.save_cache()
+        self.refresh_all()
+
+    def refresh_all(self):
+        accepted = sum(1 for v in self.decisions.values() if v == "accepted")
+        rejected = sum(1 for v in self.decisions.values() if v == "rejected")
+        self.accepted_count.set(f"Aceptados: {accepted}")
+        self.rejected_count.set(f"Rechazados: {rejected}")
+
+        total = len(PROPOSALS)
+        if self.index < total:
+            pid, title, desc = PROPOSALS[self.index]
+            self.progress_text.set(f"Propuesta {self.index + 1} de {total}")
+            self.card_title.set(f"{pid:03d}. {title}")
+            self.card_desc.set(desc)
+
+            self.accept_button.configure(state="normal")
+            self.reject_button.configure(state="normal")
+        else:
+            self.progress_text.set(f"Completado: {total} de {total}")
+            self.card_title.set("Revision completada")
+            self.card_desc.set(
+                "Ya revisaste las 100 propuestas. Puedes consultar las pestañas "
+                "Aceptados y Rechazados, o usar Regresar para revisar la ultima decision."
             )
-            cb.pack(side="left", anchor="n")
+            self.accept_button.configure(state="disabled")
+            self.reject_button.configure(state="disabled")
 
-            text_frame = tk.Frame(row)
-            text_frame.pack(side="left", fill="x", expand=True)
+        self.back_button.configure(state="normal" if self.index > 0 else "disabled")
+        self.refresh_lists()
+
+    def refresh_lists(self):
+        if not hasattr(self, "accepted_inner"):
+            return
+
+        for container in (self.accepted_inner, self.rejected_inner):
+            for child in container.winfo_children():
+                child.destroy()
+
+        accepted_rows = [
+            item for item in PROPOSALS
+            if self.decisions.get(str(item[0])) == "accepted"
+        ]
+        rejected_rows = [
+            item for item in PROPOSALS
+            if self.decisions.get(str(item[0])) == "rejected"
+        ]
+
+        self.fill_list(self.accepted_inner, accepted_rows, "No hay propuestas aceptadas.")
+        self.fill_list(self.rejected_inner, rejected_rows, "No hay propuestas rechazadas.")
+
+    def fill_list(self, parent, rows, empty_text):
+        if not rows:
+            tk.Label(
+                parent,
+                text=empty_text,
+                anchor="w",
+                pady=10,
+            ).pack(fill="x", padx=6)
+            return
+
+        for pid, title, desc in rows:
+            row = tk.Frame(parent, bd=1, relief="solid", padx=10, pady=8)
+            row.pack(fill="x", pady=3)
 
             tk.Label(
-                text_frame,
+                row,
                 text=f"{pid:03d}. {title}",
                 font=("Segoe UI", 10, "bold"),
                 anchor="w",
             ).pack(fill="x")
 
             tk.Label(
-                text_frame,
+                row,
                 text=desc,
                 anchor="w",
                 justify="left",
                 wraplength=820,
             ).pack(fill="x", pady=(2, 0))
 
-            self.rows.append((pid, title, desc, row))
-
-    def apply_filter(self):
-        term = self.search_var.get().strip().lower()
-        for pid, title, desc, row in self.rows:
-            haystack = f"{pid} {title} {desc}".lower()
-            if not term or term in haystack:
-                row.pack(fill="x", pady=2)
-            else:
-                row.pack_forget()
-
-    def visible_ids(self):
-        term = self.search_var.get().strip().lower()
-        ids = []
-        for pid, title, desc, _ in self.rows:
-            haystack = f"{pid} {title} {desc}".lower()
-            if not term or term in haystack:
-                ids.append(pid)
-        return ids
-
-    def check_visible(self):
-        for pid in self.visible_ids():
-            self.vars[pid].set(True)
+    def on_close(self):
         self.save_cache()
-        self.update_count()
-
-    def uncheck_visible(self):
-        for pid in self.visible_ids():
-            self.vars[pid].set(False)
-        self.save_cache()
-        self.update_count()
-
-    def selected(self):
-        selected_ids = {pid for pid, var in self.vars.items() if var.get()}
-        return [(pid, title, desc) for pid, title, desc in PROPOSALS if pid in selected_ids]
-
-    def update_count(self):
-        count = len(self.selected())
-        self.count_var.set(f"Seleccionadas: {count} / {len(PROPOSALS)}")
-
-    def export_csv(self):
-        rows = self.selected()
-        if not rows:
-            messagebox.showinfo("Sin seleccion", "No hay propuestas seleccionadas.")
-            return
-
-        path = filedialog.asksaveasfilename(
-            title="Guardar CSV",
-            defaultextension=".csv",
-            filetypes=[("CSV", "*.csv"), ("Todos", "*.*")],
-            initialfile="ptm_tools_seleccionadas.csv",
-        )
-        if not path:
-            return
-
-        try:
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f, delimiter=";")
-                writer.writerow(["id", "titulo", "descripcion"])
-                writer.writerows(rows)
-            messagebox.showinfo("CSV generado", f"Se exportaron {len(rows)} propuestas:\n{path}")
-        except Exception as exc:
-            messagebox.showerror("Error", f"No se pudo crear el CSV:\n{exc}")
 
 
 App = ProposalTool
@@ -303,6 +441,7 @@ def main():
     root.minsize(760, 520)
     tool = App(root)
     tool.pack(fill="both", expand=True)
+    root.protocol("WM_DELETE_WINDOW", lambda: (tool.on_close(), root.destroy()))
     root.mainloop()
 
 
