@@ -1,0 +1,39 @@
+name: Publicar ideas sociales y profesiones PTM
+
+on:
+  push:
+    paths:
+      - ".github/workflows/publicar_ideas_profesiones.yml"
+      - "PTM/gentools/generar_ideas_profesiones.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generar-y-verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generar y validar CSV
+        run: python PTM/gentools/generar_ideas_profesiones.py
+      - name: Verificar salidas
+        run: |
+          test -s PTM/gentools/ideas_25200_sociedad_y_profesiones.csv
+          test -s PTM/gentools/ideas_3200_profesiones.csv
+      - name: Publicar los dos catalogos
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PTM/gentools/ideas_25200_sociedad_y_profesiones.csv PTM/gentools/ideas_3200_profesiones.csv
+          if git diff --cached --quiet; then
+            echo "Archivos sin cambios"
+            exit 0
+          fi
+          git commit -m "PTM: publish 25,200 social and occupation ideas"
+          git push
