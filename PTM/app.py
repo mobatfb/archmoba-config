@@ -29,7 +29,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.71"
+APP_VERSION = "1.0.72"
 APP_UPDATE_DATE = "28/10/2026"
 APP_UPDATE_TIME = "18:55"
 SEARCH_MAX_LENGTH = 40
@@ -1624,7 +1624,10 @@ class PTMApp(tk.Tk):
             )
             status.pack(side="bottom", fill="x")
             meta["reload_status_label"] = status
-        status.configure(text="Consultando GitHub y validando el nuevo archivo...")
+        status.configure(
+            text="Consultando GitHub y validando el nuevo archivo...",
+            bg="#E6F2F5", fg="#075D79",
+        )
 
         def is_current():
             active = self.open_tabs.get(key)
@@ -2226,7 +2229,13 @@ class PTMApp(tk.Tk):
                     "Cache-Control": "no-cache",
                 },
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            # Si hay copia local, un fallo de red debe resolverse rápido.
+            # Sin copia local mantenemos el tiempo de espera completo.
+            timeout = 10 if (
+                not force_remote and
+                (self.base_dir / Path(repo_path)).is_file()
+            ) else 30
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 data = response.read()
 
         # No publicar descargas obsoletas si se cerró o recargó la pestaña.
@@ -3885,10 +3894,16 @@ class PTMApp(tk.Tk):
         meta["failure_stage"] = None
         meta["last_download_error"] = None
 
+        # Si existe caché, dos intentos rápidos bastan antes de usarla.
+        # Sin caché se mantienen los cinco intentos habituales.
+        repo_path = str(tool.get("repo_path", "")).strip().replace("\\", "/").lstrip("/")
+        has_cache = (self.base_dir / Path(repo_path)).is_file()
+        max_attempts = 2 if has_cache and not force_remote else 5
+        meta["download_max_attempts"] = max_attempts
         status = (
             "Obteniendo versión actual desde GitHub (sin caché)..."
             if force_remote else
-            f"PTM v{APP_VERSION} · Descargando... intento 1/5 · sesión única"
+            f"PTM v{APP_VERSION} · Descargando... intento 1/{max_attempts}"
         )
         self._show_tool_loading(tool, key, status)
 
@@ -3902,7 +3917,7 @@ class PTMApp(tk.Tk):
         def worker():
             last_error = None
 
-            for attempt in range(1, 6):
+            for attempt in range(1, max_attempts + 1):
                 if not is_current():
                     return
                 self._tool_download_events.put(
@@ -3926,7 +3941,7 @@ class PTMApp(tk.Tk):
                     if isinstance(exc, urllib.error.HTTPError) and exc.code == 404:
                         break
 
-                if attempt < 5:
+                if attempt < max_attempts:
                     time.sleep(2)
 
             # Al abrir normalmente, un fallo de conexión permite usar caché.
@@ -3941,7 +3956,7 @@ class PTMApp(tk.Tk):
                     )
                     if is_current():
                         self._tool_download_events.put(
-                            ("cache", key, session_id, 5, tool,
+                            ("cache", key, session_id, max_attempts, tool,
                              cached_path, last_error)
                         )
                     return
@@ -3950,7 +3965,7 @@ class PTMApp(tk.Tk):
 
             if is_current():
                 self._tool_download_events.put(
-                    ("failed", key, session_id, 5, tool, None, last_error)
+                    ("failed", key, session_id, max_attempts, tool, None, last_error)
                 )
 
         threading.Thread(target=worker, daemon=True).start()
@@ -4000,7 +4015,8 @@ class PTMApp(tk.Tk):
                     status_widget = meta.get("loading_status")
                     if status_widget is not None and status_widget.winfo_exists():
                         status_widget.configure(
-                            text=f"PTM v{APP_VERSION} · Descargando... intento {attempt}/5"
+                            text=f"PTM v{APP_VERSION} · Descargando... intento "
+                                     f"{attempt}/{meta.get('download_max_attempts', 5)}"
                         )
                     continue
 
