@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.7"
+TOOL_VERSION = "2.0.8"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -34,6 +34,7 @@ class Mp3PlayerTool(ttk.Frame):
         self._scan_cancel = threading.Event()
         self._scan_thread = None
         self._scan_started = False
+        self._scan_active = False
         self._all_render_token = 0
         self._all_rendering = False
         self._visible_all_paths = []
@@ -1173,14 +1174,20 @@ class Mp3PlayerTool(ttk.Frame):
             return [os.path.abspath(os.sep)]
 
     def start_scan(self):
-        """Inicia una busqueda real sin bloquear Tkinter."""
-        if self._scan_thread and self._scan_thread.is_alive():
+        """Muestra la cache existente y busca solo archivos nuevos o modificados."""
+        if self._scan_active or (
+            self._scan_thread and self._scan_thread.is_alive()
+        ):
             self.status_var.set("Ya hay un escaneo en curso")
             return
         self._scan_started = True
+        self._scan_active = True
         self._scan_cancel.clear()
         self.stop_scan_btn.configure(state="normal")
-        self.scan_status_var.set("Escaneando discos locales · MP3 > 1 minuto...")
+        self.scan_status_var.set(
+            f"Caché: {len(self.all_tracks)} MP3 · "
+            "buscando únicamente archivos nuevos o modificados..."
+        )
         self._scan_thread = threading.Thread(
             target=self._scan_worker, daemon=True, name="PTM-MP3-Scan"
         )
@@ -1191,8 +1198,14 @@ class Mp3PlayerTool(ttk.Frame):
             self._scan_cancel.set()
             self.scan_status_var.set("Deteniendo búsqueda...")
 
-    def _queue_scan_message(self, message):
-        """La hebra nunca toca widgets; publica resultados mediante una cola."""
+    def _queue_scan_message(self, message, force=False):
+        """Envia resultados al hilo de Tk, incluso el cierre de un escaneo cancelado."""
+        if force:
+            try:
+                self._scan_queue.put(message, timeout=1.5)
+                return True
+            except queue.Full:
+                return False
         while not self._scan_cancel.is_set():
             try:
                 self._scan_queue.put(message, timeout=0.2)
@@ -1201,32 +1214,64 @@ class Mp3PlayerTool(ttk.Frame):
                 continue
         return False
 
-    def _scan_worker(self):
-        """Explora todos los discos accesibles y mide duración con mutagen."""
-        try:
-            from mutagen.mp3 import MP3
-        except Exception as exc:
-            self._queue_scan_message(("error", "Instala mutagen: " + str(exc)))
+    def _write_scan_cache(self, previous, updates):
+        """Fusiona la cache previa con novedades y escribe un JSON atomico."""
+        if not updates:
             return
+        merged = dict(previous)
+        merged.update(updates)
+        cache_path = self._scan_cache_path()
+        tmp = cache_path.with_suffix(".tmp")
+        try:
+            tmp.write_text(
+                json.dumps(
+                    {"version": 1, "tracks": list(merged.values())},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            os.replace(tmp, cache_path)
+        finally:
+            # Si falla la escritura no debe quedar un archivo temporal suelto.
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _scan_worker(self):
+        """Indexa de forma incremental: reutiliza la cache sin reabrir MP3 antiguos.
+
+        Se recorren carpetas para detectar rutas nuevas, pero los MP3 con
+        mismo tamaño y fecha no se vuelven a analizar con mutagen.
+        La cache anterior nunca se reemplaza por un subconjunto del escaneo.
+        """
         previous = dict(self._all_index)
-        indexed = {}
-        eligible = {}
+        updates = {}
         batch = []
         directories = 0
         found_mp3 = 0
-        skip_root_dirs = {"proc", "sys", "dev"}
+        reused = 0
+        added = 0
+        changed = 0
+        valid_new = 0
+        error = ""
+        cache_error = ""
+        last_checkpoint = time.monotonic()
         try:
+            from mutagen.mp3 import MP3
+
+            skip_root_dirs = {"proc", "sys", "dev"}
             for root in self._scan_roots():
+                if self._scan_cancel.is_set():
+                    break
                 for folder, dirs, files in os.walk(
                     root, topdown=True, followlinks=False,
                     onerror=lambda _err: None,
                 ):
                     if self._scan_cancel.is_set():
-                        return
+                        break
                     if os.name != "nt" and folder == os.path.abspath(os.sep):
-                        dirs[:] = [
-                            d for d in dirs if d not in skip_root_dirs
-                        ]
+                        dirs[:] = [d for d in dirs if d not in skip_root_dirs]
                     dirs[:] = [
                         d for d in dirs
                         if not os.path.islink(os.path.join(folder, d))
@@ -1234,7 +1279,7 @@ class Mp3PlayerTool(ttk.Frame):
                     directories += 1
                     for filename in files:
                         if self._scan_cancel.is_set():
-                            return
+                            break
                         if not filename.lower().endswith(".mp3"):
                             continue
                         path = os.path.join(folder, filename)
@@ -1246,57 +1291,74 @@ class Mp3PlayerTool(ttk.Frame):
                         cached = previous.get(path)
                         if (cached and cached.get("size") == stat.st_size
                                 and cached.get("mtime_ns") == stat.st_mtime_ns):
-                            duration = float(cached.get("duration", 0))
-                        else:
-                            try:
-                                duration = float(MP3(path).info.length)
-                            except Exception:
-                                duration = 0.0
-                        entry = {
+                            reused += 1
+                            continue
+
+                        # Leer duracion solamente en MP3 nuevos o modificados.
+                        try:
+                            duration = float(MP3(path).info.length)
+                        except Exception:
+                            duration = 0.0
+                        updates[path] = {
                             "path": path,
                             "duration": duration,
                             "size": stat.st_size,
                             "mtime_ns": stat.st_mtime_ns,
                         }
-                        indexed[path] = entry
+                        if cached is None:
+                            added += 1
+                        else:
+                            changed += 1
                         if duration > 60.0:
-                            eligible[path] = duration
+                            valid_new += 1
                             batch.append((path, duration))
-                        # Publicar cada grupo completo de 20 coincidencias.
-                        if len(batch) >= 20:
-                            if not self._queue_scan_message(("batch", batch)):
-                                return
-                            batch = []
+                            if len(batch) >= 20:
+                                if not self._queue_scan_message(("batch", batch)):
+                                    break
+                                batch = []
+
+                        # Guardar avances mientras se escanea sin bloquear Tk.
+                        now = time.monotonic()
+                        if updates and now - last_checkpoint >= 10.0:
+                            try:
+                                self._write_scan_cache(previous, updates)
+                                cache_error = ""
+                            except OSError as exc:
+                                cache_error = str(exc)
+                            last_checkpoint = now
+
                     if directories % 200 == 0:
                         if not self._queue_scan_message(
-                            ("progress", directories, found_mp3, len(eligible))
+                            ("progress", directories, found_mp3, valid_new, reused)
                         ):
-                            return
-            # Al terminar, publicar tambien el ultimo grupo de 1 a 19.
-            if batch and not self._queue_scan_message(("batch", batch)):
-                return
-            if self._scan_cancel.is_set():
-                return
-            # Cache atomica de rutas, tamano, fecha y duracion.
-            cache_path = self._scan_cache_path()
-            tmp = cache_path.with_suffix(".tmp")
-            try:
-                tmp.write_text(
-                    json.dumps(
-                        {"version": 1, "tracks": list(indexed.values())},
-                        ensure_ascii=False,
-                    ),
-                    encoding="utf-8",
-                )
-                os.replace(tmp, cache_path)
-            except OSError:
-                pass
-            self._queue_scan_message(("done", indexed, eligible, directories))
+                            break
+                    if self._scan_cancel.is_set():
+                        break
         except Exception as exc:
-            self._queue_scan_message(("error", str(exc)))
+            error = str(exc)
+        finally:
+            # Enviar también el grupo incompleto de 1 a 19 canciones.
+            if batch:
+                self._queue_scan_message(("batch", batch), force=True)
+            # Conservar el cache anterior y añadir los registros descubiertos,
+            # incluso cuando el usuario detuvo el escaneo.
+            if updates:
+                try:
+                    self._write_scan_cache(previous, updates)
+                    cache_error = ""
+                except OSError as exc:
+                    cache_error = str(exc)
+            self._queue_scan_message(
+                (
+                    "finished", updates, directories, found_mp3, reused,
+                    added, changed, valid_new, self._scan_cancel.is_set(),
+                    error, cache_error,
+                ),
+                force=True,
+            )
 
     def _poll_scan_queue(self):
-        """Procesa lotes en el hilo Tk y mantiene la interfaz responsiva."""
+        """Aplica lotes nuevos sin borrar ni reconstruir el indice en cache."""
         try:
             for _ in range(24):
                 try:
@@ -1307,28 +1369,50 @@ class Mp3PlayerTool(ttk.Frame):
                 if kind == "batch":
                     self._append_all_batch(message[1])
                 elif kind == "progress":
-                    _, directories, mp3_count, eligible_count = message
+                    _, directories, mp3_count, new_valid, reused = message
                     self.scan_status_var.set(
                         f"Buscando... {directories} carpetas · "
-                        f"{mp3_count} MP3 · {eligible_count} de más de 1 minuto"
+                        f"{reused} MP3 reutilizados · {new_valid} válidos nuevos"
                     )
-                elif kind == "done":
-                    _, index, eligible, directories = message
-                    self._all_index = index
-                    self.all_tracks = eligible
-                    self._refresh_all()
-                    self.scan_status_var.set(
-                        f"Escaneo finalizado: {len(eligible)} MP3 válidos "
-                        f"en {directories} carpetas"
-                    )
+                elif kind == "finished":
+                    (
+                        _, updates, directories, mp3_count, reused,
+                        added, changed, new_valid, cancelled, error, cache_error,
+                    ) = message
+                    self._all_index.update(updates)
+                    refresh_needed = False
+                    for path, entry in updates.items():
+                        duration = float(entry.get("duration", 0))
+                        if duration > 60.0:
+                            self.all_tracks[path] = duration
+                        elif path in self.all_tracks:
+                            self.all_tracks.pop(path, None)
+                            refresh_needed = True
+                    if refresh_needed:
+                        self._refresh_all()
+                    self._scan_active = False
                     self.stop_scan_btn.configure(state="disabled")
-                elif kind == "error":
-                    self.scan_status_var.set("Error de escaneo: " + message[1])
-                    self.stop_scan_btn.configure(state="disabled")
+                    if error:
+                        self.scan_status_var.set(
+                            f"Error de escaneo: {error} · caché conservada"
+                        )
+                    else:
+                        status = "Escaneo detenido" if cancelled else "Escaneo completo"
+                        self.scan_status_var.set(
+                            f"{status} · {reused} desde caché · "
+                            f"{added} nuevos · {changed} actualizados · "
+                            f"{len(self.all_tracks)} MP3 válidos en Todos"
+                        )
+                    if cache_error:
+                        self.scan_status_var.set(
+                            "No se pudo guardar la caché: " + cache_error
+                        )
             if self._scan_thread and not self._scan_thread.is_alive():
                 self.stop_scan_btn.configure(state="disabled")
-                if self._scan_cancel.is_set():
-                    self.scan_status_var.set("Escaneo cancelado")
+                if self._scan_active and self._scan_queue.empty():
+                    self._scan_active = False
+                    if self._scan_cancel.is_set():
+                        self.scan_status_var.set("Escaneo detenido · caché conservada")
         except tk.TclError:
             return
         try:
@@ -1384,7 +1468,11 @@ class Mp3PlayerTool(ttk.Frame):
         for path, duration in batch:
             old = self.all_tracks.get(path)
             self.all_tracks[path] = duration
-            if old is not None or not self._matches_search(path, q):
+            if old is not None:
+                if old != duration:
+                    self._update_all_row(path)
+                continue
+            if not self._matches_search(path, q):
                 continue
             # Actualizar siempre el indice visible, aunque la cache
             # todavia este dibujandose en lotes.
