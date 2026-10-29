@@ -1,0 +1,50 @@
+name: Generar 1M ideas gentools
+
+on:
+  push:
+    paths:
+      - ".github/workflows/generar_gentools_1m.yml"
+      - "PTM/gentools/generar_ideas_1000000.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generar CSV
+        run: python PTM/gentools/generar_ideas_1000000.py
+
+      - name: Verificar cantidad
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("PTM/gentools/ideas_1000000.csv")
+          with p.open("r", encoding="utf-8-sig") as f:
+              rows = sum(1 for _ in f) - 1
+          assert rows == 1_000_000, rows
+          print("Filas:", rows)
+          print("Tamano bytes:", p.stat().st_size)
+          PY
+
+      - name: Commit CSV
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PTM/gentools/ideas_1000000.csv
+          if git diff --cached --quiet; then
+            echo "CSV sin cambios"
+            exit 0
+          fi
+          git commit -m "PTM: generate 1,000,000 gentools ideas CSV"
+          git push
