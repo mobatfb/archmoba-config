@@ -1,4 +1,4 @@
-"""PYRION OS 0.4.1 - standalone PYRION 3D Engine.
+"""PYRION OS 0.4.3 - standalone PYRION 3D Engine.
 
 Mesh geometry, perspective projection, and Tk software renderer.
 Previous desktop preserved under PYRION/release/v0.3.0.
@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.4.3"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -370,7 +370,7 @@ The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
 
 ENGINE_VERSION = "0.1.0"
-DESKTOP_VERSION = "0.4.2"
+DESKTOP_VERSION = "0.4.3"
 BACKGROUND = "#050917"
 
 
@@ -386,7 +386,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.2"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.3"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -426,6 +426,44 @@ def load_selected_scene():
     return scene, objects
 
 
+
+def _hud_memory_mb():
+    """Current RSS in MB when the OS exposes it."""
+    try:
+        if sys.platform.startswith("linux"):
+            status = Path("/proc/self/status").read_text(encoding="utf-8")
+            for line in status.splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+        if os.name == "nt":
+            import ctypes
+
+            class Counters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.c_ulong), ("page_faults", ctypes.c_ulong),
+                    ("peak_ws", ctypes.c_size_t), ("working_set", ctypes.c_size_t),
+                    ("peak_paged_pool", ctypes.c_size_t),
+                    ("paged_pool", ctypes.c_size_t),
+                    ("peak_nonpaged_pool", ctypes.c_size_t),
+                    ("nonpaged_pool", ctypes.c_size_t),
+                    ("pagefile", ctypes.c_size_t),
+                    ("peak_pagefile", ctypes.c_size_t),
+                ]
+            counters = Counters()
+            counters.cb = ctypes.sizeof(counters)
+            process = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(
+                process, ctypes.byref(counters), counters.cb
+            ):
+                return counters.working_set / 1048576.0
+        if sys.platform == "darwin":
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1048576.0
+    except (OSError, ValueError, AttributeError, ImportError):
+        pass
+    return None
+
+
 class Pyrion3DApp(tk.Tk):
     """Minimal full-screen PYRION desktop containing only the rotating sphere."""
 
@@ -454,6 +492,19 @@ class Pyrion3DApp(tk.Tk):
         self.running = True
         self.visible_triangles = 0
         self.frames = 0
+        self.info_mode = "compacto"
+        self.fps = 0.0
+        self.frame_ms = 0.0
+        self.render_ms = 0.0
+        self.average_fps = 0.0
+        self.cpu_percent = 0.0
+        self.ram_mb = None
+        self._fps_count = 0
+        self._fps_periods = 0
+        self._fps_history = []
+        self.started_at = time.perf_counter()
+        self._fps_start = self.started_at
+        self._cpu_start = time.process_time()
         self.last_time = time.perf_counter()
         self.drag_start = None
         self.pending_frame = None
@@ -463,6 +514,7 @@ class Pyrion3DApp(tk.Tk):
 
         # Controls are keyboard/mouse-only; no controls are drawn on the desktop.
         self.bind("<space>", lambda _event: self.toggle_animation())
+        self.bind("<F3>", self._toggle_hud_mode)
         self.bind("<Left>", lambda _event: self._speed(-0.15))
         self.bind("<Right>", lambda _event: self._speed(+0.15))
         self.bind("<plus>", lambda _event: self._zoom(+0.10))
@@ -544,6 +596,8 @@ class Pyrion3DApp(tk.Tk):
         self._request_frame()
 
     def _mouse_press(self, event):
+        if self._hud_click(event):
+            return
         cx, cy = self._width / 2, self._height / 2
         if (event.x - cx) ** 2 + (event.y - cy) ** 2 <= self._orb_radius ** 2:
             self.drag_start = (event.x, event.y)
@@ -580,6 +634,7 @@ class Pyrion3DApp(tk.Tk):
             return
         self._width, self._height = width, height
         self.canvas.delete("all")
+        draw_start = time.perf_counter()
         diameter = min(height * 0.60, width * 0.48, 520)
         self._orb_radius = diameter * 0.50
         self.visible_triangles = 0
@@ -593,6 +648,80 @@ class Pyrion3DApp(tk.Tk):
                 height / 2 - py * diameter * 0.47 * factor,
                 diameter * factor, draw_graticules=False
             )
+        self.render_ms = (time.perf_counter() - draw_start) * 1000.0
+        self._draw_hud()
+
+
+    def _hud_click(self, event):
+        if self._width >= 360 and 208 <= event.x <= 306 and 16 <= event.y <= 40:
+            self.info_mode = "diagnostico" if self.info_mode == "compacto" else "compacto"
+            self._request_frame()
+            return True
+        return False
+
+    def _toggle_hud_mode(self, _event=None):
+        self.info_mode = "diagnostico" if self.info_mode == "compacto" else "compacto"
+        self._request_frame()
+
+    def _draw_hud(self):
+        if self._width < 360:
+            return
+        canvas = self.canvas
+        x = 20
+        full = self.info_mode == "diagnostico"
+        canvas.create_text(
+            x, 20, text="PYRION 3D  /  " + str(self.scene.get("name", "Scene")),
+            anchor="nw", fill="#71cfff", font=("TkDefaultFont", 9, "bold")
+        )
+        canvas.create_rectangle(
+            208, 16, 306, 40, outline="#345878", fill="#10243c", width=1
+        )
+        canvas.create_text(
+            257, 28, text="COMPACTO" if full else "DETALLES",
+            fill="#d5eaff", font=("TkDefaultFont", 9)
+        )
+        status = ("FLUIDO" if self.fps >= 50 else
+                  "ACEPTABLE" if self.fps >= 25 else "LENTO")
+        # FPS and frame time come from measured frame intervals, not estimates.
+        lines = [
+            ("FPS", "%.1f" % self.fps),
+            ("FRAME", "%.1f ms" % self.frame_ms),
+            ("CPU PROCESO", "%.1f%%" % self.cpu_percent),
+            ("RAM PROCESO", "%.1f MB" % self.ram_mb if self.ram_mb is not None else "--"),
+            ("TRIANGULOS", str(self.visible_triangles)),
+            ("ESTADO", status if self.running else "PAUSADO"),
+        ]
+        if full:
+            durations = sorted(self._fps_history)
+            low = (sum(durations[:max(1, len(durations) // 100)]) /
+                   max(1, len(durations) // 100)) if durations else 0.0
+            vertices = sum(len(item["renderer"].mesh.vertices) for item in self.objects)
+            total_faces = sum(len(item["renderer"].mesh.faces) for item in self.objects)
+            seconds = int(time.perf_counter() - self.started_at)
+            lines = [
+                ("ESCENA", str(self.scene.get("name", "Scene"))),
+                ("FPS", "%.1f" % self.fps),
+                ("FPS PROMEDIO", "%.1f" % self.average_fps),
+                ("FPS 1% BAJO", "%.1f" % low if durations else "--"),
+                ("FRAME", "%.1f ms" % self.frame_ms),
+                ("RENDER", "%.1f ms" % self.render_ms),
+                ("CPU PROCESO", "%.1f%%" % self.cpu_percent),
+                ("RAM PROCESO", "%.1f MB" % self.ram_mb if self.ram_mb is not None else "--"),
+                ("MODELOS", str(len(self.objects))),
+                ("VERTICES", str(vertices)),
+                ("TRIANGULOS", str(self.visible_triangles) + " / " + str(total_faces)),
+                ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
+                ("UPTIME", "%02d:%02d:%02d" % (seconds // 3600, (seconds // 60) % 60, seconds % 60)),
+                ("ESTADO", status),
+            ]
+        y = 50
+        for label, value in lines:
+            canvas.create_text(x, y, text=label, anchor="nw",
+                               fill="#92aaca", font=("TkDefaultFont", 9))
+            canvas.create_text(308, y, text=value, anchor="ne",
+                               fill="#d1e6fa" if label != "ESTADO" else "#75e2ad",
+                               font=("TkDefaultFont", 9))
+            y += 19
 
     def _frame(self):
         try:
@@ -606,6 +735,22 @@ class Pyrion3DApp(tk.Tk):
                         renderer.rotation_y + item["speed"] * self.spin_rate * elapsed
                     ) % (math.pi * 2)
             self.frames += 1
+            self._fps_count += 1
+            interval = now - self._fps_start
+            if interval >= 0.6:
+                self.fps = self._fps_count / interval
+                self.frame_ms = 1000.0 / self.fps if self.fps else 0.0
+                self._fps_periods += 1
+                self.average_fps += (self.fps - self.average_fps) / self._fps_periods
+                self._fps_history.append(self.fps)
+                self._fps_history = self._fps_history[-120:]
+                self.cpu_percent = 100.0 * max(
+                    0.0, time.process_time() - self._cpu_start
+                ) / interval
+                self.ram_mb = _hud_memory_mb()
+                self._cpu_start = time.process_time()
+                self._fps_count = 0
+                self._fps_start = now
             self._draw()
             self.after(40, self._frame)
         except tk.TclError:
