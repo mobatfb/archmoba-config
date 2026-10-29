@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.6"
+TOOL_VERSION = "2.0.7"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -36,6 +36,7 @@ class Mp3PlayerTool(ttk.Frame):
         self._scan_started = False
         self._all_render_token = 0
         self._all_rendering = False
+        self._visible_all_paths = []
         self.current_index = -1
         self.loaded_path = None
         self.duration = 0.0
@@ -62,7 +63,7 @@ class Mp3PlayerTool(ttk.Frame):
         self.recent_count_var = tk.StringVar(value="0 escuchadas")
         self.favorite_count_var = tk.StringVar(value="0 favoritos")
         self.all_count_var = tk.StringVar(value="0 MP3 de más de 1 minuto")
-        self.scan_status_var = tk.StringVar(value="Abre All para buscar MP3 en el equipo")
+        self.scan_status_var = tk.StringVar(value="Abre Todos para buscar MP3 en el equipo")
 
         self.state_path = self._state_file()
         self._build_ui()
@@ -249,7 +250,7 @@ class Mp3PlayerTool(ttk.Frame):
         self.tab_all = ttk.Frame(self.library_tabs, padding=6)
         self.library_tabs.add(self.tab_recent, text="Recientes")
         self.library_tabs.add(self.tab_favorites, text="Favoritos")
-        self.library_tabs.add(self.tab_all, text="All")
+        self.library_tabs.add(self.tab_all, text="Todos")
         self.library_tabs.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self.recent_listbox = self._make_tab_list(
@@ -1261,7 +1262,8 @@ class Mp3PlayerTool(ttk.Frame):
                         if duration > 60.0:
                             eligible[path] = duration
                             batch.append((path, duration))
-                        if len(batch) >= 80:
+                        # Publicar cada grupo completo de 20 coincidencias.
+                        if len(batch) >= 20:
                             if not self._queue_scan_message(("batch", batch)):
                                 return
                             batch = []
@@ -1270,6 +1272,7 @@ class Mp3PlayerTool(ttk.Frame):
                             ("progress", directories, found_mp3, len(eligible))
                         ):
                             return
+            # Al terminar, publicar tambien el ultimo grupo de 1 a 19.
             if batch and not self._queue_scan_message(("batch", batch)):
                 return
             if self._scan_cancel.is_set():
@@ -1363,7 +1366,7 @@ class Mp3PlayerTool(ttk.Frame):
     def _render_all_chunk(self, token, offset):
         if token != self._all_render_token:
             return
-        end = min(offset + 300, len(self._visible_all_paths))
+        end = min(offset + 20, len(self._visible_all_paths))
         for path in self._visible_all_paths[offset:end]:
             self.all_listbox.insert("end", self._all_row_text(path))
         if end < len(self._visible_all_paths):
@@ -1372,17 +1375,23 @@ class Mp3PlayerTool(ttk.Frame):
             self._all_rendering = False
 
     def _append_all_batch(self, batch):
-        """Muestra coincidencias durante el escaneo sin esperar al final."""
+        """Enlista MP3 en grupos de 20 a medida que llegan del escaneo.
+
+        Si hay un renderizado de cache en curso, agrega los nuevos al trabajo
+        pendiente para no perder coincidencias.
+        """
         q = self.search_var.get().strip().casefold()
         for path, duration in batch:
             old = self.all_tracks.get(path)
             self.all_tracks[path] = duration
             if old is not None or not self._matches_search(path, q):
                 continue
+            # Actualizar siempre el indice visible, aunque la cache
+            # todavia este dibujandose en lotes.
+            if not self._visible_all_paths and not self._all_rendering:
+                self.all_listbox.delete(0, "end")
+            self._visible_all_paths.append(path)
             if not self._all_rendering:
-                if not self._visible_all_paths:
-                    self.all_listbox.delete(0, "end")
-                self._visible_all_paths.append(path)
                 self.all_listbox.insert("end", self._all_row_text(path))
         self.all_count_var.set(
             f"{len(self._visible_all_paths)} de {len(self.all_tracks)} MP3"
