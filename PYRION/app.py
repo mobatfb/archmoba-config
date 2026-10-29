@@ -601,7 +601,7 @@ class PyrionApp(tk.Tk):
                      start=174,extent=214,style="arc",outline="#8064ff",
                      width=2*self.s)
         self._text(cx,cy+r+38*self.s,"NÚCLEO PYRION",11,C_MUTED,anchor="center",bold=True)
-        self._text(cx,cy,"●",max(10,15*self.s), "#d4eeff",anchor="center")
+        self._text(cx,cy,"●",max(10,15*self.s), "#d4eeff",anchor="center",tag="orb_click")
         tag="orb_click"
         self._hit(tag,self._toggle_core)
 
