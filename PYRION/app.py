@@ -1,838 +1,1238 @@
+"""PYRION OS - interactive, lightweight desktop environment.
+
+The desktop is rendered with Tkinter Canvas and the Python standard library.
+No window manager, Pillow, GPU or external UI toolkit is required.
+"""
+
 import base64
 import json
+import math
 import os
 import re
+import shutil
+import socket
+import struct
 import subprocess
 import sys
 import time
 import tkinter as tk
+import traceback
 import urllib.request
-from pathlib import Path
+import zlib
 from datetime import datetime
-import math
-import shutil
-import socket
-import webbrowser
+from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.2.0"
-
+APP_VERSION = "0.3.0"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
 REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main/PYRION"
 SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
 SELF_CONFIG_API_URL = (
-    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PYRION/config.json?ref=main"
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/"
+    "PYRION/config.json?ref=main"
 )
+
+BG = "#050919"
+TXT = "#e5eeff"
+MUTED = "#8da4c9"
+CYAN = "#50c6ff"
+PURPLE = "#bd8bff"
+GREEN = "#66e3ca"
+AMBER = "#e5bd72"
+PANEL = "#101d3a"
+
+APP_CATALOG = (
+    ("Explorador", "folder", "Favoritos"),
+    ("Consola", "terminal", "Favoritos"),
+    ("Navegador", "browser", "Internet"),
+    ("Editor", "editor", "Herramientas"),
+    ("Multimedia", "media", "Herramientas"),
+    ("Monitor", "monitor", "Sistema"),
+    ("Configuracion", "settings", "Sistema"),
+    ("Red", "network", "Sistema"),
+    ("Acerca de", "about", "Sistema"),
+)
+CATEGORIES = ("Favoritos", "Todas", "Sistema", "Herramientas", "Internet")
+FAVORITES = {"Explorador", "Consola", "Navegador", "Editor", "Monitor", "Configuracion"}
+
+
+def _clamp(n, low=0.0, high=1.0):
+    return max(low, min(high, n))
+
+
+def _blend(a, b, t):
+    t = _clamp(t)
+    a = a.lstrip("#")
+    b = b.lstrip("#")
+    vals = [round(int(a[i:i + 2], 16) * (1 - t)
+                  + int(b[i:i + 2], 16) * t) for i in (0, 2, 4)]
+    return "#%02x%02x%02x" % tuple(vals)
 
 
 def _version_tuple(value):
     parts = []
     for part in str(value).strip().split("."):
-        match = re.match(r"(\d+)", part)
-        parts.append(int(match.group(1)) if match else 0)
-    while len(parts) < 3:
-        parts.append(0)
-    return tuple(parts)
+        m = re.match(r"(\d+)", part)
+        parts.append(int(m.group(1)) if m else 0)
+    return tuple((parts + [0, 0, 0])[:3])
+
+
+def _error_log(message):
+    try:
+        path = Path.home() / "pyrion_error.log"
+        with path.open("a", encoding="utf-8") as file:
+            file.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n{message}\n")
+    except OSError:
+        pass
 
 
 def check_self_update(restart=True):
-    """Busca una versión nueva de PYRION y reemplaza app.py de forma segura."""
+    """Keep PYRION's existing pinned-commit update protocol."""
     try:
-        remote_config = None
-
+        payload = None
         try:
-            api_request = urllib.request.Request(
-                SELF_CONFIG_API_URL,
-                headers={
-                    "User-Agent": f"PYRION/{APP_VERSION}",
-                    "Accept": "application/vnd.github+json",
-                    "Cache-Control": "no-cache",
-                },
-            )
-            with urllib.request.urlopen(api_request, timeout=8) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            encoded = str(payload.get("content", "")).replace("\n", "")
-            remote_config = json.loads(
-                base64.b64decode(encoded).decode("utf-8-sig")
-            )
+            req = urllib.request.Request(SELF_CONFIG_API_URL, headers={
+                "User-Agent": f"PYRION/{APP_VERSION}",
+                "Accept": "application/vnd.github+json",
+                "Cache-Control": "no-cache",
+            })
+            with urllib.request.urlopen(req, timeout=6) as response:
+                obj = json.loads(response.read().decode("utf-8"))
+            encoded = str(obj.get("content", "")).replace("\n", "")
+            payload = json.loads(base64.b64decode(encoded).decode("utf-8-sig"))
         except Exception:
-            remote_config = None
-
-        if remote_config is None:
-            config_request = urllib.request.Request(
-                f"{SELF_CONFIG_URL}?v={time.time_ns()}",
-                headers={
+            req = urllib.request.Request(
+                f"{SELF_CONFIG_URL}?v={time.time_ns()}", headers={
                     "User-Agent": f"PYRION/{APP_VERSION}",
                     "Cache-Control": "no-cache",
-                },
-            )
-            with urllib.request.urlopen(config_request, timeout=8) as response:
-                remote_config = json.loads(response.read().decode("utf-8-sig"))
+                })
+            with urllib.request.urlopen(req, timeout=6) as response:
+                payload = json.loads(response.read().decode("utf-8-sig"))
 
-        remote_version = str(remote_config.get("version", "")).strip()
-        if not remote_version:
+        remote_version = str(payload.get("version", "")).strip()
+        if not remote_version or _version_tuple(remote_version) <= _version_tuple(APP_VERSION):
             return False
-
-        if _version_tuple(remote_version) <= _version_tuple(APP_VERSION):
-            return False
-
-        app_path = str(
-            remote_config.get("app_path", "PYRION/app.py")
-        ).strip().replace("\\", "/").lstrip("/")
-
-        if (Path(app_path).name or "app.py").lower() != "app.py":
-            raise RuntimeError("config.json no apunta a un app.py válido.")
-
-        release_commit = str(remote_config.get("release_commit", "")).strip()
+        app_path = str(payload.get("app_path", "PYRION/app.py")).replace("\\", "/").lstrip("/")
+        if app_path != "PYRION/app.py":
+            raise RuntimeError("Ruta de actualizacion no autorizada")
+        release_commit = str(payload.get("release_commit", "")).strip()
         if not re.fullmatch(r"[0-9a-fA-F]{40}", release_commit):
-            raise RuntimeError("config.json no contiene un release_commit válido.")
-
-        immutable_app_url = f"{REPO_RAW_ROOT}/{release_commit}/{app_path}"
-
-        source = None
-        last_error = None
-        for attempt in range(4):
-            try:
-                app_request = urllib.request.Request(
-                    f"{immutable_app_url}?v={time.time_ns()}",
-                    headers={
-                        "User-Agent": f"PYRION/{APP_VERSION}",
-                        "Cache-Control": "no-cache",
-                    },
-                )
-                with urllib.request.urlopen(app_request, timeout=15) as response:
-                    source = response.read().decode("utf-8-sig")
-                break
-            except Exception as exc:
-                last_error = exc
-                if attempt < 3:
-                    time.sleep(0.8)
-
-        if source is None:
-            raise RuntimeError(
-                f"No se pudo descargar el release fijado: {last_error}"
-            )
-
-        version_match = re.search(
-            r'''APP_VERSION\s*=\s*["']([^"']+)["']''',
-            source,
+            raise RuntimeError("release_commit invalido")
+        req = urllib.request.Request(
+            f"{REPO_RAW_ROOT}/{release_commit}/{app_path}?v={time.time_ns()}",
+            headers={"User-Agent": f"PYRION/{APP_VERSION}", "Cache-Control": "no-cache"},
         )
-        downloaded_version = (
-            version_match.group(1).strip() if version_match else ""
-        )
-
-        if downloaded_version != remote_version:
-            raise RuntimeError(
-                "Versión remota inconsistente: "
-                f"config={remote_version}, "
-                f"app.py={downloaded_version or 'sin versión'}"
-            )
-
+        with urllib.request.urlopen(req, timeout=12) as response:
+            source = response.read().decode("utf-8-sig")
+        match = re.search(r'''APP_VERSION\s*=\s*["']([^"']+)["']''', source)
+        if not match or match.group(1) != remote_version:
+            raise RuntimeError("La version descargada no coincide con config.json")
         compile(source, "PYRION/app.py", "exec")
-
-        current_file = Path(__file__).resolve()
-        temp_file = current_file.with_suffix(current_file.suffix + ".update")
-        temp_file.write_text(source, encoding="utf-8")
-        os.replace(temp_file, current_file)
-
+        current = Path(__file__).resolve()
+        temporary = current.with_suffix(current.suffix + ".update")
+        temporary.write_text(source, encoding="utf-8")
+        os.replace(temporary, current)
         if restart:
             if os.name == "nt":
-                subprocess.Popen(
-                    [sys.executable, str(current_file), *sys.argv[1:]],
-                    cwd=str(current_file.parent),
-                )
+                subprocess.Popen([sys.executable, str(current), *sys.argv[1:]], cwd=str(current.parent))
                 return True
-
-            os.execv(
-                sys.executable,
-                [sys.executable, str(current_file), *sys.argv[1:]],
-            )
-            return False
-
+            os.execv(sys.executable, [sys.executable, str(current), *sys.argv[1:]])
         return True
-    except Exception:
+    except Exception as exc:
+        _error_log(f"Fallo en autoactualizacion: {type(exc).__name__}: {exc}")
         return False
 
 
-
-# PYRION OS 0.2.0 - escritorio ligero construido con Canvas/Tk.
-# Sin Pillow, sin compositores externos ni dependencias de interfaz adicionales.
-C_BG = "#050918"
-C_TEXT = "#dbeafe"
-C_MUTED = "#8399b9"
-C_CYAN = "#39baff"
-C_VIOLET = "#a46cff"
-C_PURPLE = "#7a51f1"
-
-APPS = [
-    ("Explorador", "DIR", "Favoritos"),
-    ("Consola", ">_", "Favoritos"),
-    ("Navegador", "WEB", "Internet"),
-    ("Editor", "TXT", "Herramientas"),
-    ("Multimedia", "PLAY", "Herramientas"),
-    ("Monitor", "CPU", "Sistema"),
-    ("Ajustes", "SET", "Sistema"),
-    ("Red", "NET", "Sistema"),
-    ("Acerca de", "OS", "Sistema"),
-]
-CATEGORIES = ("Favoritos", "Todas", "Sistema", "Herramientas", "Internet")
-
-
-def _mix(a, b, t):
-    t = max(0.0, min(1.0, t))
-    a = a.lstrip("#")
-    b = b.lstrip("#")
-    x = [int(a[i:i + 2], 16) for i in (0, 2, 4)]
-    y = [int(b[i:i + 2], 16) for i in (0, 2, 4)]
-    v = [int(x[i] * (1 - t) + y[i] * t) for i in range(3)]
-    return "#%02x%02x%02x" % tuple(v)
-
-
-def _disk_state():
-    try:
-        total, used, unused = shutil.disk_usage("/")
-        return round(used * 100 / max(total, 1)), used, total
-    except (OSError, ValueError):
-        return 0, 0, 0
-
-
-def _mem_state():
-    try:
-        raw = Path("/proc/meminfo").read_text(encoding="ascii", errors="ignore")
-        values = {}
-        for line in raw.splitlines():
-            if ":" in line:
-                key, rest = line.split(":", 1)
-                values[key] = int(rest.strip().split()[0])
-        total = values.get("MemTotal", 0)
-        free = values.get("MemAvailable", values.get("MemFree", 0))
-        if total:
-            return round(100 * (total - free) / total), total // 1024
-    except (OSError, ValueError, IndexError):
-        pass
-    if os.name == "nt":
+def _mem_usage():
+    if os.name != "nt":
+        try:
+            values = {}
+            for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+                key, _, rest = line.partition(":")
+                if rest:
+                    values[key] = int(rest.strip().split()[0])
+            total = values.get("MemTotal", 0)
+            free = values.get("MemAvailable", values.get("MemFree", 0))
+            if total:
+                return round(100.0 * (total-free) / total), round(total / 1024)
+        except (OSError, ValueError, IndexError):
+            pass
+    else:
         try:
             import ctypes
-            class MemInfo(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-            info = MemInfo()
-            info.dwLength = ctypes.sizeof(MemInfo)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(info)):
-                return info.dwMemoryLoad, round(info.ullTotalPhys / (1024 ** 2))
+            class MemStatus(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+                    (name, ctypes.c_ulonglong) for name in (
+                        "total_physical", "free_physical", "total_page", "free_page",
+                        "total_virtual", "free_virtual", "extended")]
+            data = MemStatus()
+            data.length = ctypes.sizeof(MemStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(data)):
+                return int(data.load), round(data.total_physical / (1024*1024))
         except Exception:
             pass
     return None, 0
 
 
-def _cpu_sample():
+def _cpu_ticks():
     try:
-        values = Path("/proc/stat").read_text(encoding="ascii").splitlines()[0].split()
-        numbers = [int(v) for v in values[1:]]
-        return sum(numbers), numbers[3] + (numbers[4] if len(numbers) > 4 else 0)
-    except (OSError, ValueError, IndexError):
-        return None
+        if os.name == "nt":
+            import ctypes
+            a, b, c = (ctypes.c_ulonglong() for _ in range(3))
+            result = ctypes.windll.kernel32.GetSystemTimes(
+                ctypes.byref(a), ctypes.byref(b), ctypes.byref(c))
+            if result:
+                total = int(a.value+b.value+c.value)
+                return total, int(a.value)
+        else:
+            numbers = list(map(int, Path("/proc/stat").read_text(encoding="ascii")
+                                   .splitlines()[0].split()[1:]))
+            total = sum(numbers)
+            return total, numbers[3] + (numbers[4] if len(numbers) > 4 else 0)
+    except (OSError, ValueError, IndexError, AttributeError):
+        pass
+    return None
 
+
+def _disk_usage():
+    try:
+        location = Path.home().anchor if os.name == "nt" else "/"
+        info = shutil.disk_usage(location)
+        return round(info.used*100/max(info.total,1)), info.used, info.total
+    except (OSError, ValueError):
+        return None, 0, 0
+
+
+def _network_state():
+    try:
+        names = [name for _, name in socket.if_nameindex() if name not in ("lo", "lo0")]
+    except (OSError, AttributeError):
+        return None, "Interfaces no disponibles"
+    if not names:
+        return False, "Sin interfaces activas"
+    if os.name != "nt":
+        active = []
+        for name in names:
+            try:
+                if (Path("/sys/class/net") / name / "operstate").read_text().strip() == "up":
+                    active.append(name)
+            except OSError:
+                continue
+        return bool(active), ", ".join(active[:2]) if active else "Enlace inactivo"
+    return None, f"{len(names)} adaptador(es) detectado(s)"
+
+
+def _png_chunk(kind, payload):
+    return (struct.pack(">I", len(payload)) + kind + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff))
+
+
+def _photo_rgba(parent, w, h, rgba_rows):
+    """Generate a transparent PNG using only stdlib, then load into Tk PhotoImage."""
+    data = bytearray()
+    for row in rgba_rows:
+        data.append(0)  # PNG filter = none
+        data.extend(row)
+    png = (b"\x89PNG\r\n\x1a\n"
+           + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+           + _png_chunk(b"IDAT", zlib.compress(bytes(data), 6))
+           + _png_chunk(b"IEND", b""))
+    return tk.PhotoImage(master=parent, data=base64.b64encode(png))
+
+
+def _orb_texture(parent, diameter):
+    """Rim-lit sphere and specular reflection; transparent outside the circle."""
+    diameter = max(80, int(diameter))
+    radius = diameter/2.0 - 3
+    mid = (diameter-1)/2.0
+    rows = []
+    for y in range(diameter):
+        line = bytearray()
+        ny = (y-mid)/radius
+        for x in range(diameter):
+            nx = (x-mid)/radius
+            sq = nx*nx + ny*ny
+            if sq > 1:
+                line.extend((0, 0, 0, 0))
+                continue
+            nz = math.sqrt(max(0, 1-sq))
+            # Soft studio light from the upper-left and a blue lower-right rim.
+            main = max(0.0, -.43*nx-.58*ny+.69*nz)
+            cool = max(0.0, .74*nx+.20*ny+.35*nz)
+            spec = math.exp(-((nx+.31)**2+(ny+.39)**2)/.042)
+            purple = _clamp(.47 + ny*.44 - nx*.26)
+            base_r = 31 + 45*purple
+            base_g = 42 + 23*(1-purple)
+            base_b = 113 + 28*main
+            light = 95*main**1.85
+            rim = (1-nz)**2.1
+            r = int(_clamp((base_r + light*.66 + 102*spec + 59*rim)/255)*255)
+            g = int(_clamp((base_g + light*1.02 + 129*spec + 89*cool*rim)/255)*255)
+            b = int(_clamp((base_b + light*1.12 + 135*spec + 99*rim)/255)*255)
+            alpha = int(255*_clamp((1-sq)*radius/1.4))
+            line.extend((r, g, b, alpha))
+        rows.append(line)
+    return _photo_rgba(parent, diameter, diameter, rows)
 
 class PyrionApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} {APP_VERSION}")
-        self.configure(bg=C_BG)
+        self.title(f"{APP_NAME}  {APP_VERSION}")
+        self.configure(bg=BG)
         self.windowed = "--windowed" in sys.argv or os.environ.get("PYRION_WINDOWED") == "1"
         self.left_open = True
         self.right_open = True
         self.core_open = False
         self.detail = None
         self.category = "Favoritos"
-        self.status = "Sistema preparado"
-        self.status_until = 0.0
+        self.page = 0
+        self.notifications = [
+            ("Escritorio PYRION preparado", "Sistema"),
+            ("Controles interactivos disponibles", "Interfaz"),
+        ]
         self.sessions = []
-        self.cpu_prev = _cpu_sample()
+        self.cpu_prev = _cpu_ticks()
         self.cpu_percent = None
         self.ram_percent = None
         self.ram_total = 0
-        self.disk_percent = 0
+        self.disk_percent = None
         self.disk_used = 0
         self.disk_total = 0
-        self.net_up = False
-        self.pulse_phase = 0.0
-        self.render_job = None
-        self.last_render_w = 0
-        self.last_render_h = 0
-        self.w = 0
-        self.h = 0
+        self.net_connected = None
+        self.net_label = "Detectando interfaces"
+        self.w = 1320
+        self.h = 720
         self.s = 1.0
-
-        # La ventana es el escritorio: permanece detrás de programas externos.
+        self.compact = False
+        self.hit_seq = 0
+        self.render_job = None
+        self._lower_job = None
+        self._tick_job = None
+        self._animate_job = None
+        self._geom_job = None
+        self.orb_photo = None
+        self.orb_photo_size = 0
+        self.orb_glow_ids = []
+        self.pulse_t = 0.0
+        self.has_been_drawn = False
         self._force_fullscreen()
 
-        self.canvas = tk.Canvas(
-            self, bg=C_BG, bd=0, highlightthickness=0, relief="flat"
-        )
+        self.canvas = tk.Canvas(self, bg=BG, bd=0, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
-        self.canvas.bind("<Configure>", self._schedule_render)
+        self.canvas.bind("<Configure>", self._schedule_draw)
+        self.canvas.bind("<Button-1>", self._canvas_background_click)
+        self.canvas.bind("<MouseWheel>", self._wheel_apps)
+        self.canvas.bind("<Button-4>", lambda e: self._page_shift(-1))
+        self.canvas.bind("<Button-5>", lambda e: self._page_shift(+1))
         self.bind("<Escape>", self._escape)
-        self.bind("<F11>", self._toggle_windowed)
+        self.bind("<F11>", self._toggle_window_mode)
         self.bind("<Control-Alt-t>", lambda e: self.launch("Consola"))
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
-        self.search_var = tk.StringVar()
         self.search = tk.Entry(
-            self.canvas, textvariable=self.search_var, bg="#0b1a32",
-            fg=C_TEXT, insertbackground=C_TEXT, selectbackground="#275483",
-            relief="flat", bd=0, font=("DejaVu Sans", 10),
-            highlightthickness=1, highlightbackground="#23406c",
-            highlightcolor="#48a7fa"
+            self.canvas, bg="#0d1c39", fg="#829dc4", insertbackground=CYAN,
+            font=("DejaVu Sans", 10), relief="flat", bd=0,
+            highlightbackground="#29476f", highlightcolor="#4cb9f9",
+            highlightthickness=1, selectbackground="#315a91",
         )
-        self.search.bind("<KeyRelease>", lambda e: self._schedule_render())
-        self.search.bind("<Return>", lambda e: self._launch_first_search())
-        self.after(180, self._draw)
-        self.after(1100, self._keep_in_background)
-        self.after(1000, self._tick)
-        self.after(150, self._pulse)
+        self.search_is_placeholder = True
+        self.search.insert(0, "Buscar aplicaciones...")
+        self.search.bind("<FocusIn>", self._search_focus_in)
+        self.search.bind("<FocusOut>", self._search_focus_out)
+        self.search.bind("<KeyRelease>", self._search_changed)
+        self.search.bind("<Return>", self._search_launch)
+        self.search.bind("<Escape>", self._search_escape)
+
+        self.render_job = self.after(180, self._draw)
+        self._tick_job = self.after(450, self._tick)
+        self._animate_job = self.after(200, self._animate)
+        self._lower_job = self.after(800, self._keep_in_background)
 
     def _force_fullscreen(self):
         self.update_idletasks()
         if self.windowed:
-            self.geometry("1260x750")
+            self.geometry(os.environ.get("PYRION_GEOMETRY", "1320x720"))
             self.minsize(760, 480)
             return
         if os.name == "nt":
             self.attributes("-fullscreen", True)
             return
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.overrideredirect(True)
         self.geometry(f"{sw}x{sh}+0+0")
         try:
             self.attributes("-topmost", False)
         except tk.TclError:
             pass
-        self.after(100, lambda: self.geometry(
-            f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0"
-        ))
+        self._geom_job = self.after(100, lambda: self.geometry(
+            f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0"))
 
-    def _toggle_windowed(self, _event=None):
-        # Útil para probar PYRION en Windows/Linux sin perder acceso al escritorio.
-        if os.name != "nt" and not self.windowed:
-            self.overrideredirect(False)
-        if os.name == "nt":
-            self.attributes("-fullscreen", False)
+    def _toggle_window_mode(self, _event=None):
+        if self.windowed:
+            return
         self.windowed = True
-        self.geometry("1260x750")
-        self._schedule_render()
+        try:
+            if os.name == "nt":
+                self.attributes("-fullscreen", False)
+            else:
+                self.overrideredirect(False)
+            self.geometry("1320x720")
+            self.minsize(760, 480)
+        except tk.TclError:
+            pass
+        self._schedule_draw()
 
     def _keep_in_background(self):
         try:
             if not self.windowed:
                 self.attributes("-topmost", False)
                 self.lower()
-            self.after(1200, self._keep_in_background)
+            self._lower_job = self.after(1200, self._keep_in_background)
         except tk.TclError:
             pass
 
-    def _escape(self, _event=None):
-        if self.detail:
-            self.detail = None
-        elif self.core_open:
-            self.core_open = False
-        else:
-            return
-        self._schedule_render()
+    def _search_focus_in(self, _event=None):
+        if self.search_is_placeholder:
+            self.search.delete(0, "end")
+            self.search.configure(fg=TXT)
+            self.search_is_placeholder = False
 
-    def _schedule_render(self, _event=None):
+    def _search_focus_out(self, _event=None):
+        if not self.search.get().strip():
+            self.search_is_placeholder = True
+            self.search.configure(fg="#829dc4")
+            self.search.insert(0, "Buscar aplicaciones...")
+        self._schedule_draw()
+
+    def _search_changed(self, _event=None):
+        self.page = 0
+        self._schedule_draw()
+
+    def _search_launch(self, _event=None):
+        matches = self._filtered_apps()
+        if matches:
+            self.launch(matches[0][0])
+
+    def _search_escape(self, _event=None):
+        self.search.delete(0, "end")
+        self.search.focus_set()
+        self.page = 0
+        self._schedule_draw()
+        return "break"
+
+    def _search_term(self):
+        return "" if self.search_is_placeholder else self.search.get().strip().lower()
+
+    def _filtered_apps(self):
+        query = self._search_term()
+        output = []
+        for item in APP_CATALOG:
+            name, icon, group = item
+            # La busqueda siempre es global, independientemente de la categoria.
+            if not query:
+                if self.category == "Favoritos" and name not in FAVORITES:
+                    continue
+                if self.category not in ("Todas", "Favoritos") and group != self.category:
+                    continue
+            elif query not in name.lower() and query not in group.lower():
+                continue
+            output.append(item)
+        return output
+
+    def _schedule_draw(self, _event=None):
         if self.render_job is not None:
             try:
                 self.after_cancel(self.render_job)
             except tk.TclError:
                 pass
-        self.render_job = self.after(85, self._draw)
+        self.render_job = self.after(55, self._draw)
 
-    def _scaled(self, value):
-        return max(0.72, min(1.24, value))
+    def _animate(self):
+        try:
+            self.pulse_t += 0.18
+            if self.has_been_drawn:
+                for i, (object_id, base) in enumerate(self.orb_glow_ids):
+                    d = (math.sin(self.pulse_t + i*.45) + 1) * 3*self.s
+                    cx = self.w/2
+                    cy = self.h*.475
+                    size = base+d
+                    self.canvas.coords(object_id, cx-size, cy-size, cx+size, cy+size)
+            self._animate_job = self.after(150, self._animate)
+        except tk.TclError:
+            pass
+
+    def _tick(self):
+        try:
+            tick = _cpu_ticks()
+            if tick is not None and self.cpu_prev is not None and tick[0] > self.cpu_prev[0]:
+                delta = tick[0] - self.cpu_prev[0]
+                idle = tick[1] - self.cpu_prev[1]
+                self.cpu_percent = round(_clamp((delta-idle)/delta)*100)
+            self.cpu_prev = tick
+            self.ram_percent, self.ram_total = _mem_usage()
+            self.disk_percent, self.disk_used, self.disk_total = _disk_usage()
+            self.net_connected, self.net_label = _network_state()
+            self.sessions = [(label,p) for label,p in self.sessions if p.poll() is None][-16:]
+            self._schedule_draw()
+        except Exception:
+            _error_log(traceback.format_exc())
+        finally:
+            try:
+                self._tick_job = self.after(3500, self._tick)
+            except tk.TclError:
+                pass
 
     def _font(self, size, bold=False):
-        return ("DejaVu Sans", max(8, round(size * self.s)), "bold" if bold else "normal")
+        return ("DejaVu Sans", max(8, round(size*self.s)), "bold" if bold else "normal")
 
-    def _text(self, x, y, value, size=12, fill=C_TEXT, anchor="nw", bold=False, tag=None, width=None):
-        kw = {}
-        if tag:
-            kw["tags"] = (tag,)
-        if width:
+    def _text(self, x, y, value, size=12, color=TXT, anchor="nw", bold=False,
+              tags=(), width=None):
+        kw = {"tags": tags}
+        if width is not None:
             kw["width"] = width
-        return self.canvas.create_text(
-            x, y, text=str(value), font=self._font(size, bold),
-            fill=fill, anchor=anchor, **kw
-        )
+        return self.canvas.create_text(x, y, text=str(value), fill=color, anchor=anchor,
+                                       font=self._font(size, bold), **kw)
 
-    def _rect(self, x1, y1, x2, y2, fill, outline="", r=0, tag=None, width=1):
-        kw = {"tags": (tag,)} if tag else {}
-        if r <= 0:
-            return self.canvas.create_rectangle(
-                x1, y1, x2, y2, fill=fill, outline=outline, width=width, **kw
-            )
-        r = min(r, (x2-x1)/2, (y2-y1)/2)
-        pts = [x1+r,y1, x2-r,y1, x2,y1, x2,y1+r,
-               x2,y2-r, x2,y2, x2-r,y2, x1+r,y2, x1,y2,
-               x1,y2-r, x1,y1+r, x1,y1]
-        return self.canvas.create_polygon(
-            pts, fill=fill, outline=outline, width=width, smooth=True, **kw
-        )
+    def _line(self, x1,y1,x2,y2,color,width=1,tags=()):
+        return self.canvas.create_line(x1,y1,x2,y2,fill=color,width=width,tags=tags)
 
-    def _hit(self, tag, func):
-        self.canvas.tag_bind(tag, "<Button-1>", lambda e: func())
-        self.canvas.tag_bind(tag, "<Enter>", lambda e: self.canvas.configure(cursor="hand2"))
-        self.canvas.tag_bind(tag, "<Leave>", lambda e: self.canvas.configure(cursor=""))
+    def _rounded(self,x1,y1,x2,y2,fill,outline="",radius=12,stroke=1,tags=()):
+        radius=min(radius,max(0,(x2-x1)/2),max(0,(y2-y1)/2))
+        if radius < 1:
+            return self.canvas.create_rectangle(x1,y1,x2,y2,fill=fill,outline=outline,
+                                                width=stroke,tags=tags)
+        points=[x1+radius,y1, x2-radius,y1, x2,y1, x2,y1+radius,
+                x2,y2-radius, x2,y2, x2-radius,y2, x1+radius,y2,
+                x1,y2,x1,y2-radius, x1,y1+radius, x1,y1]
+        return self.canvas.create_polygon(points,smooth=True,fill=fill,outline=outline,
+                                          width=stroke,tags=tags)
+
+    def _tag(self, action, target=None, accent=CYAN):
+        tag = "tap_" + str(self.hit_seq)
+        self.hit_seq += 1
+        self.canvas.tag_bind(tag,"<Button-1>",lambda event: action())
+        self.canvas.tag_bind(tag,"<Enter>",lambda event: self._hover(target,accent,True))
+        self.canvas.tag_bind(tag,"<Leave>",lambda event: self._hover(target,accent,False))
+        return tag
+
+    def _hit(self, tag, action, target=None, accent=CYAN):
+        self.canvas.tag_bind(tag,"<Button-1>",lambda event: action())
+        self.canvas.tag_bind(tag,"<Enter>",lambda event: self._hover(target,accent,True))
+        self.canvas.tag_bind(tag,"<Leave>",lambda event: self._hover(target,accent,False))
+
+    def _hover(self, item, color, entered):
+        try:
+            self.canvas.configure(cursor="hand2" if entered else "")
+            if item is not None:
+                self.canvas.itemconfigure(item,
+                    outline=color if entered else "#29466e",
+                    width=1.8*self.s if entered else 1)
+        except tk.TclError:
+            pass
+
+    def _button(self,x1,y1,x2,y2,label,action,selected=False,accent=CYAN,size=10):
+        tag="tap_"+str(self.hit_seq)
+        self.hit_seq += 1
+        fill = "#253c6c" if selected else "#142648"
+        border = accent if selected else "#29466e"
+        obj=self._rounded(x1,y1,x2,y2,fill,border,9*self.s,1.2*self.s,(tag,))
+        self._text((x1+x2)/2,(y1+y2)/2,label,size,
+                   TXT if selected else "#bdcfee",anchor="center",tags=(tag,))
+        self._hit(tag,action,obj,accent)
+        return obj
 
     def _background(self):
-        c = self.canvas
-        # Fondo nocturno ambiental dibujado nativamente (sin decodificadores).
-        bands = 72
+        c=self.canvas
+        bands=105
         for i in range(bands):
-            t = i / (bands - 1)
-            color = _mix("#050918", "#0a1532", t * 0.70)
-            y0 = self.h * i / bands
-            y1 = self.h * (i+1) / bands + 1
-            c.create_rectangle(0, y0, self.w, y1, fill=color, outline="")
-        # Luz central y reflejos de suelo con geometría de bajo coste.
-        cx, cy = self.w/2, self.h*.72
-        for j in range(35, 0, -1):
-            rx = self.w * (.05 + j*.0055)
-            ry = self.h * (.009 + j*.00125)
-            glow = _mix("#071229", "#15336c", 1-j/35)
-            c.create_oval(cx-rx,cy-ry,cx+rx,cy+ry,outline=glow,width=1)
-        for i in range(24):
-            x = (i * 421 + 117) % max(self.w,1)
-            y = ((i * 169 + 37) % max(int(self.h*.6),1))
-            rad = 1 + (i % 3 == 0)
-            c.create_oval(x-rad,y-rad,x+rad,y+rad,fill="#17335b",outline="")
-        c.create_line(self.w*.22,self.h*.92,self.w*.78,self.h*.92,fill="#122c61",width=2)
+            p=i/(bands-1)
+            base=_blend("#050918","#091630",p*.9)
+            if p>.63:
+                base=_blend(base,"#0e1741",(p-.63)*.22)
+            y1=self.h*i/bands
+            y2=self.h*(i+1)/bands+1
+            c.create_rectangle(0,y1,self.w,y2,fill=base,outline="")
+        cx=self.w*.5
+        cy=self.h*.72
+        # Un brillo ambiental plano, en lugar de muchas lineas sobre el suelo.
+        for scale,color in ((.24,"#0a1731"),(.17,"#101f46"),(.09,"#173267")):
+            xr=self.w*scale
+            yr=self.h*.017*scale/.24
+            c.create_oval(cx-xr,cy-yr,cx+xr,cy+yr,fill=color,outline="")
+        for i in range(13):
+            x=(i*487+113)%self.w
+            y=(i*167+29)%(self.h*.57)
+            d=(1 if i%3 else 2)*self.s
+            c.create_oval(x-d,y-d,x+d,y+d,fill="#163052",outline="")
+        self._line(self.w*.16,self.h*.91,self.w*.84,self.h*.91,"#10234a",1)
 
-    def _panel_outline(self, side):
-        c = self.canvas
-        if side == "left":
-            points = [
-                self.w*.026,self.h*.11, self.w*.365,self.h*.255,
-                self.w*.365,self.h*.835, self.w*.026,self.h*.91
-            ]
-            glow = C_VIOLET
-            inner = "#32419b"
+    def _geometry(self,side):
+        # Shallower perspective leaves sufficient vertical room for real controls.
+        pad=max(14,19*self.s)
+        if side=="left":
+            x0,x1=pad,self.w*.377
+            top0,top1=self.h*.088,self.h*.158
+            bottom0,bottom1=self.h*.944,self.h*.856
         else:
-            points = [
-                self.w*.635,self.h*.255, self.w*.974,self.h*.11,
-                self.w*.974,self.h*.91, self.w*.635,self.h*.835
-            ]
-            glow = C_CYAN
-            inner = "#276db3"
-        c.create_polygon(points,fill="#09142c",outline=inner,width=max(2,self.s*3))
-        c.create_polygon(points,fill="",outline=glow,width=max(1,self.s*1.4))
-        if side == "left":
-            c.create_line(self.w*.028,self.h*.12,self.w*.028,self.h*.89,fill="#6966dd",width=3)
-        else:
-            c.create_line(self.w*.972,self.h*.12,self.w*.972,self.h*.89,fill="#47b7ff",width=3)
+            x0,x1=self.w*.623,self.w-pad
+            top0,top1=self.h*.158,self.h*.088
+            bottom0,bottom1=self.h*.856,self.h*.944
+        return x0,x1,top0,top1,bottom0,bottom1
 
-    def _button(self, x1,y1,x2,y2,label,action,fill="#10223f",edge="#21416e",size=11,fg=C_TEXT):
-        tag = "hit_" + str(self.hit_counter)
-        self.hit_counter += 1
-        self._rect(x1,y1,x2,y2,fill,edge,r=8*self.s,tag=tag)
-        self._text((x1+x2)/2,(y1+y2)/2,label,size,fg,anchor="center",tag=tag)
-        self._hit(tag,action)
+    def _panel(self,side):
+        x0,x1,t0,t1,b0,b1=self._geometry(side)
+        c=self.canvas
+        coords=[x0,t0,x1,t1,x1,b1,x0,b0]
+        accent=PURPLE if side=="left" else CYAN
+        base="#171139" if side=="left" else "#08284a"
+        c.create_polygon(coords,fill="",outline=_blend(BG,accent,.22),width=11*self.s)
+        c.create_polygon(coords,fill="",outline=_blend(BG,accent,.43),width=6*self.s)
+        c.create_polygon(coords,fill="#0b152c",outline="",width=0)
+        bands=68
+        for i in range(bands):
+            f=i/bands
+            q=(i+1)/bands
+            y00=t0+(b0-t0)*f
+            y10=t1+(b1-t1)*f
+            y01=t0+(b0-t0)*q+1
+            y11=t1+(b1-t1)*q+1
+            upper=_blend("#102447",base,.25 if side=="left" else .12)
+            lower="#091329" if side=="left" else "#091831"
+            color=_blend(upper,lower,f*.94)
+            c.create_polygon([x0,y00,x1,y10,x1,y11,x0,y01],fill=color,outline="")
+        c.create_polygon(coords,fill="",outline=_blend(accent,"#81aefb",.32),width=1.7*self.s)
+        c.create_line(x0+2*self.s,t0+8*self.s,x0+2*self.s,b0-8*self.s,
+                      fill=_blend(accent,BG,.28),width=2.8*self.s)
+        c.create_line(x0+7*self.s,t0+11*self.s,x0+7*self.s,b0-11*self.s,
+                      fill=_blend(accent,BG,.75),width=.9*self.s)
+        c.create_line(x0+13*self.s,t0+6*self.s,x1-10*self.s,t1+4*self.s,
+                      fill=_blend(accent,"#b5d8ff",.32),width=.95*self.s)
+        content_l=x0+37*self.s
+        content_r=x1-32*self.s
+        content_t=max(t0,t1)+18*self.s
+        content_b=min(b0,b1)-15*self.s
+        return content_l,content_t,content_r,content_b
+
+    def _draw_icon(self,kind,cx,cy,size,color,tags=()):
+        c=self.canvas
+        r=size/2
+        dark="#102a52"
+        if kind=="folder":
+            c.create_polygon(cx-r,cy-r*.40,cx-r*.3,cy-r*.40,
+                             cx-r*.05,cy-r*.68,cx+r*.8,cy-r*.68,
+                             cx+r,cy-r*.38,cx+r,cy+r*.67,
+                             cx-r,cy+r*.67,fill=color,outline="#c3e9ff",width=.7,tags=tags)
+            c.create_line(cx-r*.70,cy-r*.16,cx+r*.72,cy-r*.16,
+                          fill="#b8eaff",width=1.1,tags=tags)
+        elif kind=="terminal":
+            self._rounded(cx-r,cy-r*.76,cx+r,cy+r*.76,dark,color,4*self.s,1.6,tags)
+            self._text(cx-r*.62,cy-r*.12,">_",12,color,"w",True,tags)
+        elif kind=="browser":
+            c.create_oval(cx-r*.87,cy-r*.87,cx+r*.87,cy+r*.87,
+                          fill=dark,outline=color,width=1.9,tags=tags)
+            c.create_line(cx-r*.81,cy,cx+r*.81,cy,fill=color,width=1,tags=tags)
+            c.create_arc(cx-r*.44,cy-r*.87,cx+r*.44,cy+r*.87,
+                         start=90,extent=180,style="arc",outline=color,width=1,tags=tags)
+            c.create_arc(cx-r*.44,cy-r*.87,cx+r*.44,cy+r*.87,
+                         start=270,extent=180,style="arc",outline=color,width=1,tags=tags)
+        elif kind=="editor":
+            c.create_polygon(cx-r*.72,cy-r,cx+r*.40,cy-r,cx+r*.72,cy-r*.65,
+                             cx+r*.72,cy+r,cx-r*.72,cy+r,
+                             fill=dark,outline=color,width=1.6,tags=tags)
+            for n in range(3):
+                yy=cy-r*.39+n*r*.42
+                c.create_line(cx-r*.41,yy,cx+r*.35,yy,fill=color,width=1,tags=tags)
+        elif kind=="media":
+            c.create_oval(cx-r*.90,cy-r*.90,cx+r*.90,cy+r*.90,
+                          fill=dark,outline=color,width=1.5,tags=tags)
+            c.create_polygon(cx-r*.25,cy-r*.52,cx+r*.61,cy,
+                             cx-r*.25,cy+r*.52,fill=color,outline="",tags=tags)
+        elif kind=="monitor":
+            c.create_line(cx-r,cy,cx-r*.53,cy,cx-r*.33,cy-r*.50,
+                          cx-r*.05,cy+r*.49,cx+r*.22,cy-r*.28,
+                          cx+r*.40,cy,cx+r,cy,fill=color,width=2,tags=tags)
+        elif kind=="settings":
+            c.create_oval(cx-r*.77,cy-r*.77,cx+r*.77,cy+r*.77,
+                          outline=color,width=3,tags=tags)
+            c.create_oval(cx-r*.24,cy-r*.24,cx+r*.24,cy+r*.24,
+                          fill=color,outline="",tags=tags)
+            for i in range(8):
+                th=math.pi*i/4
+                c.create_line(cx+math.cos(th)*r*.70,cy+math.sin(th)*r*.70,
+                              cx+math.cos(th)*r*1.06,cy+math.sin(th)*r*1.06,
+                              fill=color,width=2,tags=tags)
+        elif kind=="network":
+            for x,y in ((cx,cy-r*.86),(cx-r*.86,cy+r*.73),(cx+r*.86,cy+r*.73)):
+                c.create_oval(x-3*self.s,y-3*self.s,x+3*self.s,y+3*self.s,
+                              fill=color,outline="",tags=tags)
+            c.create_line(cx,cy-r*.78,cx-r*.80,cy+r*.67,
+                          cx+r*.80,cy+r*.67,cx,cy-r*.78,fill=color,width=1.6,tags=tags)
+        else:
+            c.create_oval(cx-r*.80,cy-r*.80,cx+r*.80,cy+r*.80,
+                          fill=dark,outline=color,width=1.5,tags=tags)
+            self._text(cx,cy,"i",15,color,anchor="center",bold=True,tags=tags)
 
     def _left_panel(self):
         if not self.left_open:
             self.search.place_forget()
-            self._button(5,self.h*.36,42*self.s,self.h*.64,"APP\n›",
-                         lambda: self._toggle_panel("left"),"#152450","#8560ec",12)
+            self._button(12*self.s,self.h*.45,105*self.s,self.h*.45+38*self.s,
+                         "APPS  >",lambda:self._toggle_panel("left"),accent=PURPLE)
             return
-        self._panel_outline("left")
-        x0=self.w*.066
-        outer_right=self.w*.365
-        self._text(x0,self.h*.20,"◈  PYRION OS",20,C_CYAN,bold=True)
-        self._text(x0,self.h*.255,"APLICACIONES",10,C_MUTED,bold=True)
-        search_x=self.w*.103
-        search_y=self.h*.295
-        search_w=max(96,self.w*.244)
-        self.search.place(x=round(search_x),y=round(search_y),
-                          width=round(search_w),height=max(22,round(29*self.s)))
+        l,t,r,b=self._panel("left")
+        self._text(l,t+4*self.s,"P Y R I O N",20,"#cfd9ff",bold=True)
+        self._text(l,t+34*self.s,"APP CENTER  /  DESKTOP",9,"#869fc8")
+        self._text(r,t+13*self.s,"03",9,PURPLE,anchor="ne",bold=True)
+        self._button(r-26*self.s,t+42*self.s,r,t+69*self.s,"<",
+                     lambda:self._toggle_panel("left"),accent=PURPLE,size=11)
+        search_y=t+75*self.s
+        search_h=32*self.s
+        self.search.place(x=round(l),y=round(search_y),
+                          width=max(140,round(r-l)),height=round(search_h))
         self.search.lift()
-
-        self._button(self.w*.337,self.h*.286,self.w*.36,self.h*.333,"‹",
-                     lambda: self._toggle_panel("left"),"#14213e","#5742ac",12)
-        start_y=self.h*.365
-        nav_x=x0
-        nav_w=self.w*.105
-        for i, category in enumerate(CATEGORIES):
-            y=start_y + i*self.h*.086
-            selected=self.category == category
-            self._button(nav_x,y,nav_x+nav_w,y+max(25,34*self.s),
-                         category,
-                         lambda cat=category:self._category(cat),
-                         "#303d78" if selected else "#0d1c37",
-                         "#7268d1" if selected else "#183960",
-                         10,"#dfeaff" if selected else "#a9c1e8")
-        query=self.search_var.get().strip().lower()
-        filtered=[item for item in APPS if
-                  (self.category == "Todas" or
-                   (self.category == "Favoritos" and item[0] in
-                    ("Explorador","Consola","Navegador","Editor","Monitor","Ajustes")) or
-                   item[2] == self.category)
-                  and (query in item[0].lower() or query in item[1].lower())]
-        grid_x=self.w*.18
-        grid_right=outer_right-self.w*.011
-        count=3 if self.w >= 1150 else 2
-        gap=6*self.s
-        usable=grid_right-grid_x
-        tile_w=(usable-gap*(count-1))/count
-        start=self.h*.368
-        step=self.h*.145 if count==3 else self.h*.133
-        tile_h=min(108*self.s,self.h*.129)
-        for i,(label,icon,group) in enumerate(filtered[:9]):
-            row,col=divmod(i,count)
-            xx=grid_x+col*(tile_w+gap)
-            yy=start+row*step
-            if yy+tile_h>self.h*.83:
+        body_y=t+124*self.s
+        categories_width=min(112*self.s,(r-l)*.36)
+        grid_left=l+categories_width+15*self.s
+        grid_right=r
+        nav_h=37*self.s
+        nav_step=46*self.s
+        for i,cat in enumerate(CATEGORIES):
+            y=body_y+i*nav_step
+            if y+nav_h > b-32*self.s:
                 break
-            tag="app_" + str(i)
-            self._rect(xx,yy,xx+tile_w,yy+tile_h,"#0e2043","#31518d",r=8*self.s,tag=tag)
-            self._text(xx+tile_w/2,yy+tile_h*.36,icon,18,C_CYAN,anchor="center",bold=True,tag=tag)
-            self._text(xx+tile_w/2,yy+tile_h*.75,label,9,"#cbdcfb",anchor="center",tag=tag)
-            self._hit(tag,lambda n=label:self.launch(n))
-        if not filtered:
-            self._text(grid_x+5,start+20,"Sin resultados",10,C_MUTED)
+            short={"Configuracion":"Ajustes"}.get(cat,cat)
+            self._button(l,y,l+categories_width,y+nav_h,short,
+                         lambda v=cat:self._select_category(v),
+                         selected=(cat==self.category),accent=PURPLE,size=9)
+        self._line(grid_left-7*self.s,body_y,grid_left-7*self.s,b-33*self.s,
+                   "#29365c",1)
+        apps=self._filtered_apps()
+        width=max(1,grid_right-grid_left)
+        cols=2 if width >= 160*self.s else 1
+        rows=3 if b-body_y >= 240*self.s else 2
+        usable_h=b-body_y-34*self.s
+        gap_x=10*self.s
+        gap_y=10*self.s
+        tile_w=(width-(cols-1)*gap_x)/cols
+        tile_h=min(94*self.s,(usable_h-(rows-1)*gap_y)/rows)
+        tile_h=max(54*self.s,tile_h)
+        per_page=cols*rows
+        pages=max(1,math.ceil(len(apps)/per_page))
+        self.page=min(self.page,pages-1)
+        visible=apps[self.page*per_page:(self.page+1)*per_page]
+        for i,(label,icon,group) in enumerate(visible):
+            row,col=divmod(i,cols)
+            x=grid_left+col*(tile_w+gap_x)
+            y=body_y+row*(tile_h+gap_y)
+            tag="app_"+str(i)
+            rect=self._rounded(x,y,x+tile_w,y+tile_h,"#13264b","#29466e",
+                               10*self.s,1.2*self.s,(tag,))
+            self._draw_icon(icon,x+tile_w/2,y+tile_h*.37,
+                            min(31*self.s,tile_h*.37),
+                            ("#5ed4ff" if i%3!=1 else "#b58bff"),(tag,))
+            display_name="Configuraci\u00f3n" if label=="Configuracion" else label
+            self._text(x+tile_w/2,y+tile_h*.78,display_name,9,"#d3e5ff",
+                       anchor="center",bold=False,tags=(tag,))
+            self._hit(tag,lambda n=label:self.launch(n),rect,PURPLE)
+        if not apps:
+            self._text(grid_left+5*self.s,body_y+15*self.s,
+                       "Sin resultados",10,"#9eb3d3")
+        bottom_y=b-23*self.s
+        self._text(l,bottom_y,"ARCHMOBA  /  PYRION 0.3",8,"#7689b0")
+        if pages>1:
+            step=24*self.s
+            self._button(r-step*3,bottom_y-4*self.s,r-step*2,bottom_y+19*self.s,
+                         "<",lambda:self._page_shift(-1),accent=PURPLE,size=9)
+            self._text(r-step*1.55,bottom_y+7*self.s,
+                       f"{self.page+1}/{pages}",9,"#adbee2",anchor="center")
+            self._button(r-step,bottom_y-4*self.s,r,bottom_y+19*self.s,
+                         ">",lambda:self._page_shift(1),accent=PURPLE,size=9)
 
-    def _gauge(self,cx,cy,r,percent,label,color):
-        p = max(0,min(100,percent or 0))
-        self.canvas.create_oval(cx-r,cy-r,cx+r,cy+r,outline="#1a395d",width=6*self.s)
-        self.canvas.create_arc(cx-r,cy-r,cx+r,cy+r,start=90,extent=-p*3.6,
-                               style="arc",outline=color,width=6*self.s)
-        self._text(cx,cy,f"{p}%" if percent is not None else "—",12,
-                   C_TEXT,anchor="center",bold=True)
-        self._text(cx,cy+r+11*self.s,label,10,C_MUTED,anchor="center")
+    def _gauge(self,cx,cy,r,value,label,color):
+        c=self.canvas
+        s=self.s
+        c.create_oval(cx-r,cy-r,cx+r,cy+r,
+                      outline="#1d3558",width=5*s)
+        if value is not None:
+            fraction=_clamp(value/100)
+            if fraction>.002:
+                c.create_arc(cx-r,cy-r,cx+r,cy+r,start=90,extent=-max(.5,fraction*360),
+                             style="arc",outline=color,width=5*s)
+            shown=f"{round(value)}%"
+        else:
+            shown="--"
+        self._text(cx,cy-4*s,shown,12,TXT,anchor="center",bold=True)
+        self._text(cx,cy+r+10*s,label,9,MUTED,anchor="center")
 
     def _right_panel(self):
         if not self.right_open:
-            self._button(self.w-43*self.s,self.h*.36,self.w-5,self.h*.64,
-                         "‹\nSYS",lambda:self._toggle_panel("right"),
-                         "#122d56","#3287d8",12)
+            x=self.w-109*self.s
+            self._button(x,self.h*.45,self.w-12*self.s,self.h*.45+38*self.s,
+                         "<  ESTADO",lambda:self._toggle_panel("right"),accent=CYAN)
             return
-        self._panel_outline("right")
-        x=self.w*.674
-        self._text(x,self.h*.195,datetime.now().strftime("%H:%M"),
-                   28,"#e1f3ff",bold=True)
-        self._text(x,self.h*.257,datetime.now().strftime("%d/%m/%Y"),
-                   11,C_MUTED)
-        self._button(self.w*.64,self.h*.286,self.w*.664,self.h*.333,"›",
-                     lambda:self._toggle_panel("right"),"#102c4d","#2b71ad",12)
-        self._rect(self.w*.665,self.h*.318,self.w*.949,self.h*.47,
-                   "#0b1c3b","#254e86",r=9*self.s)
-        g_y=self.h*.389
-        cols=(.726,.81,.894)
-        for cx,pc,name,clr in zip(cols,
-                                  (self.cpu_percent,self.ram_percent,self.disk_percent),
-                                  ("CPU","RAM","DISCO"),
-                                  ("#3fbcff","#8b8aff","#55d5f2")):
-            self._gauge(self.w*cx,g_y,24*self.s,pc,name,clr)
+        l,t,r,b=self._panel("right")
+        self._text(l,t+1*self.s,"CENTRO DE SISTEMA",10,CYAN,bold=True)
+        self._text(l,t+21*self.s,datetime.now().strftime("%H:%M"),27,TXT,bold=True)
+        self._text(r,t+42*self.s,datetime.now().strftime("%d / %m / %Y"),10,
+                   "#9eb9e0",anchor="ne")
+        self._button(r-28*self.s,t+4*self.s,r,t+31*self.s,">",
+                     lambda:self._toggle_panel("right"),accent=CYAN,size=12)
+        # Real-time hardware gauges.
+        m_top=t+90*self.s
+        m_bottom=m_top+105*self.s
+        self._rounded(l,m_top,r,m_bottom,"#102546","#2b5687",12*self.s,1)
+        self._text(l+13*self.s,m_top+10*self.s,"RENDIMIENTO",9,"#9fc4ee",bold=True)
+        metric_y=m_top+56*self.s
+        available=r-l
+        for i,(name,percent,color) in enumerate((
+            ("CPU",self.cpu_percent,CYAN),
+            ("RAM",self.ram_percent,PURPLE),
+            ("DISCO",self.disk_percent,"#6ee1cd"),
+        )):
+            cx=l+available*(i+.5)/3
+            self._gauge(cx,metric_y,min(24*self.s,available/13),percent,name,color)
+        # Network link state (not confused with confirmed Internet access).
+        net_top=m_bottom+11*self.s
+        net_bottom=net_top+58*self.s
+        self._rounded(l,net_top,r,net_bottom,"#101f3b","#294772",10*self.s,1)
+        state="ACTIVA" if self.net_connected else "SIN ENLACE" if self.net_connected is False else "DESCONOCIDA"
+        dot=GREEN if self.net_connected else AMBER
+        self.canvas.create_oval(l+14*self.s,net_top+14*self.s,
+                                l+22*self.s,net_top+22*self.s,fill=dot,outline="")
+        self._text(l+31*self.s,net_top+11*self.s,"RED LOCAL  /  "+state,10,TXT,bold=True)
+        self._text(l+14*self.s,net_top+34*self.s,self.net_label[:58],9,
+                   "#94aacd",width=max(90,r-l-27*self.s))
+        # Notifications: always real messages generated by PYRION actions.
+        note_top=net_bottom+11*self.s
+        note_bottom=b-58*self.s
+        if note_bottom-note_top > 62*self.s:
+            self._rounded(l,note_top,r,note_bottom,"#0e1d37","#263e66",10*self.s,1)
+            self._text(l+13*self.s,note_top+11*self.s,"ACTIVIDAD RECIENTE",10,CYAN,bold=True)
+            for i,(message,source) in enumerate(self.notifications[-2:][::-1]):
+                yy=note_top+(39+i*24)*self.s
+                if yy+18*self.s > note_bottom:
+                    break
+                self.canvas.create_oval(l+13*self.s,yy+3*self.s,
+                                        l+18*self.s,yy+8*self.s,fill=GREEN if i==0 else PURPLE,
+                                        outline="")
+                self._text(l+25*self.s,yy,message[:55],9,"#c8d9f6",
+                           width=max(130,r-l-38*self.s))
+        # Real quick actions instead of static decorative text.
+        action_y=b-45*self.s
+        action_h=38*self.s
+        choices=(
+            ("ESPACIO",self._hide_both),
+            ("AUDIO",lambda:self._show_detail("Audio")),
+            ("RED",lambda:self._show_detail("Red")),
+            ("ENERGIA",lambda:self._show_detail("Energia")),
+        )
+        gap=7*self.s
+        bw=((r-l)-gap*3)/4
+        for i,(label,cmd) in enumerate(choices):
+            xx=l+i*(bw+gap)
+            self._button(xx,action_y,xx+bw,action_y+action_h,label,cmd,
+                         accent=CYAN,size=8)
 
-        self._rect(self.w*.665,self.h*.493,self.w*.949,self.h*.69,
-                   "#0b1b37","#254675",r=8*self.s)
-        self._text(self.w*.68,self.h*.51,"NOTIFICACIONES",11,C_CYAN,bold=True)
-        short=self.status
-        if len(short)>70:
-            short=short[:67]+"..."
-        self._text(self.w*.68,self.h*.563,short,10,C_TEXT,width=self.w*.247)
-        running=[name for name,p in self.sessions
-                 if p is None or p.poll() is None]
-        self._text(self.w*.68,self.h*.615,
-                   f"Sesiones: {len(running)}  •  Red: {'conectada' if self.net_up else 'sin conexión'}",
-                   9,C_MUTED)
-        y=self.h*.725
-        items=[("VENTANAS",lambda:self._toggle_panel("both")),
-               ("VOLUMEN",self._toggle_volume),
-               ("RED",lambda:self._show_detail("Red")),
-               ("SISTEMA",lambda:self._show_detail("Sistema"))]
-        start=self.w*.665
-        end=self.w*.95
-        gap=6*self.s
-        cell=(end-start-gap*3)/4
-        for i,(label,action) in enumerate(items):
-            xx=start+i*(cell+gap)
-            self._button(xx,y,xx+cell,y+min(self.h*.079,62*self.s),
-                         label,action,"#102953","#3465a3",9,C_CYAN)
-
-    def _orb(self):
+    def _draw_orb(self):
         c=self.canvas
-        cx=self.w*.5
-        cy=self.h*.52
-        r=min(self.h*.092,self.w*.062)
-        for i in range(16,0,-1):
-            radius=r+12*self.s+i*2.6*self.s
-            c.create_oval(cx-radius,cy-radius,cx+radius,cy+radius,
-                          outline=_mix("#071633","#202e79",1-i/16),width=1)
-        # Anillos orbitales / plataforma.
-        for i in range(4):
-            rx=r*(1.28+i*.18)
-            ry=r*(.36+i*.08)
-            c.create_oval(cx-rx,cy+ry*.92,cx+rx,cy+ry*2.1,
-                          outline=("#144279","#2358b0","#4768f6","#27449b")[i],
-                          width=1.7*self.s)
-        c.create_oval(cx-r-8,cy-r-8,cx+r+8,cy+r+8,
-                      outline="#5b75fb",width=2,tag="orb_pulse")
-        c.create_oval(cx-r,cy-r,cx+r,cy+r,fill="#5b48b2",outline="#8ba9fa",width=2,tags=("orb_click",))
-        # Gradiente radial mediante discos superpuestos (sin Pillow).
-        for i in range(42,0,-1):
-            ratio=i/42
-            rr=r*ratio*.97
-            col=_mix("#aedbfc","#3f4b91",max(0,(1-ratio)*.93))
-            c.create_oval(cx-rr+r*.08,cy-rr-r*.09,cx+rr+r*.08,cy+rr-r*.09,
-                          fill=col,outline=col,tags=("orb_click",))
-        c.create_arc(cx-r*1.3,cy-r*.6,cx+r*1.3,cy+r*.78,
-                     start=174,extent=214,style="arc",outline="#8064ff",
-                     width=2*self.s)
-        self._text(cx,cy+r+38*self.s,"NÚCLEO PYRION",11,C_MUTED,anchor="center",bold=True)
-        self._text(cx,cy,"●",max(10,15*self.s), "#d4eeff",anchor="center",tag="orb_click")
-        tag="orb_click"
+        cx=self.w/2
+        cy=self.h*.475
+        radius=min(self.w*.066,self.h*.116)
+        self.orb_glow_ids=[]
+        # Atmospheric halo, understated and animated without re-rendering the image.
+        for i in range(3,0,-1):
+            r=radius+(10+i*7)*self.s
+            ring=c.create_oval(cx-r,cy-r,cx+r,cy+r,
+                              outline=("#19225a","#283d85","#3b57bc")[3-i],
+                              width=max(1,1.5*self.s))
+            self.orb_glow_ids.append((ring,r))
+        # Elliptical orbit ring behind the orb.
+        c.create_arc(cx-radius*1.46,cy-radius*.46,
+                     cx+radius*1.46,cy+radius*.64,
+                     start=165,extent=153,style="arc",outline="#594bda",width=1.8*self.s)
+        diameter=round(radius*2)
+        if self.orb_photo is None or abs(diameter-self.orb_photo_size)>5:
+            self.orb_photo=_orb_texture(self,diameter)
+            self.orb_photo_size=diameter
+        tag="orb"
+        c.create_image(cx,cy,image=self.orb_photo,anchor="center",tags=(tag,))
+        c.create_arc(cx-radius*1.48,cy-radius*.47,
+                     cx+radius*1.48,cy+radius*.66,
+                     start=344,extent=157,style="arc",outline="#ac80ff",width=2*self.s,
+                     tags=(tag,))
         self._hit(tag,self._toggle_core)
+        # Ground light and shadow: only three rings, not dense spider-web lines.
+        floor_y=cy+radius+106*self.s
+        for scale,color in ((1.17,"#162b5d"),(.90,"#315fb5"),(.52,"#398add")):
+            rx=radius*scale
+            ry=radius*.14*scale
+            c.create_oval(cx-rx,floor_y-ry,cx+rx,floor_y+ry,
+                          outline=color,width=1.1*self.s)
+        c.create_oval(cx-radius*.23,floor_y-radius*.035,
+                      cx+radius*.23,floor_y+radius*.035,
+                      fill="#2867ad",outline="")
+        self._text(cx,cy+radius+48*self.s,"P Y R I O N",13,TXT,
+                   anchor="center",bold=True)
+        self._text(cx,cy+radius+68*self.s,"CENTRO DE CONTROL",9,"#8ca4ce",
+                   anchor="center")
+        # Area around the core label can also open the menu.
+        tag2="orb_label"
+        c.create_rectangle(cx-radius,cy+radius+43*self.s,
+                           cx+radius,cy+radius+78*self.s,
+                           fill="",outline="",tags=(tag2,))
+        self._hit(tag2,self._toggle_core)
 
     def _core_menu(self):
         if not self.core_open:
             return
         cx=self.w*.5
-        y=self.h*.71
-        menu_w=min(self.w*.23,300*self.s)
-        self._rect(cx-menu_w/2,y-7*self.s,cx+menu_w/2,y+102*self.s,
-                   "#0c1a36","#4b69be",r=10*self.s)
-        self._text(cx,y+4*self.s,"CONTROL CENTRAL",11,C_CYAN,
-                   anchor="n",bold=True)
-        labels=[
-            ("Aplicaciones",lambda:self._open_apps()),
-            ("Monitor",lambda:self._show_detail("Sistema")),
-            ("Acerca de",lambda:self._show_detail("Acerca de")),
-            ("Ocultar",self._hide_core)
-        ]
-        for i,(name,action) in enumerate(labels):
-            x1=cx-menu_w/2+9*self.s+(i%2)*(menu_w/2-4*self.s)
-            yy=y+28*self.s+(i//2)*35*self.s
-            self._button(x1,yy,x1+menu_w/2-15*self.s,yy+29*self.s,
-                         name,action,"#182953","#4263a6",9)
+        top=self.h*.735
+        ww=min(self.w*.30,330*self.s)
+        hh=151*self.s
+        if top+hh > self.h-12*self.s:
+            top=self.h-hh-13*self.s
+        # Dark panel shields the dense background and preserves readability.
+        self._rounded(cx-ww/2-4*self.s,top-3*self.s,cx+ww/2+4*self.s,
+                      top+hh+5*self.s,"#081121","#172b53",16*self.s,3)
+        self._rounded(cx-ww/2,top,cx+ww/2,top+hh,"#132449","#6b73bb",14*self.s,1.5)
+        self._text(cx,top+15*self.s,"N\u00daCLEO PYRION",12,TXT,anchor="center",bold=True)
+        self._text(cx,top+35*self.s,"Control de tu entorno",9,MUTED,anchor="center")
+        pad=14*self.s
+        gap=9*self.s
+        cell=(ww-2*pad-gap)/2
+        actions=(
+            ("APLICACIONES",self._open_apps),
+            ("MONITOR",lambda:self._show_detail("Sistema")),
+            ("CONSOLA",lambda:self.launch("Consola")),
+            ("CERRAR MENU",self._close_core),
+        )
+        for i,(label,action) in enumerate(actions):
+            row,col=divmod(i,2)
+            x=cx-ww/2+pad+col*(cell+gap)
+            y=top+60*self.s+row*41*self.s
+            self._button(x,y,x+cell,y+32*self.s,label,action,
+                         accent=PURPLE,size=9)
+
+    def _detail_text(self,kind):
+        if kind=="Sistema":
+            cpu=f"{self.cpu_percent}%" if self.cpu_percent is not None else "No disponible"
+            mem=f"{self.ram_percent}% de {self.ram_total} MB" if self.ram_percent is not None else "No disponible"
+            disk=f"{self.disk_percent}%" if self.disk_percent is not None else "No disponible"
+            return [
+                ("Procesador",cpu),
+                ("Memoria",mem),
+                ("Almacenamiento",disk),
+                ("Procesadores logicos",str(os.cpu_count() or "No disponible")),
+            ]
+        if kind=="Red":
+            try:
+                host=socket.gethostname()
+            except OSError:
+                host="No disponible"
+            status=("Enlace activo" if self.net_connected else
+                    "Sin enlace" if self.net_connected is False else "No comprobado")
+            return [("Nombre de equipo",host),("Estado de interfaces",status),
+                    ("Dispositivos",self.net_label)]
+        if kind=="Audio":
+            mixer="amixer disponible" if shutil.which("amixer") else "Mezclador no disponible"
+            return [("Audio del equipo",mixer),
+                    ("Acciones","Control de volumen local")]
+        if kind=="Energia":
+            return [("Salir del entorno","Cierra PYRION sin apagar el equipo"),
+                    ("Apagar Linux","Solo con confirmacion; no disponible en Windows")]
+        if kind=="Confirmar apagado":
+            return [("Confirmacion","Se intentara apagar el sistema Linux"),
+                    ("Advertencia","Guarda tus trabajos antes de continuar")]
+        return [("Nombre","PYRION OS"),("Version",APP_VERSION),
+                ("Diseño","Escritorio futurista con Canvas y Tkinter"),
+                ("Proyecto","ARCHMOBA")]
 
     def _detail_overlay(self):
-        if not self.detail:
+        if self.detail is None:
             return
-        cx=self.w*.5
-        top=self.h*.10
-        width=min(self.w*.37,430*self.s)
-        height=self.h*.19
-        self._rect(cx-width/2,top,cx+width/2,top+height,
-                   "#0a1933","#5b7bc1",r=10*self.s)
-        self._text(cx-width/2+16*self.s,top+13*self.s,
-                   self.detail,14,C_CYAN,bold=True)
-        if self.detail == "Red":
-            try:
-                content=f"Equipo: {socket.gethostname()}\nInterfaces: {', '.join(n for _,n in socket.if_nameindex())}"
-            except (OSError,AttributeError):
-                content="Información de interfaces no disponible."
-        elif self.detail == "Sistema":
-            content=(f"CPU: {self.cpu_percent if self.cpu_percent is not None else 'N/D'}%  "
-                     f"RAM: {self.ram_percent if self.ram_percent is not None else 'N/D'}%  "
-                     f"Disco: {self.disk_percent}%\n"
-                     f"Procesadores lógicos: {os.cpu_count() or 'N/D'}  •  PYRION {APP_VERSION}")
+        c=self.canvas
+        kind=self.detail
+        ww=min(490*self.s,self.w*.46)
+        hh=min(320*self.s,self.h*.56)
+        x1=self.w*.5-ww/2
+        y1=max(32*self.s,self.h*.095)
+        x2=x1+ww
+        y2=y1+hh
+        self._rounded(x1+7*self.s,y1+9*self.s,x2+7*self.s,y2+9*self.s,
+                      "#050a17","#08142b",16*self.s,2)
+        self._rounded(x1,y1,x2,y2,"#101e3b","#638ac6",15*self.s,1.6)
+        self._text(x1+22*self.s,y1+18*self.s,
+                   {"Energia":"OPCIONES DE ENERGIA","Confirmar apagado":"CONFIRMAR APAGADO"}.get(
+                       kind,kind.upper()),15,TXT,bold=True)
+        self._button(x2-41*self.s,y1+12*self.s,x2-13*self.s,y1+43*self.s,
+                     "X",self._close_detail,accent=PURPLE)
+        self._line(x1+19*self.s,y1+54*self.s,x2-19*self.s,y1+54*self.s,
+                   "#365582",1)
+        body_top=y1+74*self.s
+        for i,(label,value) in enumerate(self._detail_text(kind)):
+            y=body_top+i*44*self.s
+            if y+21*self.s >= y2-49*self.s:
+                break
+            self._text(x1+23*self.s,y,label,9,"#83a8d6",bold=True)
+            self._text(x1+23*self.s,y+15*self.s,value,11,TXT,
+                       width=ww-48*self.s)
+        bar_y=y2-47*self.s
+        if kind=="Audio":
+            gap=9*self.s
+            cell=(ww-48*self.s-2*gap)/3
+            for i,(label,delta) in enumerate((("- VOL",-5),("SILENCIO",0),("+ VOL",+5))):
+                x=x1+24*self.s+i*(cell+gap)
+                self._button(x,bar_y,x+cell,bar_y+34*self.s,
+                             label,lambda d=delta:self._audio_action(d),size=9)
+        elif kind=="Energia":
+            cell=(ww-55*self.s)/2
+            self._button(x1+20*self.s,bar_y,x1+20*self.s+cell,bar_y+33*self.s,
+                         "SALIR DE PYRION",self.destroy,size=9,accent=PURPLE)
+            self._button(x2-20*self.s-cell,bar_y,x2-20*self.s,bar_y+33*self.s,
+                         "APAGAR LINUX",lambda:self._show_detail("Confirmar apagado"),
+                         size=9,accent=AMBER)
+        elif kind=="Confirmar apagado":
+            cell=(ww-55*self.s)/2
+            self._button(x1+20*self.s,bar_y,x1+20*self.s+cell,bar_y+33*self.s,
+                         "CANCELAR",lambda:self._show_detail("Energia"),size=9)
+            self._button(x2-20*self.s-cell,bar_y,x2-20*self.s,bar_y+33*self.s,
+                         "CONFIRMAR",self._poweroff,size=9,accent=AMBER)
         else:
-            content=f"PYRION OS {APP_VERSION}\nEscritorio ligero e interactivo. © ARCHMOBA"
-        self._text(cx-width/2+16*self.s,top+44*self.s,content,10,C_TEXT,
-                   width=width-32*self.s)
-        self._button(cx+width/2-40*self.s,top+8*self.s,
-                     cx+width/2-10*self.s,top+33*self.s,"×",
-                     lambda:self._show_detail(None),"#1c2744","#5972a2",11)
+            self._button(x1+ww*.25,bar_y,x1+ww*.75,bar_y+33*self.s,
+                         "VOLVER AL ESCRITORIO",self._close_detail,size=9)
 
     def _draw(self):
         self.render_job=None
         if not self.winfo_exists():
             return
-        self.w=max(self.canvas.winfo_width(),1)
-        self.h=max(self.canvas.winfo_height(),1)
-        if self.w < 100 or self.h < 100:
+        self.w=max(1,self.canvas.winfo_width())
+        self.h=max(1,self.canvas.winfo_height())
+        if self.w < 250 or self.h < 260:
             return
-        self.s=self._scaled(min(self.w/1280,self.h/720))
-        self.hit_counter=0
+        self.s=max(.69,min(1.3,min(self.w/1320,self.h/720)))
+        compact_now=self.w<1010 or self.h<580
+        if compact_now and not self.compact and self.left_open and self.right_open:
+            self.right_open=False
+        self.compact=compact_now
+        self.hit_seq=0
         self.canvas.delete("all")
         self._background()
+        self._draw_orb()
         self._left_panel()
         self._right_panel()
-        self._orb()
         self._core_menu()
         self._detail_overlay()
-        self._text(self.w*.5,self.h*.953,
-                   "PYRION 2030   •   "+datetime.now().strftime("%H:%M")+"   •   v"+APP_VERSION,
-                   9,"#5574a5",anchor="center")
-        self.last_render_w=self.w
-        self.last_render_h=self.h
+        self._text(self.w/2,self.h-13*self.s,
+                   f"P Y R I O N   O S     /     {APP_VERSION}",8,
+                   "#526b9a",anchor="center")
+        self.has_been_drawn=True
 
-    def _pulse(self):
+    def _canvas_background_click(self,event):
         try:
-            if self.canvas.winfo_exists() and self.w > 100:
-                self.pulse_phase+=.2
-                cx=self.w*.5; cy=self.h*.52
-                r=min(self.h*.092,self.w*.062)
-                d=6*self.s+(math.sin(self.pulse_phase)+1)*6*self.s
-                self.canvas.coords("orb_pulse",cx-r-d,cy-r-d,cx+r+d,cy+r+d)
-            self.after(130,self._pulse)
-        except (tk.TclError,AttributeError):
+            current=self.canvas.find_withtag("current")
+            if current:
+                tags=self.canvas.gettags(current[0])
+                if any(t.startswith(("tap_","app_","orb")) for t in tags):
+                    return
+            if self.detail:
+                self._close_detail()
+            elif self.core_open:
+                self._close_core()
+        except tk.TclError:
             pass
 
-    def _tick(self):
-        self.ram_percent,self.ram_total=_mem_state()
-        self.disk_percent,self.disk_used,self.disk_total=_disk_state()
-        cpu_now=_cpu_sample()
-        if cpu_now and self.cpu_prev and cpu_now[0]>self.cpu_prev[0]:
-            dt=cpu_now[0]-self.cpu_prev[0]
-            di=cpu_now[1]-self.cpu_prev[1]
-            self.cpu_percent=max(0,min(100,round(100*(dt-di)/dt)))
-        self.cpu_prev=cpu_now
-        try:
-            if hasattr(socket,"if_nameindex"):
-                self.net_up=any(name not in ("lo","lo0") for _,name in socket.if_nameindex())
-        except OSError:
-            self.net_up=False
-        self.sessions=[(label,p) for label,p in self.sessions if p is None or p.poll() is None][-8:]
-        self._schedule_render()
-        self.after(5000,self._tick)
+    def _escape(self,_event=None):
+        if self.detail:
+            self._close_detail()
+        elif self.core_open:
+            self._close_core()
 
-    def _category(self,category):
+    def _select_category(self,category):
         self.category=category
-        self._schedule_render()
+        self.page=0
+        self._schedule_draw()
+
+    def _page_shift(self,step):
+        if self.compact:
+            columns=1
+        else:
+            columns=2
+        rows=2 if self.h<590 else 3
+        count=max(1,rows*columns)
+        pages=max(1,math.ceil(len(self._filtered_apps())/count))
+        self.page=(self.page+step)%pages
+        self._schedule_draw()
+
+    def _wheel_apps(self,event):
+        if event.x < self.w*.39:
+            self._page_shift(-1 if event.delta>0 else 1)
 
     def _toggle_panel(self,which):
         if which=="left":
             self.left_open=not self.left_open
-        elif which=="right":
-            self.right_open=not self.right_open
+            if self.compact and self.left_open:
+                self.right_open=False
         else:
-            self.left_open=not (self.left_open and self.right_open)
-            self.right_open=self.left_open
-        self._schedule_render()
+            self.right_open=not self.right_open
+            if self.compact and self.right_open:
+                self.left_open=False
+        self._schedule_draw()
+
+    def _hide_both(self):
+        if self.left_open or self.right_open:
+            self.left_open=False
+            self.right_open=False
+        else:
+            self.left_open=True
+            self.right_open=not self.compact
+        self._schedule_draw()
 
     def _toggle_core(self):
         self.core_open=not self.core_open
-        self._schedule_render()
+        self.detail=None
+        self._schedule_draw()
 
-    def _hide_core(self):
+    def _close_core(self):
         self.core_open=False
-        self._schedule_render()
+        self._schedule_draw()
 
     def _open_apps(self):
         self.left_open=True
+        if self.compact:
+            self.right_open=False
         self.category="Todas"
+        self.page=0
         self.core_open=False
-        self._schedule_render()
+        self._schedule_draw()
 
     def _show_detail(self,name):
         self.detail=name
         self.core_open=False
-        self._schedule_render()
+        self._schedule_draw()
 
-    def _launch_first_search(self):
-        term=self.search_var.get().strip().lower()
-        matches=[a[0] for a in APPS if term in a[0].lower()]
-        if matches:
-            self.launch(matches[0])
+    def _close_detail(self):
+        self.detail=None
+        self._schedule_draw()
 
-    def _notify(self,message):
-        self.status=str(message)
-        self._schedule_render()
+    def _notify(self,message,source="PYRION"):
+        self.notifications.append((str(message),source))
+        self.notifications=self.notifications[-12:]
+        self._schedule_draw()
 
-    def _run_candidates(self,name,candidates):
+    def _start_program(self,label,candidates):
         for cmd in candidates:
-            path=shutil.which(cmd[0])
-            if not path:
+            command=cmd[0]
+            location=shutil.which(command) if not os.path.isabs(command) else (
+                command if Path(command).is_file() else None)
+            if not location:
                 continue
             try:
-                proc=subprocess.Popen([path,*cmd[1:]],
-                                      cwd=str(Path.home()),
-                                      stdin=subprocess.DEVNULL,
-                                      stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.DEVNULL)
-                self.sessions.append((name,proc))
-                self._notify(name+" iniciado")
-                return
-            except OSError:
-                continue
-        self._notify(name+": no hay una aplicación compatible instalada")
+                proc=subprocess.Popen(
+                    [location,*cmd[1:]],cwd=str(Path.home()),
+                    stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.sessions.append((label,proc))
+                self._notify(f"{label} iniciado","Aplicaciones")
+                return True
+            except OSError as exc:
+                _error_log(f"No se pudo iniciar {label}: {exc}")
+        self._notify(f"{label}: aplicacion no disponible","Aplicaciones")
+        return False
 
-    def _toggle_volume(self):
-        if os.name=="nt":
-            self._notify("Control de volumen: utilice las teclas del sistema")
-            return
-        program=shutil.which("amixer")
-        if not program:
-            self._notify("Audio: amixer no está disponible")
-            return
-        try:
-            proc=subprocess.run([program,"set","Master","toggle"],
-                                timeout=3,capture_output=True,text=True)
-            self._notify("Volumen: alternado" if proc.returncode==0
-                         else "No se pudo cambiar el volumen")
-        except (OSError,subprocess.TimeoutExpired):
-            self._notify("No se pudo acceder al mezclador de audio")
-
-    def launch(self,name):
-        if name=="Explorador":
+    def launch(self,label):
+        self.core_open=False
+        if label=="Explorador":
             if os.name=="nt":
-                self._run_candidates(name,[["explorer.exe",str(Path.home())]])
+                self._start_program(label,[["explorer.exe",str(Path.home())]])
             else:
-                self._run_candidates(name,[[c,str(Path.home())] for c in
-                     ("xdg-open","pcmanfm","thunar","nautilus","dolphin","spacefm")])
-        elif name=="Consola":
-            path=Path("/opt/minilinux/floating_console.py")
-            if path.is_file() and os.name!="nt":
-                self._run_candidates(name,[[sys.executable,str(path)]])
+                self._start_program(label,[[cmd,str(Path.home())] for cmd in
+                    ("xdg-open","pcmanfm","thunar","nautilus","dolphin","spacefm")])
+        elif label=="Consola":
+            if os.name=="nt":
+                self._start_program(label,[["cmd.exe"]])
             else:
-                self._run_candidates(name,
-                    [["cmd.exe"]] if os.name=="nt" else
-                    [[c] for c in ("xterm","xfce4-terminal","lxterminal","konsole","gnome-terminal")])
-        elif name=="Navegador":
-            self._run_candidates(name,
-                [["cmd.exe","/c","start","https://www.google.com"]] if os.name=="nt" else
-                [[c] for c in ("firefox","chromium","chromium-browser","brave-browser","epiphany")])
-        elif name=="Editor":
-            self._run_candidates(name,
-                [["notepad.exe"]] if os.name=="nt" else
-                [[c] for c in ("mousepad","leafpad","gedit","xed","kate")])
-        elif name=="Multimedia":
-            self._run_candidates(name,[[c] for c in ("vlc","mpv","totem","smplayer")])
-        elif name=="Monitor" or name=="Ajustes":
+                self._start_program(label,[[cmd] for cmd in
+                    ("x-terminal-emulator","xterm","lxterminal","xfce4-terminal","gnome-terminal")])
+        elif label=="Navegador":
+            if os.name=="nt":
+                try:
+                    import webbrowser
+                    result=webbrowser.open("https://www.google.com")
+                    self._notify("Navegador solicitado" if result else "No se encontro navegador")
+                except Exception as exc:
+                    self._notify(f"No se pudo abrir el navegador: {exc}")
+            else:
+                self._start_program(label,[[cmd] for cmd in
+                    ("firefox","chromium","chromium-browser","brave-browser","epiphany")])
+        elif label=="Editor":
+            self._start_program(label,[["notepad.exe"]] if os.name=="nt" else
+                [[cmd] for cmd in ("mousepad","leafpad","gedit","xed","kate")])
+        elif label=="Multimedia":
+            self._start_program(label,[[cmd] for cmd in ("vlc","mpv","totem","smplayer")])
+        elif label in ("Monitor","Configuracion"):
             self._show_detail("Sistema")
-            self._notify("Monitor del sistema: indicadores actualizados")
-        elif name=="Red":
+        elif label=="Red":
             self._show_detail("Red")
         else:
             self._show_detail("Acerca de")
 
+    def _audio_action(self,change):
+        if os.name=="nt":
+            self._notify("Volumen: utiliza las teclas del sistema")
+            return
+        if not shutil.which("amixer"):
+            self._notify("Control de audio no disponible")
+            return
+        cmd=["amixer","set","Master",("toggle" if change==0 else
+                                           f"{abs(change)}%{'+' if change>0 else '-'}")]
+        try:
+            result=subprocess.run(cmd,capture_output=True,text=True,timeout=4)
+            self._notify("Audio actualizado" if result.returncode==0 else
+                         "El dispositivo no admite esta operacion")
+        except (OSError,subprocess.TimeoutExpired):
+            self._notify("No se pudo ajustar el audio")
+
+    def destroy(self):
+        # Prevent orphan Tcl callbacks during repeated testing/restarts.
+        for name in ("render_job", "_tick_job", "_animate_job",
+                     "_lower_job", "_geom_job"):
+            job=getattr(self,name,None)
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except tk.TclError:
+                    pass
+                setattr(self,name,None)
+        super().destroy()
+
+    def _poweroff(self):
+        if os.name=="nt" or self.windowed:
+            self._notify("Apagado disponible solo en PYRION Linux a pantalla completa")
+            self._close_detail()
+            return
+        binary=shutil.which("poweroff") or shutil.which("systemctl")
+        if not binary:
+            self._notify("No hay un comando de apagado disponible")
+            self._close_detail()
+            return
+        args=[binary] if Path(binary).name=="poweroff" else [binary,"poweroff"]
+        try:
+            subprocess.Popen(args,stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            self._notify("Apagado solicitado")
+        except OSError:
+            self._notify("No se pudo apagar el equipo")
+        self._close_detail()
+
 
 if __name__ == "__main__":
-    if check_self_update():
+    if "--no-update" not in sys.argv and check_self_update():
         raise SystemExit(0)
-
     try:
-        app = PyrionApp()
+        app=PyrionApp()
         app.mainloop()
     except Exception:
-        import traceback
-        try:
-            log = Path.home() / "pyrion_error.log"
-            log.write_text(traceback.format_exc(), encoding="utf-8")
-            print("PYRION: fallo al iniciar, revise", log, file=sys.stderr)
-        except Exception:
-            traceback.print_exc()
+        _error_log(traceback.format_exc())
         raise
