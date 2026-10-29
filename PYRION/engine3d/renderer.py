@@ -54,6 +54,9 @@ class SoftwareRenderer:
         self.wireframe = False
         self._light_a = _unit((-0.42, 0.77, 0.53))
         self._light_b = _unit((0.74, -0.29, 0.47))
+        self._spotlights = ()
+        self._spot_ambient = 0.56
+        self.spotlight_enabled = True
         self._lines = []
         if hasattr(mesh, "meridian") and hasattr(mesh, "latitude"):
             for i, phi in enumerate((0.0, 2.05, 4.09)):
@@ -70,6 +73,92 @@ class SoftwareRenderer:
              1.013 * math.sin(t) * math.sin(0.92 + 0.45 * math.sin(t * 3.5)))
             for t in (math.pi * i / 76 for i in range(77))
         ]
+
+    def set_lights(self, lights, ambient=0.56):
+        """Prepare optional spot lights declared in scene.json.
+
+        All positions/targets are scene world coordinates (Y is up).
+        Rendering is CPU-per-triangle and does not cast shadows.
+        """
+        if not isinstance(lights, list):
+            raise ValueError("Scene lights must be a list")
+        self._spot_ambient = max(0.08, min(1.0, float(ambient)))
+        prepared = []
+        for light in lights[:8]:
+            if not isinstance(light, dict) or light.get("type") != "spot":
+                continue
+            if not light.get("enabled", True):
+                continue
+            position = tuple(float(v) for v in light["position"])
+            target = tuple(float(v) for v in light["target"])
+            if len(position) != 3 or len(target) != 3:
+                raise ValueError("Spotlight position and target need 3 coordinates")
+            if not all(math.isfinite(v) for v in position + target):
+                raise ValueError("Spotlight coordinates must be finite")
+            direction_vec = tuple(target[i] - position[i] for i in range(3))
+            if _dot(direction_vec, direction_vec) < 1e-10:
+                raise ValueError("Spotlight target must differ from its position")
+            color = str(light.get("color", "#ffffff"))
+            if len(color) != 7 or not color.startswith("#"):
+                raise ValueError("Spotlight color must be #RRGGBB")
+            tint = tuple(int(color[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+            angle = max(5.0, min(170.0, float(light.get("angle_degrees", 80.0))))
+            softness = max(0.0, min(0.95, float(light.get("softness", 0.25))))
+            strength = max(0.0, min(8.0, float(light.get("intensity", 1.8))))
+            reach = max(0.2, min(100.0, float(light.get("range", 9.0))))
+            if not all(math.isfinite(v) for v in (angle, softness, strength, reach)):
+                raise ValueError("Spotlight properties must be finite")
+            outer = math.cos(math.radians(angle * 0.5))
+            inner = math.cos(math.radians(angle * 0.5 * (1.0 - softness)))
+            prepared.append({
+                "position": position, "direction": _unit(direction_vec),
+                "color": tint, "intensity": strength, "range": reach,
+                "outer": outer, "inner": inner,
+            })
+        self._spotlights = tuple(prepared)
+
+    def _shade_spotlights(self, color, normal, towards_camera, world_point):
+        """Apply cone, angular incidence, range falloff and specular light."""
+        if not self._spotlights or not self.spotlight_enabled:
+            return color
+        base = [int(color[i:i + 2], 16) for i in (1, 3, 5)]
+        result = [channel * self._spot_ambient for channel in base]
+        gloss = 13.0 + 70.0 * (1.0 - self._roughness)
+        for spot in self._spotlights:
+            to_light = tuple(spot["position"][k] - world_point[k] for k in range(3))
+            distance_sq = _dot(to_light, to_light)
+            if distance_sq < 1e-8 or distance_sq >= spot["range"] ** 2:
+                continue
+            distance = math.sqrt(distance_sq)
+            incident = tuple(component / distance for component in to_light)
+            # From the emitter to the shaded triangle, inside the cone.
+            cone = -_dot(incident, spot["direction"])
+            if cone <= spot["outer"]:
+                continue
+            if spot["inner"] <= spot["outer"] + 1e-8:
+                cone_weight = 1.0
+            else:
+                cone_weight = max(0.0, min(
+                    1.0, (cone - spot["outer"]) /
+                    (spot["inner"] - spot["outer"])
+                ))
+                cone_weight = cone_weight * cone_weight * (3.0 - 2.0 * cone_weight)
+            facing = max(0.0, _dot(normal, incident))
+            if facing <= 0.0:
+                continue
+            attenuation = (1.0 - distance_sq / (spot["range"] ** 2)) ** 2
+            energy = spot["intensity"] * cone_weight * attenuation
+            diffuse = 1.20 * energy * facing
+            half_vector = _unit(tuple(
+                incident[k] + towards_camera[k] for k in range(3)
+            ))
+            highlight = max(0.0, _dot(normal, half_vector)) ** gloss
+            specular = 0.60 * energy * highlight * facing
+            for k in range(3):
+                result[k] += spot["color"][k] * (
+                    base[k] * diffuse + 255.0 * specular
+                )
+        return _rgb(result)
 
     def _rotate(self, point):
         x, y, z = point
@@ -153,7 +242,8 @@ class SoftwareRenderer:
                 canvas.create_line(*old, *current, fill=color, width=width)
             old = current
 
-    def draw(self, canvas, cx, cy, diameter, draw_graticules=True):
+    def draw(self, canvas, cx, cy, diameter, draw_graticules=True,
+             object_position=(0.0, 0.0, 0.0)):
         """Draw 3D mesh centered at cx,cy; returns visible face count."""
         focal = max(50, diameter * self.camera_distance * 0.47 * self.zoom)
         rotated = [self._rotate(p) for p in self.mesh.vertices]
@@ -184,6 +274,13 @@ class SoftwareRenderer:
             pts = (*projected[i], *projected[j], *projected[k])
             color = self._color(normal, accent, front, towards_camera,
                                 self._texels[face_index] if self._texels is not None else None)
+            if self._spotlights and self.spotlight_enabled:
+                world_point = tuple(
+                    center[k] + object_position[k] for k in range(3)
+                )
+                color = self._shade_spotlights(
+                    color, normal, towards_camera, world_point
+                )
             visible_faces.append((center[2], pts, color))
 
         visible_faces.sort(key=lambda row: row[0])

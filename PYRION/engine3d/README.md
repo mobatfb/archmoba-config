@@ -51,3 +51,27 @@ Cuando se suba la imagen, hay que establecer su estado en `ready`.
 El archivo independiente `PYRION/app.py` incluye el mismo renderizador y
 cargador de materiales. En el primer arranque necesita conexión para leer la
 escena y los materiales que no estén instalados localmente.
+
+## Foco direccionable de escena (PYRION OS 0.4.12)
+
+`OnlyDeskPlace/scene.json` ahora incluye `lights` (lista de focos `spot`)
+y `ambient_light` (intensidad entre 0 y 1). Cada foco acepta:
+
+- `position`: origen del foco en coordenadas X,Y,Z.
+- `target`: punto al que apunta.
+- `angle_degrees`: apertura completa del cono, de 5 a 170 grados.
+- `softness`: transicion suave en los bordes del cono, de 0 a 0.95.
+- `intensity`: energia del foco (escala visual aproximada).
+- `range`: distancia maxima de iluminacion en unidades de escena.
+- `color`: `#RRGGBB`.
+- `enabled`: activa o desactiva el foco desde la escena.
+
+El renderizador calcula por triangulo la orientacion de la superficie, la
+atenuacion con la distancia, el cono con borde suavizado y un brillo especular.
+El resultado afecta tanto a las texturas IMG como a los materiales MAT de
+cada objeto. No se calculan sombras proyectadas ni reflejos/refraccion fisicos.
+No requiere OpenGL ni dependencias externas.
+
+En pantalla, el boton **FOCO: ON/OFF** y la tecla **L** alternan entre
+iluminacion de escena y el aspecto previo. La configuracion del foco se
+modifica en el JSON de la escena y se carga al iniciar.

@@ -16,8 +16,8 @@ import tkinter as tk
 from .mesh import SphereMesh, TriangleMesh
 from .renderer import SoftwareRenderer
 
-ENGINE_VERSION = "0.3.0"
-DESKTOP_VERSION = "0.4.11"
+ENGINE_VERSION = "0.3.1"
+DESKTOP_VERSION = "0.4.12"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -34,7 +34,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.11"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.12"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -72,7 +72,7 @@ def _scene_texture(relative_path):
         else:
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
-                url, headers={"User-Agent": "PYRION/0.4.11"})
+                url, headers={"User-Agent": "PYRION/0.4.12"})
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
@@ -305,9 +305,14 @@ class Pyrion3DApp(tk.Tk):
         )
         self.canvas.pack(fill="both", expand=True)
         self.renderer = self.objects[0]["renderer"] if self.objects else None
+        self.spotlight_enabled = True
         for item in self.objects:
             item["renderer"].rotation_y = item["rotation"]
             item["renderer"].rotation_x = -0.28
+            item["renderer"].set_lights(
+                self.scene.get("lights", []),
+                ambient=self.scene.get("ambient_light", 0.56)
+            )
         self.base_pitch = -0.28
         self.spin_rate = 1.0
         self.running = True
@@ -347,6 +352,8 @@ class Pyrion3DApp(tk.Tk):
         self.bind("<F3>", self._toggle_hud_mode)
         self.bind("<m>", self._toggle_material_mode)
         self.bind("<M>", self._toggle_material_mode)
+        self.bind("<l>", self._toggle_spotlight)
+        self.bind("<L>", self._toggle_spotlight)
         self.bind("<Left>", lambda _event: self._speed(-0.15))
         self.bind("<Right>", lambda _event: self._speed(+0.15))
         self.bind("<plus>", lambda _event: self._zoom(+0.10))
@@ -479,7 +486,8 @@ class Pyrion3DApp(tk.Tk):
             self.visible_triangles += renderer.draw(
                 self.canvas, width / 2 + px * diameter * 0.47 * factor,
                 height / 2 - py * diameter * 0.47 * factor,
-                diameter * factor, draw_graticules=False
+                diameter * factor, draw_graticules=False,
+                object_position=item["position"]
             )
         self.render_ms = (time.perf_counter() - draw_start) * 1000.0
         self._render_cpu_interval += max(0.0, time.process_time() - cpu_draw_start)
@@ -490,6 +498,17 @@ class Pyrion3DApp(tk.Tk):
         if self._width >= 480:
             return (316, 16, 456, 40)
         return (20, 57, 160, 81)
+
+    def _spotlight_button_bounds(self):
+        if self._width >= 620:
+            return (466, 16, 578, 40)
+        return (168, 57, 280, 81)
+
+    def _toggle_spotlight(self, _event=None):
+        self.spotlight_enabled = not self.spotlight_enabled
+        for item in self.objects:
+            item["renderer"].spotlight_enabled = self.spotlight_enabled
+        self._request_frame()
 
     def _toggle_material_mode(self, _event=None):
         target = "img" if self.material_mode == "mat" else "mat"
@@ -507,6 +526,10 @@ class Pyrion3DApp(tk.Tk):
     def _hud_click(self, event):
         if self._width < 360:
             return False
+        lx1, ly1, lx2, ly2 = self._spotlight_button_bounds()
+        if lx1 <= event.x <= lx2 and ly1 <= event.y <= ly2:
+            self._toggle_spotlight()
+            return True
         x1, y1, x2, y2 = self._material_button_bounds()
         if x1 <= event.x <= x2 and y1 <= event.y <= y2:
             self._toggle_material_mode()
@@ -553,6 +576,17 @@ class Pyrion3DApp(tk.Tk):
                 bx1, by2 + 4, anchor="nw", text=self.material_notice,
                 fill="#ff9e82", font=("TkDefaultFont", 8)
             )
+        sx1, sy1, sx2, sy2 = self._spotlight_button_bounds()
+        canvas.create_rectangle(
+            sx1, sy1, sx2, sy2, outline="#826e49",
+            fill="#46361f" if self.spotlight_enabled else "#10243c", width=1
+        )
+        canvas.create_text(
+            (sx1 + sx2) / 2, (sy1 + sy2) / 2,
+            text="FOCO: ON" if self.spotlight_enabled else "FOCO: OFF",
+            fill="#ffe09b" if self.spotlight_enabled else "#9eafc3",
+            font=("TkDefaultFont", 9, "bold")
+        )
         status = ("MEDIENDO" if self.fps <= 0 else "FLUIDO" if self.fps >= 50
                   else "ACEPTABLE" if self.fps >= 25 else "LENTO")
         if not self.running:
@@ -619,7 +653,7 @@ class Pyrion3DApp(tk.Tk):
                 ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
                 ("ESTADO", status),
             ]
-        y = 66 if self._width >= 480 else 105
+        y = 66 if self._width >= 620 else 105
         for label, value in rows:
             if y + 15 >= self._height:
                 break
