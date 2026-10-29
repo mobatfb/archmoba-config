@@ -36,7 +36,7 @@
   <header>
     <div class="brand">PYRION 3D <small>· MODELOS</small></div>
     <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
-    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.0</span><span id="rotation-angle">Giro 0°</span></div>
+    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.1</span><span id="rotation-angle">Giro 0°</span></div>
   </header>
   <canvas id="visor" aria-label="Visualización 3D con rotación automática de la malla seleccionada"></canvas>
   <div class="control">
@@ -49,6 +49,7 @@
 <script>
 (() => {
   'use strict';
+  const APP_VERSION = 'v1.1.1';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -59,6 +60,13 @@
   const status = document.querySelector('#status');
   const slider = document.querySelector('#zoom');
   const value = document.querySelector('#valor');
+  // Comunica la carga al contenedor refresh.html si existe.
+  function report(type, detail) {
+    if (window.parent !== window) {
+      window.parent.postMessage({source:'pyrion3d', type, version:APP_VERSION, detail}, '*');
+    }
+  }
+  report('html', 'HTML cargado');
   let active = null;
   let serial = 0;
   let zoom = 1, width = 1, height = 1;
@@ -254,6 +262,7 @@
     }
     active=null;render();
     status.textContent='Cargando '+model.name+' desde GitHub…';
+    report('loading', 'Cargando malla de '+model.name+'...');
     try {
       const [source, material] = await Promise.all([
         repoJson(model.mesh),
@@ -271,9 +280,11 @@
       active={geometry,color,metallic,roughness,edge};
       status.textContent=model.name+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos';
       render();
+      report('ready', model.name+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos');
     } catch (e) {
       if (request!==serial) return;
       status.textContent=e.message+' · Abre el HTML en un navegador con acceso a GitHub.';
+      report('error', e.message);
     }
   }
 
@@ -291,6 +302,7 @@
 
   async function init() {
     try {
+      report('loading', 'Consultando models.json...');
       const catalog=await repoJson(MODELS_PATH);
       if (!catalog || !Array.isArray(catalog.models) || !catalog.models.length) {
         throw new Error('models.json no tiene modelos registrados');
@@ -301,7 +313,10 @@
       if (!models.length) throw new Error('models.json no contiene rutas válidas');
       buildMenu(models);
       await selectModel(models[0]);
-    } catch (e) {status.textContent=e.message;}
+    } catch (e) {
+      status.textContent=e.message;
+      report('error',e.message);
+    }
   }
 
   slider.addEventListener('input',()=>{
