@@ -1,10 +1,10 @@
 {
   "app": "PYRION",
   "name": "PYRION OS",
-  "description": "Versión del sistema y motor 3D visible bajo el título en el panel de rendimiento",
-  "version": "0.4.7",
+  "description": "Botón MAT/IMG y textura fotográfica dorada GIF en la escena 3D",
+  "version": "0.4.8",
   "app_path": "PYRION/app.py",
-  "release_commit": "5421e020d3cce0aa0b24bf683c9446eb07aa3833",
+  "release_commit": "90d85e4a6d3adb2be3cbdf31f1240aeb6964b94c",
   "maintenance": false,
-  "engine_version": "0.2.0"
+  "engine_version": "0.2.1"
 }
