@@ -7,10 +7,10 @@ from pathlib import Path
 
 TOOL_NAME = "PYRION CONSOLE"
 TOOL_DESCRIPTION = (
-    "Consola PYRION por pestañas con Shell por defecto, KILL PY, Red, SSL, "
+    "Consola PYRION por pestañas con Shell por defecto, Irdir, KILL PY, Red, SSL, "
     "GitHub, Logs y teclado digital."
 )
-TOOL_VERSION = "1.12.1"
+TOOL_VERSION = "1.13.0"
 
 BG = "#05090C"
 PANEL = "#0C141D"
@@ -151,6 +151,22 @@ class PyrionConsoleTool(tk.Frame):
         self.keyboard_start_x = 0
         self.keyboard_start_y = 0
 
+        # Directorio de trabajo real compartido por la consola y las pestañas Shell.
+        self.current_dir = Path.cwd().resolve()
+
+        # IRDIR es un explorador flotante interno, igual que el teclado:
+        # no usa Toplevel y se mantiene dentro del area de PTM.
+        self.irdir_window = None
+        self.irdir_path = self.current_dir
+        self.irdir_path_label = None
+        self.irdir_canvas = None
+        self.irdir_list = None
+        self.irdir_canvas_window = None
+        self.irdir_drag_x = 0
+        self.irdir_drag_y = 0
+        self.irdir_start_x = 0
+        self.irdir_start_y = 0
+
         self._build_ui()
 
         # Solo Consola existe al iniciar. Los accesos superiores crean las demas.
@@ -160,6 +176,8 @@ class PyrionConsoleTool(tk.Frame):
         self.histories["Consola"] = (
             "PYRION - consola grafica\n"
             "Shell persistente: /bin/sh\n"
+            f"Directorio inicial: {self.current_dir}\n"
+            "Irdir: explora carpetas y cambia la ruta activa de la consola.\n"
             "Atajo global: Ctrl + Alt + T\n"
             "Abre nuevas pestañas desde la barra superior.\n"
             "------------------------------------------------------------\n"
@@ -183,11 +201,13 @@ class PyrionConsoleTool(tk.Frame):
         ).pack(side="left", fill="y")
 
         self.launch_buttons = {}
-        for name in self.TAB_ORDER:
+        toolbar_items = ("Shell", "Irdir", "Killpy", "Consultas", "Red", "SSL", "GitHub", "Logs")
+        for name in toolbar_items:
+            action = self.toggle_irdir if name == "Irdir" else (lambda n=name: self.open_tab(n))
             button = tk.Button(
                 top,
                 text=name,
-                command=lambda n=name: self.open_tab(n),
+                command=action,
                 bg=TAB,
                 fg=MUTED,
                 activebackground=TAB_ACTIVE,
@@ -472,7 +492,15 @@ class PyrionConsoleTool(tk.Frame):
         elif tab_type == "Consultas":
             self.prompt_label.configure(text="consulta:#")
         else:
-            self.prompt_label.configure(text="root@mini1:#")
+            path_text = str(self.current_dir)
+            try:
+                rel = self.current_dir.relative_to(Path.home())
+                path_text = "~" if str(rel) == "." else f"~/{rel}"
+            except (ValueError, OSError):
+                pass
+            if len(path_text) > 44:
+                path_text = "..." + path_text[-41:]
+            self.prompt_label.configure(text=f"root@mini1:{path_text}#")
 
     # ---------- historial ----------
     def _render_history(self):
@@ -513,6 +541,343 @@ class PyrionConsoleTool(tk.Frame):
         if self.active_tab:
             self.histories[self.active_tab] = ""
             self._render_history()
+
+
+    # ---------- IRDIR ----------
+    def toggle_irdir(self):
+        if self.irdir_window is not None:
+            try:
+                if self.irdir_window.winfo_exists():
+                    self.close_irdir()
+                    return
+            except tk.TclError:
+                pass
+        self.open_irdir()
+
+    def open_irdir(self):
+        if self.irdir_window is not None:
+            try:
+                if self.irdir_window.winfo_exists():
+                    self.irdir_window.lift()
+                    return
+            except tk.TclError:
+                pass
+
+        self.update_idletasks()
+        host_w = max(1, self.winfo_width())
+        host_h = max(1, self.winfo_height())
+
+        width = min(560, max(390, host_w - 120))
+        height = min(420, max(280, host_h - 100))
+        x = max(0, (host_w - width) // 2)
+        y = max(0, (host_h - height) // 2)
+
+        panel = tk.Frame(
+            self,
+            bg=TAB,
+            bd=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground=ACCENT,
+        )
+        self.irdir_window = panel
+        if not self.current_dir.is_dir():
+            self.current_dir = Path.cwd().resolve()
+        self.irdir_path = self.current_dir
+        panel.place(x=x, y=y, width=width, height=height)
+        panel.lift()
+
+        titlebar = tk.Frame(panel, bg=TAB_ACTIVE, height=34, cursor="fleur")
+        titlebar.pack(fill="x")
+        titlebar.pack_propagate(False)
+
+        title = tk.Label(
+            titlebar,
+            text="Irdir - explorador de carpetas",
+            bg=TAB_ACTIVE,
+            fg=FG,
+            font=("DejaVu Sans", 9, "bold"),
+            padx=10,
+            cursor="fleur",
+        )
+        title.pack(side="left", fill="y")
+
+        tk.Button(
+            titlebar,
+            text="x",
+            command=self.close_irdir,
+            bg=TAB_ACTIVE,
+            fg=RED,
+            activebackground=RED,
+            activeforeground="#FFFFFF",
+            bd=0,
+            relief="flat",
+            width=4,
+            font=("DejaVu Sans", 11, "bold"),
+            takefocus=False,
+        ).pack(side="right", fill="y")
+
+        for widget in (titlebar, title):
+            widget.bind("<Button-1>", self._irdir_drag_start)
+            widget.bind("<B1-Motion>", self._irdir_drag_move)
+
+        nav = tk.Frame(panel, bg=PANEL, height=66)
+        nav.pack(fill="x", padx=6, pady=(6, 2))
+        nav.pack_propagate(False)
+
+        controls = tk.Frame(nav, bg=PANEL)
+        controls.pack(fill="x")
+
+        tk.Button(
+            controls,
+            text="Subir",
+            command=lambda: self._irdir_browse(self.irdir_path.parent),
+            bg=TAB,
+            fg=FG,
+            activebackground=TAB_ACTIVE,
+            activeforeground=FG,
+            bd=1,
+            relief="solid",
+            padx=10,
+            font=("DejaVu Sans", 8),
+        ).pack(side="left")
+
+        tk.Button(
+            controls,
+            text="Inicio",
+            command=lambda: self._irdir_browse(Path.home()),
+            bg=TAB,
+            fg=FG,
+            activebackground=TAB_ACTIVE,
+            activeforeground=FG,
+            bd=1,
+            relief="solid",
+            padx=10,
+            font=("DejaVu Sans", 8),
+        ).pack(side="left", padx=(4, 0))
+
+        tk.Button(
+            controls,
+            text="IR AQUI",
+            command=lambda: self._irdir_use(self.irdir_path),
+            bg=TAB,
+            fg=GREEN,
+            activebackground=TAB_ACTIVE,
+            activeforeground=FG,
+            bd=1,
+            relief="solid",
+            padx=10,
+            font=("DejaVu Sans", 8, "bold"),
+        ).pack(side="right")
+
+        self.irdir_path_label = tk.Label(
+            nav,
+            text="",
+            bg=PANEL,
+            fg=ACCENT,
+            anchor="w",
+            justify="left",
+            font=("DejaVu Sans Mono", 8),
+            padx=3,
+        )
+        self.irdir_path_label.pack(fill="x", pady=(5, 0))
+
+        holder = tk.Frame(panel, bg=PANEL)
+        holder.pack(fill="both", expand=True, padx=6, pady=(2, 6))
+
+        canvas = tk.Canvas(
+            holder,
+            bg=PANEL,
+            bd=0,
+            highlightthickness=0,
+        )
+        scroll = tk.Scrollbar(
+            holder,
+            orient="vertical",
+            command=canvas.yview,
+        )
+        canvas.configure(yscrollcommand=scroll.set)
+
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        self.irdir_canvas = canvas
+        self.irdir_list = tk.Frame(canvas, bg=PANEL)
+        self.irdir_canvas_window = canvas.create_window(
+            (0, 0),
+            window=self.irdir_list,
+            anchor="nw",
+        )
+
+        self.irdir_list.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(self.irdir_canvas_window, width=e.width),
+        )
+
+        self._irdir_render()
+        panel.lift()
+
+    def close_irdir(self):
+        if self.irdir_window is not None:
+            try:
+                self.irdir_window.destroy()
+            except tk.TclError:
+                pass
+        self.irdir_window = None
+        self.irdir_path_label = None
+        self.irdir_canvas = None
+        self.irdir_list = None
+        self.irdir_canvas_window = None
+        try:
+            self.command.focus_set()
+        except tk.TclError:
+            pass
+
+    def _irdir_drag_start(self, event):
+        panel = self.irdir_window
+        if panel is None:
+            return
+        try:
+            self.irdir_drag_x = event.x_root
+            self.irdir_drag_y = event.y_root
+            self.irdir_start_x = panel.winfo_x()
+            self.irdir_start_y = panel.winfo_y()
+            panel.lift()
+        except tk.TclError:
+            pass
+
+    def _irdir_drag_move(self, event):
+        panel = self.irdir_window
+        if panel is None:
+            return
+        try:
+            dx = event.x_root - self.irdir_drag_x
+            dy = event.y_root - self.irdir_drag_y
+            new_x = self.irdir_start_x + dx
+            new_y = self.irdir_start_y + dy
+
+            host_w = max(1, self.winfo_width())
+            host_h = max(1, self.winfo_height())
+            panel_w = max(1, panel.winfo_width())
+            min_x = -panel_w + 100
+            max_x = host_w - 100
+            max_y = max(0, host_h - 34)
+
+            panel.place_configure(
+                x=max(min_x, min(new_x, max_x)),
+                y=max(0, min(new_y, max_y)),
+            )
+            panel.lift()
+        except tk.TclError:
+            pass
+
+    def _irdir_browse(self, path):
+        try:
+            path = Path(path).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return
+        if not path.is_dir():
+            return
+        self.irdir_path = path
+        self._irdir_render()
+
+    def _irdir_use(self, path):
+        try:
+            path = Path(path).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return
+        if not path.is_dir():
+            return
+
+        self.current_dir = path
+        self.irdir_path = path
+
+        if "Consola" in self.open_tabs:
+            self.activate_tab("Consola")
+        else:
+            self._configure_prompt()
+
+        if self.active_tab and self.tab_types.get(self.active_tab) not in ("Killpy", "Consultas"):
+            self._append(f"[Irdir] Directorio activo: {self.current_dir}", self.active_tab)
+
+        self.close_irdir()
+
+    def _irdir_render(self):
+        if self.irdir_list is None or self.irdir_path_label is None:
+            return
+
+        for child in self.irdir_list.winfo_children():
+            child.destroy()
+
+        self.irdir_path_label.configure(text=str(self.irdir_path))
+
+        try:
+            folders = sorted(
+                [item for item in self.irdir_path.iterdir() if item.is_dir()],
+                key=lambda item: item.name.lower(),
+            )
+        except OSError as exc:
+            tk.Label(
+                self.irdir_list,
+                text=f"No se puede abrir la carpeta: {exc}",
+                bg=PANEL,
+                fg=RED,
+                anchor="w",
+                justify="left",
+                padx=8,
+                pady=8,
+            ).pack(fill="x")
+            return
+
+        if not folders:
+            tk.Label(
+                self.irdir_list,
+                text="No hay subcarpetas.",
+                bg=PANEL,
+                fg=MUTED,
+                anchor="w",
+                padx=8,
+                pady=8,
+            ).pack(fill="x")
+            return
+
+        for folder in folders:
+            row = tk.Frame(self.irdir_list, bg=PANEL)
+            row.pack(fill="x", pady=1)
+
+            tk.Button(
+                row,
+                text="(ir)",
+                command=lambda p=folder: self._irdir_use(p),
+                bg=TAB,
+                fg=GREEN,
+                activebackground=TAB_ACTIVE,
+                activeforeground=FG,
+                bd=1,
+                relief="solid",
+                width=5,
+                font=("DejaVu Sans Mono", 8, "bold"),
+            ).pack(side="left", padx=(2, 4), pady=1)
+
+            tk.Button(
+                row,
+                text=folder.name,
+                command=lambda p=folder: self._irdir_browse(p),
+                bg=PANEL,
+                fg=FG,
+                activebackground=TAB_ACTIVE,
+                activeforeground=FG,
+                bd=0,
+                relief="flat",
+                anchor="w",
+                padx=4,
+                pady=5,
+                font=("DejaVu Sans", 9),
+            ).pack(side="left", fill="x", expand=True)
 
     # ---------- KILL PY ----------
     def refresh_kill_py(self, tab_id=None):
@@ -637,6 +1002,7 @@ class PyrionConsoleTool(tk.Frame):
                 capture_output=True,
                 text=True,
                 timeout=20,
+                cwd=str(self.current_dir),
                 executable=None if os.name == "nt" else "/bin/sh",
             )
             output = (result.stdout or "") + (result.stderr or "")
@@ -766,9 +1132,40 @@ class PyrionConsoleTool(tk.Frame):
             self._run_query_number(text, self.active_tab)
             return
 
-        # Todas las demás pestañas aceptan comandos shell sin cambiar de pestaña.
+        # "cd" se maneja en PYRION para que la ruta persista entre comandos.
+        if text == "cd" or text.startswith("cd "):
+            raw_path = text[2:].strip()
+            if raw_path:
+                raw_path = os.path.expandvars(os.path.expanduser(raw_path))
+                target = Path(raw_path)
+                if not target.is_absolute():
+                    target = self.current_dir / target
+            else:
+                target = Path.home()
+
+            try:
+                target = target.resolve()
+            except (OSError, RuntimeError):
+                pass
+
+            if target.is_dir():
+                self.current_dir = target
+                self._append(f"[cd] Directorio activo: {self.current_dir}", self.active_tab)
+                self._configure_prompt()
+                if self.irdir_window is not None:
+                    try:
+                        if self.irdir_window.winfo_exists():
+                            self.irdir_path = self.current_dir
+                            self._irdir_render()
+                    except tk.TclError:
+                        pass
+            else:
+                self._append(f"cd: no existe el directorio: {target}", self.active_tab)
+            return
+
+        # Todas las demás pestañas aceptan comandos shell usando la ruta activa.
         self._append(
-            f"root@mini1:# {text}",
+            f"root@mini1:{self.current_dir}# {text}",
             self.active_tab,
         )
 
@@ -779,6 +1176,7 @@ class PyrionConsoleTool(tk.Frame):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                cwd=str(self.current_dir),
                 executable=None if os.name == "nt" else "/bin/sh",
             )
             output = (result.stdout or "") + (result.stderr or "")
