@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.4"
+TOOL_VERSION = "2.0.5"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -24,6 +24,7 @@ class Mp3PlayerTool(ttk.Frame):
         self.audio_ok = False
 
         self.playlist = []
+        self.recent_tracks = []  # Historial local de canciones reproducidas.
         self.current_index = -1
         self.loaded_path = None
         self.duration = 0.0
@@ -46,6 +47,8 @@ class Mp3PlayerTool(ttk.Frame):
         self.volume = tk.DoubleVar(value=70)
         self.progress = tk.DoubleVar(value=0)
         self.search_var = tk.StringVar()
+        self.current_count_var = tk.StringVar(value="0 canciones")
+        self.recent_count_var = tk.StringVar(value="0 escuchadas")
 
         self.state_path = self._state_file()
         self._build_ui()
@@ -53,6 +56,7 @@ class Mp3PlayerTool(ttk.Frame):
         self._init_backends()
         self._load_state()
         self._refresh_playlist()
+        self._refresh_recent()
         self._apply_volume()
         self.after(250, self._tick)
 
@@ -78,6 +82,22 @@ class Mp3PlayerTool(ttk.Frame):
                 if p.is_file() and p.suffix.lower() == ".mp3":
                     items.append(str(p))
             self.playlist = items
+            # Caché compatible con state.json anterior; guarda rutas, no copias MP3.
+            seen_recent = set()
+            self.recent_tracks = []
+            raw_recent = data.get("recent_tracks", [])
+            if not isinstance(raw_recent, list):
+                raw_recent = []
+            for raw in raw_recent[:200]:
+                p = Path(str(raw)).expanduser()
+                if not p.is_file() or p.suffix.lower() != ".mp3":
+                    continue
+                path = str(p.resolve())
+                if path not in seen_recent:
+                    seen_recent.add(path)
+                    self.recent_tracks.append(path)
+                if len(self.recent_tracks) >= 40:
+                    break
             self._resume_positions = {
                 str(k): max(0.0, float(v))
                 for k, v in dict(data.get("positions", {})).items()
@@ -94,8 +114,9 @@ class Mp3PlayerTool(ttk.Frame):
         try:
             self._remember_position()
             data = {
-                "version": 2,
+                "version": 3,
                 "playlist": self.playlist,
+                "recent_tracks": self.recent_tracks[:40],
                 "last_track": self.current_path() or "",
                 "positions": self._resume_positions,
                 "volume": int(float(self.volume.get())),
@@ -147,7 +168,7 @@ class Mp3PlayerTool(ttk.Frame):
         left.rowconfigure(4, weight=1)
 
         ttk.Label(
-            left, text="Lista de reproduccion", font=("Segoe UI", 11, "bold")
+            left, text="Biblioteca MP3", font=("Segoe UI", 11, "bold")
         ).grid(row=0, column=0, sticky="w")
 
         actions = ttk.Frame(left)
@@ -173,17 +194,31 @@ class Mp3PlayerTool(ttk.Frame):
         search.grid(row=3, column=0, sticky="ew", pady=(0, 5))
         self.search_var.trace_add("write", lambda *_: self._refresh_playlist())
 
-        list_frame = ttk.Frame(left)
-        list_frame.grid(row=4, column=0, sticky="nsew")
+        # Paneles verticales independientes: lista actual y recientes.
+        self.library_panels = ttk.Panedwindow(left, orient="vertical")
+        self.library_panels.grid(row=4, column=0, sticky="nsew")
+
+        current_panel = ttk.Frame(self.library_panels, padding=(0, 3))
+        current_panel.columnconfigure(0, weight=1)
+        current_panel.rowconfigure(1, weight=1)
+        self.library_panels.add(current_panel, weight=3)
+        current_header = ttk.Frame(current_panel)
+        current_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        current_header.columnconfigure(0, weight=1)
+        ttk.Label(
+            current_header, text="Lista actual", font=("Segoe UI", 10, "bold")
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            current_header, textvariable=self.current_count_var, style="Muted.TLabel"
+        ).grid(row=0, column=1, sticky="e")
+
+        list_frame = ttk.Frame(current_panel)
+        list_frame.grid(row=1, column=0, sticky="nsew")
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
         self.listbox = tk.Listbox(
-            list_frame,
-            activestyle="none",
-            selectmode="extended",
-            bd=0,
-            highlightthickness=1,
-            font=("Segoe UI", 9),
+            list_frame, activestyle="none", selectmode="extended",
+            bd=0, highlightthickness=1, font=("Segoe UI", 9),
         )
         self.listbox.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
@@ -191,6 +226,40 @@ class Mp3PlayerTool(ttk.Frame):
         self.listbox.configure(yscrollcommand=scroll.set)
         self.listbox.bind("<Double-Button-1>", self._open_selected)
         self.listbox.bind("<Return>", self._open_selected)
+
+        recent_panel = ttk.Frame(self.library_panels, padding=(0, 3))
+        recent_panel.columnconfigure(0, weight=1)
+        recent_panel.rowconfigure(1, weight=1)
+        self.library_panels.add(recent_panel, weight=2)
+        recent_header = ttk.Frame(recent_panel)
+        recent_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        recent_header.columnconfigure(0, weight=1)
+        ttk.Label(
+            recent_header, text="Recientes", font=("Segoe UI", 10, "bold")
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            recent_header, textvariable=self.recent_count_var, style="Muted.TLabel"
+        ).grid(row=0, column=1, sticky="e", padx=(4, 8))
+        ttk.Button(
+            recent_header, text="Borrar historial", command=self.clear_recent
+        ).grid(row=0, column=2, sticky="e")
+
+        recent_frame = ttk.Frame(recent_panel)
+        recent_frame.grid(row=1, column=0, sticky="nsew")
+        recent_frame.columnconfigure(0, weight=1)
+        recent_frame.rowconfigure(0, weight=1)
+        self.recent_listbox = tk.Listbox(
+            recent_frame, activestyle="none", selectmode="browse",
+            bd=0, highlightthickness=1, font=("Segoe UI", 9),
+        )
+        self.recent_listbox.grid(row=0, column=0, sticky="nsew")
+        recent_scroll = ttk.Scrollbar(
+            recent_frame, orient="vertical", command=self.recent_listbox.yview,
+        )
+        recent_scroll.grid(row=0, column=1, sticky="ns")
+        self.recent_listbox.configure(yscrollcommand=recent_scroll.set)
+        self.recent_listbox.bind("<Double-Button-1>", self._open_recent)
+        self.recent_listbox.bind("<Return>", self._open_recent)
 
         # Reproductor compacto y responsivo para la altura real de una pestaña PTM.
         right = ttk.Frame(body, padding=(14, 4))
@@ -425,6 +494,11 @@ class Mp3PlayerTool(ttk.Frame):
     def _refresh_playlist(self):
         self.listbox.delete(0, "end")
         self._visible_indices = self._filtered_indices()
+        self.current_count_var.set(
+            f"{len(self.playlist)} canciones"
+            if not self.search_var.get().strip()
+            else f"{len(self._visible_indices)} de {len(self.playlist)}"
+        )
         for number, idx in enumerate(self._visible_indices, start=1):
             p = Path(self.playlist[idx])
             marker = "▶ " if idx == self.current_index else ""
@@ -442,6 +516,73 @@ class Mp3PlayerTool(ttk.Frame):
         visible = self._visible_indices[sel[0]]
         self._load_track(visible, autoplay=True)
 
+    # ---------- Historial de canciones escuchadas ----------
+
+    def _refresh_recent(self):
+        """Refresca el panel sin alterar la lista actual."""
+        self.recent_listbox.delete(0, "end")
+        self._visible_recent_paths = list(self.recent_tracks)
+        self.recent_count_var.set(f"{len(self._visible_recent_paths)} escuchadas")
+        if not self._visible_recent_paths:
+            self.recent_listbox.insert("end", "Aún no hay canciones escuchadas")
+            return
+        for number, path in enumerate(self._visible_recent_paths, start=1):
+            marker = "▶ " if path == self.loaded_path and self.playing else ""
+            self.recent_listbox.insert(
+                "end", f"{marker}{number:02d}. {Path(path).stem}",
+            )
+
+    def _mark_recent(self, path):
+        """Registra una pista solo después de iniciar la reproducción."""
+        if not path:
+            return
+        normalized = str(Path(path).expanduser().resolve())
+        self.recent_tracks = [
+            normalized, *(item for item in self.recent_tracks if item != normalized)
+        ][:40]
+        self._refresh_recent()
+        self._schedule_save()
+
+    def _open_recent(self, _event=None):
+        """Reproduce un reciente y lo incorpora a la lista actual si hace falta."""
+        selection = self.recent_listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        if index >= len(self._visible_recent_paths):
+            return
+        path = self._visible_recent_paths[index]
+        if not Path(path).is_file():
+            self.recent_tracks = [p for p in self.recent_tracks if p != path]
+            self._refresh_recent()
+            self._schedule_save()
+            messagebox.showwarning(
+                "Archivo no disponible",
+                "La canción ya no está en su ubicación original:\n" + path,
+                parent=self,
+            )
+            return
+        if path not in self.playlist:
+            self.playlist.append(path)
+            self._refresh_playlist()
+        self._load_track(self.playlist.index(path), autoplay=True)
+
+    def clear_recent(self):
+        """Borra el historial sin eliminar canciones ni modificar la playlist."""
+        if not self.recent_tracks:
+            return
+        if not messagebox.askyesno(
+            "Borrar historial",
+            "¿Borrar las canciones escuchadas recientemente?\n"
+            "No se eliminarán los archivos MP3 ni la lista actual.",
+            parent=self,
+        ):
+            return
+        self.recent_tracks = []
+        self._refresh_recent()
+        self._schedule_save()
+        self.status_var.set("Historial de recientes borrado")
+
     def remove_selected(self):
         selected = list(self.listbox.curselection())
         if not selected:
@@ -450,7 +591,8 @@ class Mp3PlayerTool(ttk.Frame):
         current_path = self.current_path()
         for idx in actual:
             path = self.playlist.pop(idx)
-            self._resume_positions.pop(path, None)
+            if path not in self.recent_tracks:
+                self._resume_positions.pop(path, None)
         if current_path and current_path in self.playlist:
             self.current_index = self.playlist.index(current_path)
         elif self.playlist:
@@ -468,7 +610,7 @@ class Mp3PlayerTool(ttk.Frame):
         self.stop(reset_ui=True)
         self.playlist = []
         self.current_index = -1
-        self._resume_positions = {}
+        # Limpiar la lista actual no elimina el historial ni las posiciones guardadas.
         self._refresh_playlist()
         self._schedule_save()
 
@@ -612,6 +754,7 @@ class Mp3PlayerTool(ttk.Frame):
         self.progress.set(self._position_to_progress(position))
         self._update_time_label(position)
         self.status_var.set(f"Reproduciendo · {self.title_var.get()}")
+        self._mark_recent(self.loaded_path)
         return True
 
 
