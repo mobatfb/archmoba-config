@@ -1,0 +1,9 @@
+{
+  "app": "PYRION",
+  "name": "PYRION OS",
+  "description": "Escritorio gráfico interactivo PYRION OS 2030 con paneles, núcleo y estado de sistema",
+  "version": "0.2.0",
+  "app_path": "PYRION/app.py",
+  "release_commit": "e71362efe45637c467e26280ae6928aad0366325",
+  "maintenance": false
+}
