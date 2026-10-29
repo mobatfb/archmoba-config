@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Visor multimedia tipo VLC integrado en PTM para imagenes, videos y musica, "
     "con playlist, arrastrar y soltar, progreso, volumen, velocidad y repeticion."
 )
-TOOL_VERSION = "1.1.1"
+TOOL_VERSION = "1.1.2"
 
 CHILD_FLAG = "--ptm-media-child"
 
@@ -456,6 +456,7 @@ class MultimediaViewerTool(ttk.Frame):
         self._seeking = False
         self._last_state = ""
         self._save_job = None
+        self._search_job = None
 
         self.title_var = tk.StringVar(value="Sin reproduccion")
         self.detail_var = tk.StringVar(value="Arrastra imagenes, videos o musica")
@@ -622,7 +623,7 @@ class MultimediaViewerTool(ttk.Frame):
         left = ttk.Frame(body, padding=5)
         body.add(left, weight=2)
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(4, weight=1)
+        left.rowconfigure(3, weight=1)
 
         ttk.Label(
             left, text="Biblioteca multimedia", font=("Segoe UI", 11, "bold")
@@ -650,12 +651,6 @@ class MultimediaViewerTool(ttk.Frame):
         )
         self.drop_hint.grid(row=2, column=0, sticky="ew", pady=(0, 4))
 
-        self.search_entry = ttk.Entry(left, textvariable=self.search_var)
-        self.search_entry.grid(row=3, column=0, sticky="ew", pady=(0, 5))
-        self.search_var.trace_add(
-            "write", lambda *_: self._refresh_all_tabs()
-        )
-
         style.configure(
             "MediaLibrary.TNotebook", background="#D6E3FF", borderwidth=0
         )
@@ -669,7 +664,7 @@ class MultimediaViewerTool(ttk.Frame):
             foreground=[("selected", "#172638"), ("!selected", "#34445D")],
         )
         self.library_tabs = ttk.Notebook(left, style="MediaLibrary.TNotebook")
-        self.library_tabs.grid(row=4, column=0, sticky="nsew")
+        self.library_tabs.grid(row=3, column=0, sticky="nsew")
         self.tab_recent = ttk.Frame(self.library_tabs, padding=5)
         self.tab_favorites = ttk.Frame(self.library_tabs, padding=5)
         self.tab_all = ttk.Frame(self.library_tabs, padding=5)
@@ -726,7 +721,7 @@ class MultimediaViewerTool(ttk.Frame):
             )
 
         options = ttk.Frame(left)
-        options.grid(row=5, column=0, sticky="ew", pady=(5, 0))
+        options.grid(row=4, column=0, sticky="ew", pady=(5, 0))
         ttk.Checkbutton(
             options, text="Repetir", variable=self.repeat_var,
             command=self._schedule_save,
@@ -735,6 +730,34 @@ class MultimediaViewerTool(ttk.Frame):
             options, text="Aleatorio", variable=self.shuffle_var,
             command=self._schedule_save,
         ).pack(side="left", padx=(8, 0))
+
+        # Filtro compartido al pie de la biblioteca. No altera los
+        # archivos ni los datos en caché, solo las filas visibles.
+        search_panel = ttk.Frame(left)
+        search_panel.grid(row=5, column=0, sticky="ew", pady=(9, 2))
+        search_panel.columnconfigure(1, weight=1)
+        ttk.Label(
+            search_panel, text="Buscar en todas las pestañas",
+            style="MediaMuted.TLabel",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        ttk.Label(search_panel, text="⌕").grid(
+            row=1, column=0, padx=(0, 6)
+        )
+        self.search_entry = ttk.Entry(
+            search_panel, textvariable=self.search_var,
+        )
+        self.search_entry.grid(row=1, column=1, sticky="ew")
+        self.search_entry.bind(
+            "<Escape>", lambda _event: self.clear_search()
+        )
+        ttk.Button(
+            search_panel, text="✕", width=3,
+            command=self.clear_search,
+        ).grid(row=1, column=2, padx=(5, 0))
+        self.search_var.trace_add(
+            "write", lambda *_: self._schedule_search_filter()
+        )
+
 
         # Visor
         right = ttk.Frame(body, padding=5)
@@ -951,6 +974,25 @@ class MultimediaViewerTool(ttk.Frame):
             self._refresh_all()
             if not self._scan_started:
                 self.start_scan()
+
+    def clear_search(self):
+        """Limpia el filtro compartido sin afectar favoritos o caché."""
+        self.search_var.set("")
+        self.search_entry.focus_set()
+
+    def _schedule_search_filter(self):
+        """Agrupa las pulsaciones y evita redibujar miles de filas por tecla."""
+        if self._search_job is not None:
+            try:
+                self.after_cancel(self._search_job)
+            except tk.TclError:
+                pass
+        self._search_job = self.after(130, self._apply_search_filter)
+
+    def _apply_search_filter(self):
+        self._search_job = None
+        self._refresh_all_tabs()
+
 
     def _refresh_all_tabs(self):
         self._refresh_playlist()
@@ -2631,6 +2673,12 @@ class MultimediaViewerTool(ttk.Frame):
             pass
 
     def on_close(self):
+        if self._search_job is not None:
+            try:
+                self.after_cancel(self._search_job)
+            except tk.TclError:
+                pass
+            self._search_job = None
         self._scan_cancel.set()
         self._all_render_token += 1
         self.exit_fullscreen(immediate=True)
