@@ -6,7 +6,7 @@
   "base_color": "#C6A15B",
   "metallic": 1,
   "roughness": 0.12,
-  "texture": "../textures/gold_reflective.gif",
+  "texture": "../textures/gold_cracked.gif",
   "texture_status": "ready",
-  "notes": "La imagen de la escultura dorada se muestra en modo IMG. MAT utiliza iluminacion dorada procedural. GIF compatible con Tkinter sin Pillow."
+  "notes": "Imagen de fisura negra sobre oro pulido, adaptada a textura UV panoramica de 80x40 (GIF nativo de Tk). MAT mantiene el material dorado procedural; IMG muestra la imagen real."
 }
