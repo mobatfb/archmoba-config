@@ -271,6 +271,9 @@ class PyrionApp(tk.Tk):
         self.render_job = None
         self.last_render_w = 0
         self.last_render_h = 0
+        self.w = 0
+        self.h = 0
+        self.s = 1.0
 
         # La ventana es el escritorio: permanece detrás de programas externos.
         self._force_fullscreen()
@@ -586,21 +589,20 @@ class PyrionApp(tk.Tk):
                           width=1.7*self.s)
         c.create_oval(cx-r-8,cy-r-8,cx+r+8,cy+r+8,
                       outline="#5b75fb",width=2,tag="orb_pulse")
-        c.create_oval(cx-r,cy-r,cx+r,cy+r,fill="#5b48b2",outline="#8ba9fa",width=2)
+        c.create_oval(cx-r,cy-r,cx+r,cy+r,fill="#5b48b2",outline="#8ba9fa",width=2,tags=("orb_click",))
         # Gradiente radial mediante discos superpuestos (sin Pillow).
         for i in range(42,0,-1):
             ratio=i/42
             rr=r*ratio*.97
             col=_mix("#aedbfc","#3f4b91",max(0,(1-ratio)*.93))
             c.create_oval(cx-rr+r*.08,cy-rr-r*.09,cx+rr+r*.08,cy+rr-r*.09,
-                          fill=col,outline=col)
+                          fill=col,outline=col,tags=("orb_click",))
         c.create_arc(cx-r*1.3,cy-r*.6,cx+r*1.3,cy+r*.78,
                      start=174,extent=214,style="arc",outline="#8064ff",
                      width=2*self.s)
         self._text(cx,cy+r+38*self.s,"NÚCLEO PYRION",11,C_MUTED,anchor="center",bold=True)
         self._text(cx,cy,"●",max(10,15*self.s), "#d4eeff",anchor="center")
         tag="orb_click"
-        c.create_oval(cx-r,cy-r,cx+r,cy+r,fill="",outline="",tags=(tag,))
         self._hit(tag,self._toggle_core)
 
     def _core_menu(self):
