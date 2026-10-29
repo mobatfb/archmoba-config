@@ -6,193 +6,274 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-TOOL_NAME = "PTM - 1000 Propuestas de Tools"
-TOOL_DESCRIPTION = "Revisor secuencial de 1000 ideas para nuevas tools PTM con aceptar, rechazar, regreso, listas, CSV y progreso persistente."
-TOOL_VERSION = "2.0.0"
+TOOL_NAME = "PTM - 1000 Propuestas"
+TOOL_DESCRIPTION = "Revisor de 1000 propuestas nuevas y variadas para PTM: suites, juegos, blogs, simuladores, creatividad, entretenimiento, sistema y desarrollo."
+TOOL_VERSION = "3.0.0"
 APP_NAME = TOOL_NAME
 CACHE_DIR = Path.home() / ".ptm"
-CACHE_FILE = CACHE_DIR / "propuestas_tools_cache.json"
+CACHE_FILE = CACHE_DIR / "propuestas_catalogo_v3_cache.json"
 
-PROPOSALS = [
-    (1, "ARCHMOBA Code", "Editor ligero de texto y codigo con pestanas, numeros de linea, buscar/reemplazar y ejecutar .py."),
-    (2, "Administrador de procesos", "Ver procesos, PID, CPU, RAM, ruta y finalizar procesos desde PTM."),
-    (3, "Monitor del sistema", "Panel de CPU, RAM, discos, temperatura, uptime y procesos principales."),
-    (4, "PTM Tool Builder", "Crear tools compatibles con PTM desde una interfaz sin editar guide.csv manualmente."),
-    (5, "Administrador ZIP", "Abrir, explorar, crear, extraer y modificar archivos ZIP."),
-    (6, "API Tester", "Cliente HTTP tipo mini Postman con GET, POST, PUT, DELETE, headers, JSON y multipart."),
-    (7, "SQLite Manager", "Abrir bases SQLite, explorar tablas, ejecutar SQL y exportar resultados."),
-    (8, "Buscador dentro de archivos", "Buscar texto dentro de PY, TXT, CSV, JSON, HTML, LOG y otros formatos."),
-    (9, "Inspector de archivos", "Mostrar tamano, MIME, fechas, permisos, hashes y extension real."),
-    (10, "Gestor Git", "Clonar, pull, commit, push, branches e historial Git desde una interfaz simple."),
-    (11, "System Report", "Generar diagnostico del sistema, Python, dependencias y componentes usados por PTM."),
-    (12, "Monitor de red", "Interfaces, IP, gateway, DNS, trafico, ping y conexiones activas."),
-    (13, "Gestor de servicios", "Listar, iniciar, detener y reiniciar servicios de Windows o systemd."),
-    (14, "Administrador de inicio", "Gestionar aplicaciones que arrancan automaticamente con el sistema."),
-    (15, "Downloader", "Descargas por URL con progreso, pausa, reanudacion y verificacion de hash."),
-    (16, "Capturador de pantalla", "Capturar pantalla completa, ventana o region y guardar en PNG/JPG."),
-    (17, "Grabador de pantalla", "Grabar escritorio o region a video con FPS configurable."),
-    (18, "Conversor de imagenes", "Convertir PNG, JPG, WEBP, BMP e ICO de forma individual o por lotes."),
-    (19, "Compresor de imagenes", "Reducir peso y resolucion de imagenes manteniendo calidad configurable."),
-    (20, "Editor EXIF", "Ver, editar y limpiar metadatos EXIF de imagenes."),
-    (21, "Editor ID3", "Editar metadatos de MP3, portada, artista, album y genero."),
-    (22, "Generador QR", "Crear QR para texto, URL, Wi-Fi, contactos y otros datos."),
-    (23, "Lector QR", "Leer codigos QR desde imagen o camara si esta disponible."),
-    (24, "Generador de contrasenas", "Crear contrasenas seguras con reglas configurables."),
-    (25, "Gestor de portapapeles", "Historial de textos copiados con favoritos y busqueda."),
-    (26, "Notas rapidas", "Notas locales con etiquetas, fijado y busqueda."),
-    (27, "Gestor de tareas", "Tareas con estado, prioridad, fecha y filtros."),
-    (28, "Temporizadores", "Varios temporizadores y cronometros dentro de PTM."),
-    (29, "Calendario local", "Calendario sencillo con eventos almacenados localmente."),
-    (30, "Calculadora cientifica", "Calculadora avanzada con historial y conversiones basicas."),
-    (31, "Conversor de unidades", "Longitud, masa, temperatura, almacenamiento y otras unidades."),
-    (32, "Conversor de monedas manual", "Conversion de monedas con tasas ingresadas por el usuario y cache local."),
-    (33, "Visor JSON", "Arbol expandible, validacion, edicion y formato de JSON."),
-    (34, "Visor XML", "Arbol XML con busqueda, validacion y formato."),
-    (35, "Visor YAML", "Abrir, validar, editar y convertir YAML a JSON."),
-    (36, "Comparador de archivos", "Diff visual para texto, codigo, JSON y CSV."),
-    (37, "Comparador de carpetas", "Detectar archivos faltantes, modificados y duplicados entre dos carpetas."),
-    (38, "Detector de duplicados", "Buscar archivos duplicados por hash, nombre o tamano."),
-    (39, "Limpiador de duplicados", "Revisar y eliminar duplicados con confirmacion segura."),
-    (40, "Organizador por tipo", "Clasificar archivos automaticamente por extension o categoria."),
-    (41, "Renombrador masivo", "Renombrar lotes usando patrones, prefijos, sufijos y numeracion."),
-    (42, "Sincronizador de carpetas", "Sincronizar contenido entre dos carpetas localmente."),
-    (43, "Backup local", "Crear copias de seguridad de carpetas con historial y restauracion."),
-    (44, "Restaurador de backup", "Explorar respaldos creados y restaurar archivos seleccionados."),
-    (45, "Visor HEX", "Abrir archivos binarios y navegar por contenido hexadecimal."),
-    (46, "Editor HEX", "Modificar bytes de archivos con respaldo automatico."),
-    (47, "Inspector PE", "Mostrar informacion basica de ejecutables PE de Windows."),
-    (48, "Inspector ELF", "Mostrar cabeceras e informacion de binarios ELF en Linux."),
-    (49, "Inspector de librerias", "Listar DLL, SO o dependencias vinculadas a un ejecutable."),
-    (50, "Hash Checker", "Calcular y comparar MD5, SHA1, SHA256 y SHA512."),
-    (51, "Generador de checksum", "Crear archivos de checksum para carpetas o paquetes."),
-    (52, "Verificador de checksum", "Verificar integridad de archivos con hashes previamente guardados."),
-    (53, "Editor CSV", "Editar CSV con tabla, filtros, busqueda y exportacion."),
-    (54, "Visor Excel", "Abrir XLSX con hojas y previsualizacion simple."),
-    (55, "CSV a Excel", "Convertir CSV a XLSX con configuracion de delimitador."),
-    (56, "Excel a CSV", "Exportar hojas XLSX a CSV individual o multiple."),
-    (57, "CSV Cleaner", "Detectar filas vacias, duplicadas o columnas inconsistentes."),
-    (58, "CSV Join", "Unir varios CSV compatibles en uno solo."),
-    (59, "CSV Split", "Dividir un CSV por numero de filas o por columna."),
-    (60, "JSON a CSV", "Convertir listas y objetos JSON tabulares a CSV."),
-    (61, "CSV a JSON", "Convertir CSV a JSON con configuracion de tipos basica."),
-    (62, "PDF Merger", "Unir varios PDF en uno solo."),
-    (63, "PDF Splitter", "Separar paginas o rangos de un PDF."),
-    (64, "PDF Images", "Extraer imagenes de archivos PDF."),
-    (65, "Images to PDF", "Crear PDF a partir de imagenes ordenadas."),
-    (66, "PDF Metadata", "Ver y editar metadatos basicos de PDF."),
-    (67, "PDF Compressor", "Reducir peso de PDF cuando sea posible."),
-    (68, "Text Extractor", "Extraer texto de varios formatos compatibles."),
-    (69, "Log Viewer", "Abrir logs grandes con filtros, busqueda y seguimiento."),
-    (70, "Tail Monitor", "Seguir en tiempo real cambios de archivos de log."),
-    (71, "Regex Tester", "Probar expresiones regulares contra texto con coincidencias resaltadas."),
-    (72, "Base64 Tool", "Codificar y decodificar texto o archivos en Base64."),
-    (73, "URL Encoder", "Codificar y decodificar URL y parametros."),
-    (74, "JWT Inspector", "Decodificar localmente cabecera y payload de JWT sin validar firmas."),
-    (75, "UUID Generator", "Generar lotes de UUID y copiarlos rapidamente."),
-    (76, "Timestamp Converter", "Convertir Unix timestamp a fecha y viceversa."),
-    (77, "Cron Helper", "Construir y explicar expresiones cron."),
-    (78, "Port Scanner Local", "Comprobar puertos en hosts autorizados o localhost para diagnostico."),
-    (79, "Ping Monitor", "Monitorear latencia y perdida de paquetes a uno o varios destinos."),
-    (80, "DNS Lookup", "Consultar registros A, AAAA, MX, TXT y NS."),
-    (81, "SSL Inspector", "Mostrar informacion de certificados SSL de un host."),
-    (82, "HTTP Headers Viewer", "Consultar y mostrar cabeceras HTTP de una URL."),
-    (83, "Web Screenshot", "Capturar una pagina web a imagen usando un motor disponible localmente."),
-    (84, "HTML Preview", "Editar HTML y previsualizarlo localmente."),
-    (85, "Markdown Viewer", "Editar y previsualizar archivos Markdown."),
-    (86, "Markdown to HTML", "Convertir Markdown a HTML localmente."),
-    (87, "Color Picker", "Selector de color con HEX, RGB, HSL y copia rapida."),
-    (88, "Icon Generator", "Generar ICO y tamanos comunes desde una imagen."),
-    (89, "Sprite Sheet Builder", "Unir imagenes en una hoja de sprites."),
-    (90, "Image Cropper", "Recortar imagenes de forma visual con relacion configurable."),
-    (91, "Audio Converter", "Convertir audio entre formatos cuando FFmpeg este disponible."),
-    (92, "Audio Cutter", "Recortar fragmentos de audio con inicio y fin."),
-    (93, "Video Converter", "Convertir video con perfiles basicos usando FFmpeg."),
-    (94, "Video Cutter", "Recortar video sin interfaz compleja."),
-    (95, "Thumbnail Generator", "Generar miniaturas de videos o imagenes por lotes."),
-    (96, "Launcher Creator", "Crear accesos directos o lanzadores para tools y scripts."),
-    (97, "Environment Viewer", "Ver variables de entorno, PATH y rutas de Python."),
-    (98, "Dependency Manager", "Detectar imports, paquetes faltantes, instalados y versiones."),
-    (99, "Python Environment Builder", "Crear entornos virtuales y preparar requirements.txt."),
-    (100, "PTM Diagnostics", "Comprobar integridad de guide.csv, archivos tools, dependencias y configuracion PTM."),
+PROPOSALS = []
+
+
+def _add(title, desc):
+    pid = len(PROPOSALS) + 1
+    PROPOSALS.append((pid, title, desc))
+
+
+# 1-100 · SUITES COMPLETAS
+_SUITE_CONCEPTS = [
+    ("PDF Studio", "Suite completa para unir, dividir, comprimir, ordenar, convertir, extraer imagenes, editar metadatos y previsualizar PDF."),
+    ("Image Studio", "Suite para convertir, redimensionar, comprimir, recortar, rotar, limpiar metadatos y procesar imagenes por lotes."),
+    ("Audio Studio", "Suite para reproducir, cortar, unir, convertir, normalizar, editar etiquetas y gestionar bibliotecas de audio."),
+    ("Video Studio", "Suite para reproducir, recortar, unir, convertir, extraer audio, generar miniaturas y revisar metadatos de video."),
+    ("Office Studio", "Centro para visualizar, convertir y organizar documentos Word, Excel, PowerPoint, PDF, CSV y texto."),
+    ("Data Studio", "Espacio para abrir, limpiar, comparar, transformar y exportar CSV, JSON, Excel y SQLite."),
+    ("Archive Studio", "Gestor unificado de ZIP, TAR y otros paquetes con crear, extraer, modificar, verificar y explorar contenido."),
+    ("Web Studio", "Editor y visor local de HTML, CSS y JavaScript con previsualizacion, recursos y empaquetado de proyectos."),
+    ("Developer Studio", "Entorno ligero con editor, terminal, Git, dependencias, entornos Python, ejecucion y diagnostico."),
+    ("Media Studio", "Biblioteca unificada de musica, video e imagenes con recientes, favoritos, listas, busqueda y etiquetas."),
 ]
-
-# Propuestas 101-1000. Se generan de forma determinista combinando
-# 30 areas de trabajo con 30 enfoques distintos. Esto mantiene las
-# primeras 100 intactas y amplia el catalogo hasta exactamente 1000.
-_EXTRA_DOMAINS = [
-    ("Archivos", "archivos y carpetas"),
-    ("Documentos", "documentos de oficina"),
-    ("Imagenes", "imagenes y recursos graficos"),
-    ("Audio", "archivos y flujos de audio"),
-    ("Video", "videos y recursos audiovisuales"),
-    ("PDF", "documentos PDF"),
-    ("CSV", "datos CSV"),
-    ("Excel", "libros y hojas de calculo"),
-    ("JSON", "datos JSON"),
-    ("Bases de datos", "bases de datos locales"),
-    ("Red", "redes y conectividad"),
-    ("Internet", "recursos web e internet"),
-    ("Linux", "sistemas Linux"),
-    ("Windows", "sistemas Windows"),
-    ("Python", "proyectos y entornos Python"),
-    ("Git", "repositorios y control de versiones"),
-    ("APIs", "servicios y endpoints HTTP"),
-    ("Logs", "registros y archivos de log"),
-    ("Backups", "copias de seguridad"),
-    ("Seguridad local", "diagnostico e integridad local"),
-    ("Multimedia", "contenido multimedia"),
-    ("Productividad", "tareas y productividad"),
-    ("Texto", "texto plano y contenido editable"),
-    ("Codigo", "codigo fuente"),
-    ("Paquetes", "paquetes y archivos comprimidos"),
-    ("Sistema", "recursos y configuracion del sistema"),
-    ("Discos", "unidades y almacenamiento"),
-    ("Procesos", "procesos y ejecucion de programas"),
-    ("PTM", "herramientas y componentes PTM"),
-    ("Pyrion", "entorno Pyrion Linux"),
+_SUITE_VARIANTS = [
+    ("Lite", "minimalista y rapido"),
+    ("Pro", "con funciones avanzadas y lotes"),
+    ("Portable", "autocontenido y transportable"),
+    ("Workspace", "con sesiones y pestanas persistentes"),
+    ("Quick", "centrado en arrastrar y soltar"),
+    ("Batch", "optimizado para procesamiento masivo"),
+    ("Manager", "con biblioteca, historial y favoritos"),
+    ("Inspector", "con previsualizacion profunda antes de modificar"),
+    ("Automation", "con presets y cadenas de acciones"),
+    ("Offline", "sin depender de servicios externos"),
 ]
+for name, desc in _SUITE_CONCEPTS:
+    for suffix, mode in _SUITE_VARIANTS:
+        _add(f"{name} {suffix}", f"{desc} Variante {suffix}: {mode}. Se plantea como una sola app completa, no como varias mini-tools separadas.")
 
-_EXTRA_ACTIONS = [
-    ("Analizador", "analizar y resumir informacion util de"),
-    ("Inspector", "inspeccionar propiedades y detalles de"),
-    ("Monitor", "monitorizar cambios y estado de"),
-    ("Organizador", "organizar automaticamente"),
-    ("Clasificador", "clasificar por reglas configurables"),
-    ("Buscador avanzado", "buscar con filtros avanzados dentro de"),
-    ("Comparador", "comparar elementos y detectar diferencias en"),
-    ("Validador", "validar estructura, consistencia y errores de"),
-    ("Reparador", "detectar y corregir problemas comunes en"),
-    ("Convertidor", "convertir entre formatos compatibles de"),
-    ("Exportador", "exportar informacion seleccionada desde"),
-    ("Importador", "importar informacion hacia PTM desde"),
-    ("Generador de reportes", "generar reportes claros sobre"),
-    ("Historial", "mantener historial local de cambios sobre"),
-    ("Favoritos", "guardar y recuperar elementos favoritos de"),
-    ("Dashboard", "mostrar un panel resumido y visual de"),
-    ("Automatizador", "automatizar tareas repetitivas relacionadas con"),
-    ("Procesador por lotes", "procesar multiples elementos de"),
-    ("Previsualizador", "previsualizar rapidamente contenido de"),
-    ("Editor rapido", "editar de forma sencilla datos de"),
-    ("Limpiador", "limpiar temporales, duplicados o datos innecesarios de"),
-    ("Sincronizador", "sincronizar estados o contenidos de"),
-    ("Indexador", "crear un indice local consultable de"),
-    ("Etiquetador", "asignar etiquetas y categorias a"),
-    ("Detector de cambios", "detectar modificaciones recientes en"),
-    ("Asistente", "guiar paso a paso tareas comunes sobre"),
-    ("Administrador", "administrar operaciones frecuentes de"),
-    ("Resumen inteligente", "crear resumenes locales y estructurados de"),
-    ("Diagnostico", "realizar diagnosticos y pruebas sobre"),
-    ("Centro de herramientas", "reunir acciones frecuentes relacionadas con"),
+
+# 101-200 · JUEGOS
+_GAME_GENRES = [
+    ("Dungeon Roguelite", "salas aleatorias, mejoras, jefes y progresion persistente"),
+    ("Arcade Racer", "carreras cortas, tiempos, rivales y desbloqueos"),
+    ("Tower Defense", "oleadas, rutas, torres, mejoras y jefes"),
+    ("Puzzle Quest", "rompecabezas con mapa, niveles y recompensas"),
+    ("Survivor Arena", "oleadas continuas, mejoras y puntuacion"),
+    ("Platform Adventure", "plataformas, secretos, coleccionables y niveles"),
+    ("Card Battle", "mazos, cartas, combates y progresion"),
+    ("Tycoon Manager", "gestion incremental, recursos y mejoras"),
+    ("Arena Fighter", "combates rapidos, personajes y ranking"),
+    ("Story Adventure", "exploracion, decisiones y narrativa por capitulos"),
 ]
+_GAME_THEMES = [
+    ("Neon", "cyberpunk de luces y hologramas"),
+    ("Pyrion", "inspirado en el entorno Pyrion Linux"),
+    ("Retro", "estetica de consola clasica"),
+    ("Space", "naves, estaciones y planetas"),
+    ("Horror", "supervivencia y atmosfera oscura"),
+    ("Cyber", "redes, sistemas y entidades digitales"),
+    ("Pixel", "pixel art y animacion 2D"),
+    ("Police Tech", "entrenamiento arcade ficticio con estetica tecnologica"),
+    ("Dungeon", "mazmorras infinitas y arquitectura holografica"),
+    ("Arcade", "estilo de salon recreativo y puntuaciones"),
+]
+for genre, gameplay in _GAME_GENRES:
+    for theme, setting in _GAME_THEMES:
+        _add(f"{theme} {genre}", f"Juego integrado en PTM con {gameplay}, ambientado en un mundo {setting}. Guardado local, logros y ranking interno.")
 
-for domain_name, domain_desc in _EXTRA_DOMAINS:
-    for action_name, action_desc in _EXTRA_ACTIONS:
-        pid = len(PROPOSALS) + 1
-        PROPOSALS.append((
-            pid,
-            f"{action_name} de {domain_name}",
-            f"Tool PTM para {action_desc} {domain_desc}, con interfaz integrada, filtros, historial local y acciones seguras.",
-        ))
+
+# 201-300 · BLOGS / WIKIS / EXPERIENCIAS DE CONTENIDO
+_CONTENT_FORMATS = [
+    ("Blog interactivo", "publicaciones, categorias, favoritos y busqueda"),
+    ("Revista digital", "ediciones, portadas, articulos y archivo"),
+    ("Wiki local", "fichas enlazadas, indice y referencias"),
+    ("Diario cronologico", "entradas por fecha, archivo y destacados"),
+    ("Galeria comentada", "imagenes, fichas, notas y colecciones"),
+    ("Enciclopedia", "articulos tematicos y referencias cruzadas"),
+    ("Timeline interactivo", "eventos ordenados con fichas y filtros"),
+    ("Museo virtual", "salas tematicas, piezas y descripciones"),
+    ("Fan Hub", "personajes, curiosidades, noticias ficticias y galeria"),
+    ("Story Hub", "capitulos, personajes, lore y contenido desbloqueable"),
+]
+_CONTENT_THEMES = [
+    "videojuegos retro", "GTA San Andreas", "Crash Bandicoot", "Resident Evil",
+    "ENTER Infinite Dungeon", "Pyrion", "ARCHMOBA", "historia de consolas",
+    "tecnologia clasica", "cultura gamer"
+]
+for fmt, behavior in _CONTENT_FORMATS:
+    for theme in _CONTENT_THEMES:
+        _add(f"{fmt} - {theme}", f"Experiencia integrada en PTM sobre {theme}: {behavior}. Navegable como una app completa y con cache local.")
+
+
+# 301-400 · SIMULADORES / EDUCATIVOS
+_EDU_FORMATS = [
+    ("Simulador", "simular escenarios con parametros y resultados"),
+    ("Laboratorio", "realizar pruebas guiadas y experimentos"),
+    ("Entrenador", "proponer ejercicios progresivos y registrar resultados"),
+    ("Visualizador", "representar procesos de forma grafica e interactiva"),
+    ("Sandbox", "experimentar libremente con configuraciones"),
+    ("Tutor", "explicar conceptos paso a paso con ejemplos"),
+    ("Challenge", "plantear retos con niveles y puntuacion"),
+    ("Practice Lab", "practicar operaciones con feedback"),
+    ("Explorer", "explorar conceptos mediante controles interactivos"),
+    ("Academy", "organizar lecciones, practicas y progreso local"),
+]
+_EDU_TOPICS = [
+    "Linux", "redes", "Python", "Git", "bases de datos",
+    "algoritmos", "hardware PC", "seguridad defensiva",
+    "terminal", "estructura de archivos"
+]
+for fmt, behavior in _EDU_FORMATS:
+    for topic in _EDU_TOPICS:
+        _add(f"{topic} {fmt}", f"Aplicacion educativa de {topic} para {behavior}, con ejemplos locales, progreso guardado y modo practica.")
+
+
+# 401-500 · CREATIVIDAD / DISEÑO
+_CREATIVE_APPS = [
+    ("Pixel Editor", "dibujar pixel art con capas, paletas y exportacion"),
+    ("Sprite Animator", "crear sprites y animaciones cuadro a cuadro"),
+    ("Wallpaper Maker", "componer fondos con capas, texto y efectos"),
+    ("Poster Maker", "crear posters y piezas verticales"),
+    ("Icon Lab", "crear iconos, favicons y variantes de tamano"),
+    ("UI Mockup", "crear bocetos de interfaces y paneles"),
+    ("Card Designer", "disenar cartas, fichas y coleccionables"),
+    ("Story Builder", "organizar escenas, personajes y dialogos"),
+    ("Map Builder", "crear mapas 2D por cuadricula y capas"),
+    ("Theme Builder", "crear paletas, temas y estilos para apps"),
+]
+_CREATIVE_STYLES = [
+    "Neon", "Retro", "Minimal", "Cyber", "Dark",
+    "Arcade", "Police Tech", "Holographic", "Pixel", "Pyrion"
+]
+for app_name, behavior in _CREATIVE_APPS:
+    for style in _CREATIVE_STYLES:
+        _add(f"{style} {app_name}", f"App creativa integrada en PTM para {behavior}, con estilo {style}, proyectos guardables y exportacion.")
+
+
+# 501-600 · SISTEMA / DESARROLLO
+_SYSTEM_APPS = [
+    ("Control Center", "centralizar configuracion, estado y accesos"),
+    ("Inspector", "examinar detalles tecnicos y dependencias"),
+    ("Monitor", "mostrar actividad y consumo en tiempo real"),
+    ("Manager", "administrar recursos y acciones frecuentes"),
+    ("Dashboard", "resumir indicadores y accesos"),
+    ("Recovery Center", "diagnosticar problemas y ofrecer reparaciones seguras"),
+    ("Profiler", "medir consumo, tiempos y comportamiento"),
+    ("Launcher", "descubrir y ejecutar componentes"),
+    ("Audit Viewer", "registrar y consultar actividad local"),
+    ("Workspace", "reunir herramientas relacionadas en pestanas"),
+]
+_SYSTEM_TOPICS = [
+    "Python", "procesos", "memoria", "discos", "red",
+    "Git", "dependencias", "servicios", "variables de entorno", "PTM"
+]
+for app_name, behavior in _SYSTEM_APPS:
+    for topic in _SYSTEM_TOPICS:
+        _add(f"{topic.title()} {app_name}", f"Aplicacion de sistema/desarrollo para {topic}: {behavior}, con historial local y acciones controladas.")
+
+
+# 601-700 · PRODUCTIVIDAD / ORGANIZACION
+_PRODUCTIVITY_APPS = [
+    ("Workspace", "reunir informacion y acciones en un espacio"),
+    ("Planner", "planificar fechas, tareas y prioridades"),
+    ("Tracker", "seguir progreso, estados y cambios"),
+    ("Catalog", "catalogar elementos con busqueda y etiquetas"),
+    ("Notebook", "guardar notas, enlaces y referencias"),
+    ("Board", "organizar tarjetas por columnas y estados"),
+    ("Timeline", "ordenar eventos cronologicamente"),
+    ("Dashboard", "resumir datos y accesos importantes"),
+    ("Inbox", "recibir, clasificar y archivar elementos"),
+    ("Organizer", "clasificar y encontrar informacion rapidamente"),
+]
+_PRODUCTIVITY_TOPICS = [
+    "proyectos", "archivos", "ideas", "tareas", "estudio",
+    "colecciones", "software", "juegos", "documentos", "recursos"
+]
+for app_name, behavior in _PRODUCTIVITY_APPS:
+    for topic in _PRODUCTIVITY_TOPICS:
+        _add(f"{topic.title()} {app_name}", f"App de productividad para {topic}: {behavior}, con filtros, busqueda, cache y persistencia.")
+
+
+# 701-800 · ENTRETENIMIENTO / EXPERIENCIAS
+_EXPERIENCES = [
+    ("Jukebox", "biblioteca interactiva con reproduccion y favoritos"),
+    ("Arcade Hub", "menu de minijuegos y puntuaciones"),
+    ("Trivia", "preguntas, categorias y ranking local"),
+    ("Quiz Show", "rondas de preguntas con tiempo y dificultad"),
+    ("Collection Viewer", "colecciones visuales con fichas y filtros"),
+    ("Randomizer", "retos, combinaciones y selecciones aleatorias"),
+    ("Virtual Shelf", "estanteria visual para colecciones"),
+    ("Showcase", "presentar contenido en modo exposicion"),
+    ("Radio", "listas y reproduccion continua de audio local"),
+    ("Screensaver", "visualizaciones animadas y escenas ambient"),
+]
+_EXPERIENCE_THEMES = [
+    "Retro Gaming", "ARCHMOBA", "Pyrion", "Neon", "Pixel",
+    "Horror", "Space", "Cyber", "90s", "Arcade"
+]
+for exp, behavior in _EXPERIENCES:
+    for theme in _EXPERIENCE_THEMES:
+        _add(f"{theme} {exp}", f"Experiencia de entretenimiento integrada en PTM con tema {theme}: {behavior}, configuracion y estado local.")
+
+
+# 801-900 · UTILIDADES COMPLETAS, NO FRAGMENTADAS
+_UTILITY_SUITES = [
+    ("File Toolbox", "buscar, renombrar, duplicados, hash, clasificar, copiar y comparar archivos"),
+    ("Network Toolbox", "ping, DNS, rutas, interfaces, conexiones, velocidad y diagnostico"),
+    ("Text Toolbox", "buscar, reemplazar, comparar, regex, codificar, limpiar y transformar texto"),
+    ("Developer Toolbox", "JSON, XML, YAML, Base64, URL, UUID, timestamps y utilidades de codigo"),
+    ("Database Toolbox", "SQLite, CSV, JSON, importacion, exportacion, consultas y respaldos"),
+    ("Backup Toolbox", "crear, verificar, comparar, restaurar y programar copias locales"),
+    ("System Toolbox", "procesos, servicios, inicio, entorno, recursos y diagnostico"),
+    ("Media Toolbox", "metadatos, conversion, miniaturas, inspeccion y procesamiento multimedia"),
+    ("Package Toolbox", "ZIP, TAR, checksums, estructura, extraccion y creacion de paquetes"),
+    ("Web Toolbox", "HTTP, headers, SSL, APIs, descargas, capturas y pruebas web"),
+]
+_UTILITY_VARIANTS = [
+    ("Quick", "flujo rapido"),
+    ("Pro", "controles avanzados"),
+    ("Portable", "modo autocontenido"),
+    ("Batch", "procesamiento por lotes"),
+    ("Visual", "interfaz visual"),
+    ("Inspector", "previsualizacion y diagnostico"),
+    ("Automation", "presets y automatizacion"),
+    ("Manager", "historial y biblioteca"),
+    ("Offline", "funcionamiento local"),
+    ("Workspace", "sesiones y pestanas"),
+]
+for name, desc in _UTILITY_SUITES:
+    for suffix, mode in _UTILITY_VARIANTS:
+        _add(f"{name} {suffix}", f"Suite unificada para {desc}. Variante {suffix}: {mode}. Agrupa funciones relacionadas en una sola aplicacion.")
+
+
+# 901-1000 · ECOSISTEMA PTM / EXPERIMENTOS
+_PTM_CONCEPTS = [
+    ("App Store local", "catalogar, instalar y actualizar paquetes PTM desde fuentes configuradas"),
+    ("Tool Forge", "crear esqueletos y paquetes compatibles con PTM"),
+    ("Theme Lab", "crear y probar temas visuales de PTM"),
+    ("Plugin Playground", "probar APIs internas y componentes en un entorno aislado"),
+    ("Demo Gallery", "mostrar demos tecnicas de interfaces y controles"),
+    ("Benchmark Lab", "comparar rendimiento de componentes y dependencias"),
+    ("Compatibility Center", "comprobar compatibilidad Windows, Linux y Pyrion"),
+    ("Update Center", "gestionar versiones y actualizaciones de componentes"),
+    ("Session Manager", "guardar y restaurar grupos de pestanas y tools"),
+    ("Command Palette", "buscar acciones y herramientas desde un lanzador rapido"),
+]
+_PTM_VARIANTS = [
+    ("Lite", "minimalista y rapido"),
+    ("Pro", "con opciones avanzadas"),
+    ("Visual", "centrado en paneles graficos"),
+    ("Portable", "autocontenido"),
+    ("Offline", "sin servicios externos"),
+    ("Developer", "orientado a desarrollo"),
+    ("Experimental", "para probar ideas nuevas"),
+    ("Safe Mode", "con operaciones limitadas y reversibles"),
+    ("Workspace", "con sesiones persistentes"),
+    ("Automation", "con acciones encadenadas"),
+]
+for name, desc in _PTM_CONCEPTS:
+    for suffix, mode in _PTM_VARIANTS:
+        _add(f"{name} {suffix}", f"Concepto de ecosistema PTM para {desc}. Variante {suffix}: {mode}.")
+
 
 assert len(PROPOSALS) == 1000
 
