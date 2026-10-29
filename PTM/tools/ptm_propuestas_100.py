@@ -6,9 +6,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-TOOL_NAME = "PTM - 100 Propuestas de Tools"
-TOOL_DESCRIPTION = "Revisor secuencial de 100 ideas para nuevas tools PTM con aceptar, rechazar, regreso, listas y progreso persistente."
-TOOL_VERSION = "1.1.0"
+TOOL_NAME = "PTM - 1000 Propuestas de Tools"
+TOOL_DESCRIPTION = "Revisor secuencial de 1000 ideas para nuevas tools PTM con aceptar, rechazar, regreso, listas, CSV y progreso persistente."
+TOOL_VERSION = "2.0.0"
 APP_NAME = TOOL_NAME
 CACHE_DIR = Path.home() / ".ptm"
 CACHE_FILE = CACHE_DIR / "propuestas_tools_cache.json"
@@ -116,6 +116,86 @@ PROPOSALS = [
     (100, "PTM Diagnostics", "Comprobar integridad de guide.csv, archivos tools, dependencias y configuracion PTM."),
 ]
 
+# Propuestas 101-1000. Se generan de forma determinista combinando
+# 30 areas de trabajo con 30 enfoques distintos. Esto mantiene las
+# primeras 100 intactas y amplia el catalogo hasta exactamente 1000.
+_EXTRA_DOMAINS = [
+    ("Archivos", "archivos y carpetas"),
+    ("Documentos", "documentos de oficina"),
+    ("Imagenes", "imagenes y recursos graficos"),
+    ("Audio", "archivos y flujos de audio"),
+    ("Video", "videos y recursos audiovisuales"),
+    ("PDF", "documentos PDF"),
+    ("CSV", "datos CSV"),
+    ("Excel", "libros y hojas de calculo"),
+    ("JSON", "datos JSON"),
+    ("Bases de datos", "bases de datos locales"),
+    ("Red", "redes y conectividad"),
+    ("Internet", "recursos web e internet"),
+    ("Linux", "sistemas Linux"),
+    ("Windows", "sistemas Windows"),
+    ("Python", "proyectos y entornos Python"),
+    ("Git", "repositorios y control de versiones"),
+    ("APIs", "servicios y endpoints HTTP"),
+    ("Logs", "registros y archivos de log"),
+    ("Backups", "copias de seguridad"),
+    ("Seguridad local", "diagnostico e integridad local"),
+    ("Multimedia", "contenido multimedia"),
+    ("Productividad", "tareas y productividad"),
+    ("Texto", "texto plano y contenido editable"),
+    ("Codigo", "codigo fuente"),
+    ("Paquetes", "paquetes y archivos comprimidos"),
+    ("Sistema", "recursos y configuracion del sistema"),
+    ("Discos", "unidades y almacenamiento"),
+    ("Procesos", "procesos y ejecucion de programas"),
+    ("PTM", "herramientas y componentes PTM"),
+    ("Pyrion", "entorno Pyrion Linux"),
+]
+
+_EXTRA_ACTIONS = [
+    ("Analizador", "analizar y resumir informacion util de"),
+    ("Inspector", "inspeccionar propiedades y detalles de"),
+    ("Monitor", "monitorizar cambios y estado de"),
+    ("Organizador", "organizar automaticamente"),
+    ("Clasificador", "clasificar por reglas configurables"),
+    ("Buscador avanzado", "buscar con filtros avanzados dentro de"),
+    ("Comparador", "comparar elementos y detectar diferencias en"),
+    ("Validador", "validar estructura, consistencia y errores de"),
+    ("Reparador", "detectar y corregir problemas comunes en"),
+    ("Convertidor", "convertir entre formatos compatibles de"),
+    ("Exportador", "exportar informacion seleccionada desde"),
+    ("Importador", "importar informacion hacia PTM desde"),
+    ("Generador de reportes", "generar reportes claros sobre"),
+    ("Historial", "mantener historial local de cambios sobre"),
+    ("Favoritos", "guardar y recuperar elementos favoritos de"),
+    ("Dashboard", "mostrar un panel resumido y visual de"),
+    ("Automatizador", "automatizar tareas repetitivas relacionadas con"),
+    ("Procesador por lotes", "procesar multiples elementos de"),
+    ("Previsualizador", "previsualizar rapidamente contenido de"),
+    ("Editor rapido", "editar de forma sencilla datos de"),
+    ("Limpiador", "limpiar temporales, duplicados o datos innecesarios de"),
+    ("Sincronizador", "sincronizar estados o contenidos de"),
+    ("Indexador", "crear un indice local consultable de"),
+    ("Etiquetador", "asignar etiquetas y categorias a"),
+    ("Detector de cambios", "detectar modificaciones recientes en"),
+    ("Asistente", "guiar paso a paso tareas comunes sobre"),
+    ("Administrador", "administrar operaciones frecuentes de"),
+    ("Resumen inteligente", "crear resumenes locales y estructurados de"),
+    ("Diagnostico", "realizar diagnosticos y pruebas sobre"),
+    ("Centro de herramientas", "reunir acciones frecuentes relacionadas con"),
+]
+
+for domain_name, domain_desc in _EXTRA_DOMAINS:
+    for action_name, action_desc in _EXTRA_ACTIONS:
+        pid = len(PROPOSALS) + 1
+        PROPOSALS.append((
+            pid,
+            f"{action_name} de {domain_name}",
+            f"Tool PTM para {action_desc} {domain_desc}, con interfaz integrada, filtros, historial local y acciones seguras.",
+        ))
+
+assert len(PROPOSALS) == 1000
+
 
 class ProposalTool(tk.Frame):
     def __init__(self, parent, app=None):
@@ -189,6 +269,14 @@ class ProposalTool(tk.Frame):
             textvariable=self.rejected_count,
             font=("Segoe UI", 9, "bold"),
         ).pack(side="left")
+
+        tk.Button(
+            top,
+            text="Descargar CSV",
+            command=self.export_csv,
+            padx=10,
+            pady=4,
+        ).pack(side="right", padx=(0, 12))
 
         self.tabs = tk.Frame(self)
         self.tabs.pack(fill="x", padx=14, pady=(0, 8))
@@ -369,8 +457,8 @@ class ProposalTool(tk.Frame):
             self.progress_text.set(f"Completado: {total} de {total}")
             self.card_title.set("Revision completada")
             self.card_desc.set(
-                "Ya revisaste las 100 propuestas. Puedes consultar las pestañas "
-                "Aceptados y Rechazados, o usar Regresar para revisar la ultima decision."
+                f"Ya revisaste las {total} propuestas. Puedes consultar las pestañas "
+                "Aceptados y Rechazados, descargar el CSV o usar Regresar para revisar la ultima decision."
             )
             self.accept_button.configure(state="disabled")
             self.reject_button.configure(state="disabled")
@@ -426,6 +514,43 @@ class ProposalTool(tk.Frame):
                 justify="left",
                 wraplength=820,
             ).pack(fill="x", pady=(2, 0))
+
+    def export_csv(self):
+        reviewed = [
+            (pid, title, desc, self.decisions.get(str(pid)))
+            for pid, title, desc in PROPOSALS
+            if self.decisions.get(str(pid)) in ("accepted", "rejected")
+        ]
+        if not reviewed:
+            messagebox.showinfo("Sin decisiones", "Aun no hay propuestas aceptadas o rechazadas para exportar.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="Guardar decisiones en CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv"), ("Todos", "*.*")],
+            initialfile="ptm_propuestas_decisiones.csv",
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+                writer = csv.writer(fh, delimiter=";")
+                writer.writerow(["id", "titulo", "descripcion", "estado"])
+                for pid, title, desc, state in reviewed:
+                    writer.writerow([
+                        pid,
+                        title,
+                        desc,
+                        "ACEPTADO" if state == "accepted" else "RECHAZADO",
+                    ])
+            messagebox.showinfo(
+                "CSV generado",
+                f"Se exportaron {len(reviewed)} decisiones.\n{path}",
+            )
+        except Exception as exc:
+            messagebox.showerror("Error", f"No se pudo crear el CSV:\n{exc}")
 
     def on_close(self):
         self.save_cache()
