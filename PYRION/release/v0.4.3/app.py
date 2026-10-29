@@ -501,7 +501,7 @@ class Pyrion3DApp(tk.Tk):
         self.ram_mb = None
         self._fps_count = 0
         self._fps_periods = 0
-        self._fps_history = []
+        self._frame_time_history = []
         self.started_at = time.perf_counter()
         self._fps_start = self.started_at
         self._cpu_start = time.process_time()
@@ -692,9 +692,9 @@ class Pyrion3DApp(tk.Tk):
             ("ESTADO", status if self.running else "PAUSADO"),
         ]
         if full:
-            durations = sorted(self._fps_history)
-            low = (sum(durations[:max(1, len(durations) // 100)]) /
-                   max(1, len(durations) // 100)) if durations else 0.0
+            durations = sorted(self._frame_time_history, reverse=True)
+            slow_frames = durations[:max(1, math.ceil(len(durations) * 0.01))]
+            low = len(slow_frames) / sum(slow_frames) if slow_frames else 0.0
             vertices = sum(len(item["renderer"].mesh.vertices) for item in self.objects)
             total_faces = sum(len(item["renderer"].mesh.faces) for item in self.objects)
             seconds = int(time.perf_counter() - self.started_at)
@@ -702,7 +702,7 @@ class Pyrion3DApp(tk.Tk):
                 ("ESCENA", str(self.scene.get("name", "Scene"))),
                 ("FPS", "%.1f" % self.fps),
                 ("FPS PROMEDIO", "%.1f" % self.average_fps),
-                ("FPS 1% BAJO", "%.1f" % low if durations else "--"),
+                ("FPS 1% BAJO", "%.1f" % low if len(durations) >= 60 else "--"),
                 ("FRAME", "%.1f ms" % self.frame_ms),
                 ("RENDER", "%.1f ms" % self.render_ms),
                 ("CPU PROCESO", "%.1f%%" % self.cpu_percent),
@@ -736,14 +736,15 @@ class Pyrion3DApp(tk.Tk):
                     ) % (math.pi * 2)
             self.frames += 1
             self._fps_count += 1
+            if elapsed > 0:
+                self._frame_time_history.append(elapsed)
+                self._frame_time_history = self._frame_time_history[-600:]
             interval = now - self._fps_start
             if interval >= 0.6:
                 self.fps = self._fps_count / interval
                 self.frame_ms = 1000.0 / self.fps if self.fps else 0.0
                 self._fps_periods += 1
                 self.average_fps += (self.fps - self.average_fps) / self._fps_periods
-                self._fps_history.append(self.fps)
-                self._fps_history = self._fps_history[-120:]
                 self.cpu_percent = 100.0 * max(
                     0.0, time.process_time() - self._cpu_start
                 ) / interval
@@ -752,7 +753,7 @@ class Pyrion3DApp(tk.Tk):
                 self._fps_count = 0
                 self._fps_start = now
             self._draw()
-            self.after(40, self._frame)
+            self.after(16, self._frame)
         except tk.TclError:
             pass
 

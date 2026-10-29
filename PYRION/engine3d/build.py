@@ -40,11 +40,16 @@ def bundle():
     mesh = mesh.replace('import math\nfrom dataclasses import dataclass\n', '')
     renderer = (HERE / "renderer.py").read_text(encoding="utf-8")
     renderer = renderer.replace('import math\n', '')
-    scene = module_app.replace(
-        'import math\nimport os\nimport sys\nimport time\nimport tkinter as tk\n\n'
-        'from .mesh import SphereMesh\nfrom .renderer import SoftwareRenderer\n',
-        ''
-    )
+    # Drop top-level imports already supplied by the standalone prelude.
+    scene = module_app
+    for statement in (
+        "import math", "import json", "import urllib.request",
+        "from pathlib import Path", "import os", "import sys",
+        "import time", "import tkinter as tk",
+        "from .mesh import SphereMesh",
+        "from .renderer import SoftwareRenderer",
+    ):
+        scene = re.sub(r"(?m)^" + re.escape(statement) + r"\n", "", scene, count=1)
     scene = scene.rsplit('if __name__ == "__main__":\n    run()', 1)[0]
     entry = '''\nif __name__ == "__main__":
     if "--no-update" not in sys.argv and check_self_update():
