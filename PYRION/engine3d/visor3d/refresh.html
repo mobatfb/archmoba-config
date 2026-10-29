@@ -3,84 +3,133 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Visor con Refresh</title>
+  <title>PYRION 3D - Refresh r1.2.0</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: #0c101d; }
-    body { display: flex; flex-direction: column; font-family: Arial, sans-serif; }
-    header { padding: 10px 14px; background: #171d30; border-bottom: 1px solid #36405b; }
-    button { padding: 9px 20px; color: #fff; background: #365b94;
-      border: 0; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    body { display: flex; flex-direction: column; font-family: system-ui, Arial, sans-serif; color: #dce4fa; }
+    header { padding: 10px 14px; background: #171d30; border-bottom: 1px solid #36405b; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    button { padding: 9px 20px; color: #fff; background: #365b94; border: 0; border-radius: 6px; cursor: pointer; font-weight: 700; }
     button:hover { background: #4971af; }
     button:disabled { opacity: .6; cursor: wait; }
+    #estado { flex: 1; min-width: 160px; font-size: 12px; color: #aebfe6; }
+    #estado[data-type="ready"] { color: #8edac0; }
+    #estado[data-type="error"] { color: #ffaaa9; }
+    #version { font-size: 12px; color: #d3b7ff; white-space: nowrap; }
+    #wrapper-version { font-size: 10px; color: #8e9bb9; white-space: nowrap; }
     iframe { display: block; flex: 1; min-height: 0; width: 100%; border: 0; background: #0c101d; }
   </style>
 </head>
 <body>
-  <header><button id="refresh" type="button">Refresh</button></header>
+  <header>
+    <button id="refresh" type="button">Refresh</button>
+    <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
+    <span id="version">Visor: —</span>
+    <span id="wrapper-version">Refresh r1.2.0</span>
+  </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
   <script>
-    const archivo = 'PYRION/engine3d/visor3d/index.html';
-    const raw = 'https://raw.githubusercontent.com/mobatfb/archmoba-dev/main/' + archivo;
-    const api = 'https://api.github.com/repos/mobatfb/archmoba-dev/contents/' + archivo + '?ref=main';
-    const boton = document.getElementById('refresh');
-    const visor = document.getElementById('contenido');
+    (() => {
+      'use strict';
+      const archivo = 'PYRION/engine3d/visor3d/index.html';
+      const repo = 'mobatfb/archmoba-dev';
+      const raw = 'https://raw.githubusercontent.com/' + repo + '/main/' + archivo;
+      const api = 'https://api.github.com/repos/' + repo + '/contents/' + archivo + '?ref=main';
+      const boton = document.getElementById('refresh');
+      const visor = document.getElementById('contenido');
+      const estado = document.getElementById('estado');
+      const version = document.getElementById('version');
+      const mismoServidor = /^https?:$/.test(location.protocol)
+        && location.pathname.endsWith('/PYRION/engine3d/visor3d/refresh.html')
+        && !/^(raw\.githubusercontent\.com|github\.com)$/.test(location.hostname);
+      let fetching = false;
+      let refreshId = 0;
 
-    // Si ambos HTML estan publicados en el mismo servidor (por ejemplo,
-    // GitHub Pages), el iframe puede abrir index.html directamente.
-    const mismoServidor = /^https?:$/.test(location.protocol)
-      && location.pathname.endsWith('/PYRION/engine3d/visor3d/refresh.html')
-      && !/^(raw\.githubusercontent\.com|github\.com)$/.test(location.hostname);
-
-    async function obtener(url) {
-      const control = new AbortController();
-      const limite = setTimeout(() => control.abort(), 8000);
-      try {
-        const respuesta = await fetch(url, {cache: 'no-store', signal: control.signal});
-        if (!respuesta.ok) throw new Error('HTTP ' + respuesta.status);
-        return respuesta;
-      } finally {
-        clearTimeout(limite);
+      function show(message, type='loading') {
+        estado.textContent = message;
+        estado.dataset.type = type;
       }
-    }
-
-    async function refrescar() {
-      boton.disabled = true;
-      boton.textContent = 'Cargando...';
-      try {
-        const nonce = Date.now() + '-' + Math.random().toString(36).slice(2);
-        if (mismoServidor) {
-          // El navegador solicita de nuevo index.html y lo muestra como embed.
-          visor.src = './index.html?refresh=' + nonce;
-        } else {
-          // Para un HTML descargado: leer index.html del repositorio y
-          // mostrar su contenido dentro del iframe, sin copiarlo a este archivo.
-          // Pedimos la version actual a la API antes de RAW para evitar
-          // que un cache del CDN sirva el HTML anterior.
-          let html;
-          try {
-            const datos = await (await obtener(api + '&refresh=' + nonce)).json();
-            if (datos.encoding !== 'base64' || typeof datos.content !== 'string') {
-              throw new Error('La API no devolvio el HTML.');
-            }
-            const binario = atob(datos.content.replace(/\s/g, ''));
-            html = new TextDecoder().decode(Uint8Array.from(binario, c => c.charCodeAt(0)));
-          } catch (errorApi) {
-            html = await (await obtener(raw + '?refresh=' + nonce)).text();
-          }
-          visor.srcdoc = html;
+      function htmlVersion(html) {
+        return html.match(/id="visor-version">([^<]+)</)?.[1] || 'desconocida';
+      }
+      // Los mensajes proceden del propio index.html ejecutado dentro del iframe.
+      window.addEventListener('message', (event) => {
+        if (event.source !== visor.contentWindow) return;
+        const data = event.data;
+        if (!data || data.source !== 'pyrion3d' || !['html','loading','ready','error'].includes(data.type)) return;
+        if (typeof data.version === 'string' && data.version.length < 30) {
+          version.textContent = 'Visor: ' + data.version;
         }
-      } catch (error) {
-        visor.srcdoc = '<!doctype html><html><body style="background:#0c101d;color:#f0c5c5;font:14px Arial,sans-serif;padding:24px">No se pudo cargar el HTML desde GitHub. Comprueba la conexion o abre el visor mediante GitHub Pages.</body></html>';
-      } finally {
-        boton.disabled = false;
-        boton.textContent = 'Refresh';
-      }
-    }
+        const detail = typeof data.detail === 'string' ? data.detail.slice(0, 240) : '';
+        if (data.type === 'ready') show('Actualizado: ' + detail, 'ready');
+        else if (data.type === 'error') show('Error del visor: ' + detail, 'error');
+        else if (data.type === 'loading') show(detail);
+        else show('HTML cargado; solicitando modelos...');
+      });
 
-    boton.addEventListener('click', refrescar);
-    refrescar();
+      async function obtener(url) {
+        const control = new AbortController();
+        const limite = setTimeout(() => control.abort(), 6000);
+        try {
+          const respuesta = await fetch(url, {cache:'no-store', mode:'cors', signal:control.signal});
+          if (!respuesta.ok) throw Error('HTTP ' + respuesta.status);
+          return respuesta;
+        } finally {
+          clearTimeout(limite);
+        }
+      }
+
+      async function refrescar() {
+        if (fetching) return;
+        fetching = true;
+        const current = ++refreshId;
+        boton.disabled = true;
+        boton.textContent = 'Cargando...';
+        show('Consultando index.html en GitHub...');
+        const nonce = Date.now() + '-' + Math.random().toString(36).slice(2);
+        try {
+          if (mismoServidor) {
+            // Si se aloja junto al visor, la carga directa es mas sencilla.
+            show('Abriendo index.html actualizado...');
+            visor.src = './index.html?refresh=' + nonce;
+          } else {
+            // Descarga la version nueva sin mezclar la geometria con este archivo.
+            // API primero: evita que el CDN RAW devuelva una version antigua.
+            let html, source = 'GitHub API';
+            try {
+              const datos = await (await obtener(api + '&_=' + nonce)).json();
+              if (datos.encoding !== 'base64' || typeof datos.content !== 'string') {
+                throw Error('La API no entrego el archivo HTML.');
+              }
+              const binario = atob(datos.content.replace(/\s/g, ''));
+              html = new TextDecoder().decode(Uint8Array.from(binario, c => c.charCodeAt(0)));
+            } catch (errorAPI) {
+              show('API no disponible; probando GitHub RAW...');
+              source = 'GitHub RAW';
+              try {
+                html = await (await obtener(raw + '?_=' + nonce)).text();
+              } catch (errorRaw) {
+                throw Error('GitHub API: ' + errorAPI.message + '; RAW: ' + errorRaw.message);
+              }
+            }
+            if (current !== refreshId) return;
+            version.textContent = 'Visor: ' + htmlVersion(html);
+            show('HTML recibido desde ' + source + '; cargando modelos...');
+            visor.srcdoc = html;
+          }
+        } catch (error) {
+          show('No se pudo actualizar: ' + error.message, 'error');
+        } finally {
+          fetching = false;
+          boton.disabled = false;
+          boton.textContent = 'Refresh';
+        }
+      }
+
+      boton.addEventListener('click', refrescar);
+      refrescar();
+    })();
   </script>
 </body>
 </html>
