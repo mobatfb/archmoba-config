@@ -54,7 +54,8 @@
           0
         ],
         "speed_degrees_per_second": 30
-      }
+      },
+      "material": "materials/gold_reflective.mat"
     }
   ]
 }

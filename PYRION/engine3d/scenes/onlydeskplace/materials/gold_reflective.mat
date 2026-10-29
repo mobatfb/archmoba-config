@@ -1,0 +1,12 @@
+{
+  "format": "pyrion.material",
+  "version": 1,
+  "name": "Gold Reflective",
+  "shader": "pbr",
+  "base_color": "#C6A15B",
+  "metallic": 1,
+  "roughness": 0.12,
+  "texture": "../textures/gold_reflective.jpg",
+  "texture_status": "pending_upload",
+  "notes": "Material dorado reflectivo. El motor 3D aun no interpreta .mat ni texturas."
+}
