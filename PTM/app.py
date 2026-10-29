@@ -29,7 +29,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.70"
+APP_VERSION = "1.0.71"
 APP_UPDATE_DATE = "28/10/2026"
 APP_UPDATE_TIME = "18:55"
 SEARCH_MAX_LENGTH = 40
@@ -1596,20 +1596,112 @@ class PTMApp(tk.Tk):
         return "break"
 
     def reload_tool(self, tool):
-        """Recargar siempre obtiene el archivo vigente de GitHub, sin caché."""
+        """Recarga segura: la pestaña actual sigue activa hasta validar GitHub."""
         key = self._tool_tab_key(tool)
-        if key in self.open_tabs:
-            self.close_tool_tab(key)
+        meta = self.open_tabs.get(key)
+        if meta is None:
+            self.open_tool(tool, record_usage=False, force_remote=True)
+            return
+        if meta.get("reload_in_progress"):
+            return
 
-        # Un error previo no debe bloquear una recarga solicitada por el usuario.
-        self._failed_download_keys.discard(key)
-        state_key = self._tool_state_key(tool)
-        current = next(
-            (item for item in self.tools
-             if self._tool_state_key(item) == state_key),
-            tool,
-        )
-        self.open_tool(current, record_usage=False, force_remote=True)
+        # Si no hay instancia funcionando, la recarga puede iniciar de cero.
+        if meta.get("state") != "ready":
+            self.close_tool_tab(key)
+            self._failed_download_keys.discard(key)
+            self.open_tool(tool, record_usage=False, force_remote=True)
+            return
+
+        self._tool_download_session_counter += 1
+        session_id = self._tool_download_session_counter
+        meta["reload_session_id"] = session_id
+        meta["reload_in_progress"] = True
+        status = meta.get("reload_status_label")
+        if status is None or not status.winfo_exists():
+            status = tk.Label(
+                meta["frame"], bg="#E6F2F5", fg="#075D79",
+                font=("Segoe UI", 9), anchor="w", padx=10, pady=5,
+            )
+            status.pack(side="bottom", fill="x")
+            meta["reload_status_label"] = status
+        status.configure(text="Consultando GitHub y validando el nuevo archivo...")
+
+        def is_current():
+            active = self.open_tabs.get(key)
+            return (
+                active is meta
+                and active.get("reload_in_progress")
+                and active.get("reload_session_id") == session_id
+            )
+
+        def worker():
+            last_error = None
+            for attempt in range(1, 6):
+                if not is_current():
+                    return
+                self._tool_download_events.put(
+                    ("reload_progress", key, session_id, attempt, tool, None, None)
+                )
+                try:
+                    staged_path = self._ensure_tool_local(
+                        tool, force_remote=True, is_current=is_current,
+                        stage_only=True,
+                    )
+                    if is_current():
+                        self._tool_download_events.put(
+                            ("reload_success", key, session_id, attempt,
+                             tool, staged_path, None)
+                        )
+                    return
+                except Exception as exc:
+                    if not is_current():
+                        return
+                    last_error = exc
+                    if isinstance(exc, urllib.error.HTTPError) and exc.code == 404:
+                        break
+                if attempt < 5:
+                    time.sleep(2)
+            if is_current():
+                self._tool_download_events.put(
+                    ("reload_failed", key, session_id, 5, tool, None, last_error)
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_safe_tool_reload(self, tool, key, staged_main):
+        """Publica la descarga validada y abre la nueva instancia sin redescargar."""
+        meta = self.open_tabs.get(key)
+        if meta is None:
+            return
+        repo_path = str(tool.get("repo_path", "")).strip().replace("\\", "/").lstrip("/")
+        original = self.base_dir / Path(repo_path)
+        staged = original.with_name(original.name + ".ptmreload")
+        try:
+            with self._tool_download_write_lock:
+                if not staged.is_file():
+                    raise FileNotFoundError("No se encontró la descarga temporal validada.")
+                staged.replace(original)
+            is_zip = (
+                str(tool.get("file_type", "")).strip().lower() == "zip"
+                or original.suffix.lower() == ".zip"
+            )
+            main_path = Path(staged_main) if is_zip else original
+            # Sólo ahora se cierra la instancia anterior.
+            self.close_tool_tab(key)
+            self._failed_download_keys.discard(key)
+            self.open_tool(
+                tool, record_usage=False, preloaded_path=main_path,
+            )
+        except Exception as exc:
+            meta = self.open_tabs.get(key)
+            if meta is not None:
+                meta["reload_in_progress"] = False
+                status = meta.get("reload_status_label")
+                if status is not None and status.winfo_exists():
+                    status.configure(
+                        text=f"Recarga fallida; versión actual conservada: {exc}",
+                        bg="#FCE8E6", fg="#A52A2A",
+                    )
 
     # ---------- Búsqueda ----------
     @staticmethod
@@ -2067,14 +2159,18 @@ class PTMApp(tk.Tk):
             raise ValueError("guide.csv no contiene la columna 'ruta'.")
         return list(reader)
 
-    def _ensure_tool_local(self, tool, force_remote=False, is_current=None):
-        """Descarga el archivo; Recargar consulta GitHub API y no la copia local."""
+    def _ensure_tool_local(
+        self, tool, force_remote=False, is_current=None, stage_only=False,
+    ):
+        """Descarga GitHub y valida el archivo antes de publicarlo en disco."""
         repo_path = str(tool.get("repo_path", "")).strip().replace("\\", "/").lstrip("/")
         if not repo_path:
             raise ValueError("La herramienta no tiene una ruta válida en guide.csv.")
 
         local_path = self.base_dir / Path(repo_path)
         local_path.parent.mkdir(parents=True, exist_ok=True)
+        if stage_only:
+            local_path = local_path.with_name(local_path.name + ".ptmreload")
 
         if force_remote:
             # GitHub Contents API devuelve el contenido de main y su SHA Git.
@@ -2141,6 +2237,36 @@ class PTMApp(tk.Tk):
                 raise RuntimeError("Esta sesión de descarga ya no está activa.")
             return self._store_tool_download(tool, repo_path, local_path, data)
 
+    @staticmethod
+    def _is_transient_tool_download_error(exc):
+        """Sólo fallos de red o del servidor permiten usar copia local."""
+        if isinstance(exc, urllib.error.HTTPError):
+            return exc.code == 429 or exc.code >= 500
+        return isinstance(
+            exc, (urllib.error.URLError, TimeoutError, ConnectionError, OSError),
+        )
+
+    def _get_valid_cached_tool(self, tool, is_current=None):
+        """Comprueba sintaxis/CRC antes de usar una copia local existente."""
+        repo_path = str(tool.get("repo_path", "")).strip().replace("\\", "/").lstrip("/")
+        if not repo_path:
+            raise ValueError("No hay ruta de herramienta en guide.csv.")
+        local_path = self.base_dir / Path(repo_path)
+        with self._tool_download_write_lock:
+            if is_current is not None and not is_current():
+                raise RuntimeError("Sesión de descarga obsoleta.")
+            if not local_path.is_file():
+                raise FileNotFoundError("No existe una copia local de esta herramienta.")
+            data = local_path.read_bytes()
+            is_zip = (
+                str(tool.get("file_type", "")).strip().lower() == "zip"
+                or local_path.suffix.lower() == ".zip"
+            )
+            if is_zip:
+                return self._store_tool_download(tool, repo_path, local_path, data)
+            compile(data, str(local_path), "exec")
+            return local_path
+
     def _store_tool_download(self, tool, repo_path, local_path, data):
         """Valida y reemplaza atómicamente la copia local descargada."""
         file_type = str(tool.get("file_type", "")).strip().lower()
@@ -2157,8 +2283,7 @@ class PTMApp(tk.Tk):
                     if bad_file:
                         raise ValueError(f"El ZIP está dañado: {bad_file}")
 
-                temp_zip.replace(local_path)
-
+                # No sustituir el ZIP anterior hasta validar su archivo principal.
                 # Cada versión del paquete se extrae en una carpeta inmutable.
                 # Esto evita romper una herramienta externa que siga ejecutándose.
                 package_hash = hashlib.sha1(data).hexdigest()[:12]
@@ -2171,7 +2296,7 @@ class PTMApp(tk.Tk):
                     shutil.rmtree(temp_extract, ignore_errors=True)
                     temp_extract.mkdir(parents=True, exist_ok=True)
                     try:
-                        self._safe_extract_zip(local_path, temp_extract)
+                        self._safe_extract_zip(temp_zip, temp_extract)
                         if package_root.exists():
                             shutil.rmtree(package_root, ignore_errors=True)
                         temp_extract.replace(package_root)
@@ -2219,6 +2344,7 @@ class PTMApp(tk.Tk):
 
                 source = main_path.read_text(encoding="utf-8-sig")
                 compile(source, str(main_path), "exec")
+                temp_zip.replace(local_path)
                 return main_path
             finally:
                 try:
@@ -3797,11 +3923,31 @@ class PTMApp(tk.Tk):
                     if not is_current():
                         return
                     last_error = exc
+                    if isinstance(exc, urllib.error.HTTPError) and exc.code == 404:
+                        break
 
                 if attempt < 5:
                     time.sleep(2)
 
-            # Este es el único punto que emite el fallo final.
+            # Al abrir normalmente, un fallo de conexión permite usar caché.
+            # Recargar desde GitHub NUNCA pasa por este camino.
+            if (
+                not force_remote and is_current()
+                and self._is_transient_tool_download_error(last_error)
+            ):
+                try:
+                    cached_path = self._get_valid_cached_tool(
+                        tool, is_current=is_current,
+                    )
+                    if is_current():
+                        self._tool_download_events.put(
+                            ("cache", key, session_id, 5, tool,
+                             cached_path, last_error)
+                        )
+                    return
+                except Exception:
+                    pass
+
             if is_current():
                 self._tool_download_events.put(
                     ("failed", key, session_id, 5, tool, None, last_error)
@@ -3821,6 +3967,28 @@ class PTMApp(tk.Tk):
                 if not meta:
                     continue
 
+                if kind.startswith("reload_"):
+                    if meta.get("reload_session_id") != session_id:
+                        continue
+                    status = meta.get("reload_status_label")
+                    if kind == "reload_progress":
+                        if status is not None and status.winfo_exists():
+                            status.configure(
+                                text=f"Descargando desde GitHub (intento {attempt}/5)...",
+                            )
+                    elif kind == "reload_failed":
+                        meta["reload_in_progress"] = False
+                        if status is not None and status.winfo_exists():
+                            detail = str(exc or "No se pudo descargar.")
+                            status.configure(
+                                text="No se pudo recargar; la versión actual sigue "
+                                     f"funcionando. {detail[:160]}",
+                                bg="#FCE8E6", fg="#A52A2A",
+                            )
+                    elif kind == "reload_success":
+                        self._finish_safe_tool_reload(tool, key, local_path)
+                    continue
+
                 # Ignorar cualquier mensaje de una sesión anterior.
                 if int(meta.get("download_session_id", 0)) != int(session_id):
                     continue
@@ -3836,10 +4004,11 @@ class PTMApp(tk.Tk):
                         )
                     continue
 
-                if kind == "success":
+                if kind in {"success", "cache"}:
                     meta["download_worker_running"] = False
                     meta["download_finished"] = True
                     meta["download_attempt"] = int(attempt)
+                    meta["offline_cache"] = kind == "cache"
                     self._tool_download_ready(tool, key, local_path)
                     continue
 
@@ -4069,6 +4238,14 @@ class PTMApp(tk.Tk):
 
         frame = meta["frame"]
         self._clear_tool_frame(frame)
+
+        if meta.get("offline_cache"):
+            tk.Label(
+                frame,
+                text="Modo sin conexión — versión local (no se pudo consultar GitHub)",
+                bg="#FFF1C2", fg="#5D4400", anchor="w",
+                font=("Segoe UI", 9), padx=10, pady=5,
+            ).pack(side="top", fill="x")
 
         shell = tk.Frame(frame, bg=WHITE)
         shell.pack(fill="both", expand=True)
@@ -5130,7 +5307,10 @@ class PTMApp(tk.Tk):
             return
         self.switch_to_tool(key)
 
-    def open_tool(self, tool, record_usage=True, background=False, force_remote=False):
+    def open_tool(
+        self, tool, record_usage=True, background=False,
+        force_remote=False, preloaded_path=None,
+    ):
         if record_usage:
             self._record_tool_open(tool)
         key = self._tool_tab_key(tool)
@@ -5154,6 +5334,8 @@ class PTMApp(tk.Tk):
             "download_session_id": 0,
             "download_worker_running": False,
             "download_finished": False,
+            "offline_cache": False,
+            "reload_in_progress": False,
             "manual_retry_authorized": False,
             "last_download_error": None,
             "zoom_mode": "fit",
@@ -5168,7 +5350,10 @@ class PTMApp(tk.Tk):
 
         self._render_tabs()
         self._show_tool_loading(tool, key)
-        self._start_tool_download(tool, key, force_remote=force_remote)
+        if preloaded_path is not None:
+            self._tool_download_ready(tool, key, Path(preloaded_path))
+        else:
+            self._start_tool_download(tool, key, force_remote=force_remote)
 
     def switch_to_tool(self, key):
         if key not in self.open_tabs:
