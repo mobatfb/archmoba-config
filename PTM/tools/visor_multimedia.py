@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Visor multimedia tipo VLC integrado en PTM para imagenes, videos y musica, "
     "con playlist, arrastrar y soltar, progreso, volumen, velocidad y repeticion."
 )
-TOOL_VERSION = "1.1.2"
+TOOL_VERSION = "1.1.3"
 
 CHILD_FLAG = "--ptm-media-child"
 
@@ -1043,8 +1043,8 @@ class MultimediaViewerTool(ttk.Frame):
         kind = self.media_kind(path)
         prefix = {"image": "[IMG]", "audio": "[AUD]", "video": "[VID]"}
         label = f"{prefix.get(kind, '[---]')} {Path(path).name}"
-        if kind in ("audio", "video") and path in self.all_tracks:
-            label += f"  ·  {self._format_ms(self.all_tracks[path] * 1000)}"
+        if kind in ("audio", "video") and self.all_tracks.get(path, 0) > 0:
+            label += f"  ·  {self._format_ms(self.all_tracks[path] * 1000)}
         return label
 
     def _mark_recent(self, path):
@@ -2293,8 +2293,8 @@ class MultimediaViewerTool(ttk.Frame):
                     "size": int(item.get("size", -1)),
                     "mtime_ns": int(item.get("mtime_ns", -1)),
                 }
-                if kind == "image" or duration > 60.0:
-                    self.all_tracks[path] = duration
+                # Toda imagen, cancion o video va en Todos, sin minimo de duracion.
+                self.all_tracks[path] = duration
             self.scan_status_var.set(
                 f"Caché cargada: {len(self.all_tracks)} archivos · "
                 "escaneo incremental disponible"
@@ -2342,71 +2342,6 @@ class MultimediaViewerTool(ttk.Frame):
             return roots
         except Exception:
             return [os.path.abspath(os.sep)]
-
-    @staticmethod
-    def _probe_duration(path, kind):
-        """Duración sin cargar el video en la ventana; ffprobe/mutagen/VLC."""
-        if kind == "image":
-            return 0.0
-
-        # mutagen cubre MP3, FLAC, M4A y algunos MP4.
-        if kind == "audio" or Path(path).suffix.lower() in (".mp4", ".m4v"):
-            try:
-                from mutagen import File as MutagenFile
-                media = MutagenFile(path)
-                if media is not None and media.info is not None:
-                    duration = float(media.info.length)
-                    if duration > 0:
-                        return duration
-            except Exception:
-                pass
-
-        ffprobe = shutil.which("ffprobe")
-        if ffprobe:
-            try:
-                result = subprocess.run(
-                    [
-                        ffprobe, "-v", "error",
-                        "-show_entries", "format=duration",
-                        "-of", "default=noprint_wrappers=1:nokey=1", path,
-                    ],
-                    capture_output=True, text=True, timeout=8,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                if result.returncode == 0:
-                    duration = float(result.stdout.strip())
-                    if duration > 0:
-                        return duration
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                pass
-
-        # VLC se ejecuta en otro proceso para no comprometer PTM.
-        probe_code = (
-            "import sys\n"
-            "try:\n"
-            " import vlc\n"
-            " i=vlc.Instance('--quiet','--no-video-title-show')\n"
-            " m=i.media_new(sys.argv[1])\n"
-            " try:\n"
-            "  m.parse_with_options(vlc.MediaParseFlag.local, 3500)\n"
-            " except Exception:\n"
-            "  m.parse()\n"
-            " print(max(0, m.get_duration()) / 1000.0)\n"
-            "except Exception:\n"
-            " print(0)\n"
-        )
-        try:
-            result = subprocess.run(
-                [sys.executable, "-c", probe_code, path],
-                capture_output=True, text=True, timeout=7,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if result.returncode == 0:
-                duration = float(result.stdout.strip().splitlines()[-1])
-                return max(0.0, duration)
-        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
-            pass
-        return 0.0
 
     def start_scan(self):
         if self._scan_active or (
@@ -2497,7 +2432,9 @@ class MultimediaViewerTool(ttk.Frame):
                             reused += 1
                             continue
 
-                        duration = self._probe_duration(path, kind)
+                        # No hace falta abrir ni medir archivos para listarlos.
+                        # El cache anterior conserva duraciones ya conocidas.
+                        duration = 0.0
                         updates[path] = {
                             "path": path, "duration": duration,
                             "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
@@ -2506,13 +2443,14 @@ class MultimediaViewerTool(ttk.Frame):
                             modified += 1
                         else:
                             new_count += 1
-                        if kind == "image" or duration > 60.0:
-                            new_valid += 1
-                            batch.append((path, duration))
-                            if len(batch) >= 20:
-                                if not self._queue_scan_message(("batch", batch)):
-                                    break
-                                batch = []
+                        # Incluir todos los formatos admitidos, sin importar
+                        # si el audio/video dura segundos, minutos u horas.
+                        new_valid += 1
+                        batch.append((path, duration))
+                        if len(batch) >= 20:
+                            if not self._queue_scan_message(("batch", batch)):
+                                break
+                            batch = []
                         now = time.monotonic()
                         if updates and now - last_checkpoint >= 10.0:
                             try:
@@ -2562,7 +2500,7 @@ class MultimediaViewerTool(ttk.Frame):
                     _, directories, reused, new_valid = message
                     self.scan_status_var.set(
                         f"Buscando... {directories} carpetas · "
-                        f"{reused} desde caché · {new_valid} nuevos válidos"
+                        f"{reused} desde caché · {new_valid} nuevos archivos"
                     )
                 elif kind == "finished":
                     (
@@ -2570,16 +2508,13 @@ class MultimediaViewerTool(ttk.Frame):
                         new_valid, cancelled, error, cache_error,
                     ) = message
                     self._all_index.update(updates)
-                    needs_refresh = False
                     for path, entry in updates.items():
-                        duration = float(entry.get("duration", 0))
-                        if self.media_kind(path) == "image" or duration > 60.0:
-                            self.all_tracks[path] = duration
-                        elif path in self.all_tracks:
-                            self.all_tracks.pop(path, None)
-                            needs_refresh = True
-                    if needs_refresh:
-                        self._refresh_all()
+                        # La duracion no condiciona el listado.
+                        self.all_tracks[path] = float(entry.get("duration", 0))
+                    # Actualizar etiquetas de archivos modificados sin
+                    # reiniciar la lista ni perder el filtro de busqueda.
+                    for path in updates:
+                        self._update_all_row(path)
                     self._scan_active = False
                     self.stop_scan_btn.configure(state="disabled")
                     if error:
