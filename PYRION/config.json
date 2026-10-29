@@ -4,7 +4,7 @@
   "description": "Dos analogicos flotantes: caminar como tanque, orientar camara o foco, alternar controles y restablecer posiciones",
   "version": "0.4.26",
   "app_path": "PYRION/app.py",
-  "release_commit": "308f17a6eb209d675ee4118faa29ed2277e6fad1",
+  "release_commit": "940a1f7734a43ff7c54c0bba717a68d5a632b3e4",
   "maintenance": false,
   "engine_version": "0.4.3"
 }
