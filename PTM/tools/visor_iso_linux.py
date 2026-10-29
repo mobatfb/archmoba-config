@@ -18,9 +18,9 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 TOOL_NAME = "Visor ISO Linux"
 TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
-    "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, y genera una copia ISO modificada."
+    "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver cualquier archivo como TXT/HEX, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.9"
+TOOL_VERSION = "1.1.0"
 
 
 def human_size(n):
@@ -264,6 +264,206 @@ def build_cpio_newc(entries):
     return bytes(out)
 
 
+
+def read_file_chunk(path, offset, count):
+    """Lectura paginada: no carga archivos grandes completos en memoria."""
+    with Path(path).open("rb") as stream:
+        stream.seek(offset)
+        return stream.read(count)
+
+
+class FileAsTextViewer(ttk.Frame):
+    """Visor integrado de cualquier archivo, en modo TXT o HEX, sin modificarlo."""
+
+    TEXT_PAGE = 128 * 1024
+    HEX_PAGE = 32 * 1024
+
+    def __init__(self, parent, name, total_size, reader):
+        super().__init__(parent, padding=8)
+        self.parent_editor = parent
+        self.name = str(name)
+        self.total_size = max(0, int(total_size))
+        self.reader = reader
+        self.offset = 0
+        self.last_count = 0
+        self.mode_var = tk.StringVar(value="TXT")
+        self.encoding_var = tk.StringVar(value="Automático")
+        self.page_var = tk.StringVar(value="")
+        self._build()
+        self.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.lift()
+        self._render()
+
+    def _build(self):
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", pady=(0, 5))
+        ttk.Button(bar, text="Volver", command=self.close).pack(side="left", padx=(0, 8))
+        ttk.Label(bar, text="Ver como:").pack(side="left", padx=(0, 4))
+        mode = ttk.Combobox(
+            bar, textvariable=self.mode_var, values=("TXT", "HEX"),
+            state="readonly", width=6,
+        )
+        mode.pack(side="left", padx=(0, 12))
+        mode.bind("<<ComboboxSelected>>", self._change_format)
+        ttk.Label(bar, text="Codificación:").pack(side="left", padx=(0, 4))
+        encoding = ttk.Combobox(
+            bar, textvariable=self.encoding_var,
+            values=("Automático", "UTF-8", "Latin-1", "UTF-16 LE", "UTF-16 BE"),
+            state="readonly", width=13,
+        )
+        encoding.pack(side="left", padx=(0, 8))
+        encoding.bind("<<ComboboxSelected>>", lambda _event: self._render())
+
+        ttk.Label(
+            self, text=self.name, anchor="w", wraplength=950,
+        ).pack(fill="x", pady=(0, 5))
+        content = ttk.Frame(self)
+        content.pack(fill="both", expand=True)
+        self.text = tk.Text(
+            content, wrap="none", font=("DejaVu Sans Mono", 9),
+            undo=False, state="disabled",
+        )
+        vscroll = ttk.Scrollbar(content, orient="vertical", command=self.text.yview)
+        hscroll = ttk.Scrollbar(content, orient="horizontal", command=self.text.xview)
+        self.text.configure(
+            yscrollcommand=vscroll.set, xscrollcommand=hscroll.set,
+        )
+        content.rowconfigure(0, weight=1)
+        content.columnconfigure(0, weight=1)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        vscroll.grid(row=0, column=1, sticky="ns")
+        hscroll.grid(row=1, column=0, sticky="ew")
+
+        footer = ttk.Frame(self)
+        footer.pack(fill="x", pady=(6, 0))
+        self.prev_button = ttk.Button(
+            footer, text="◀ Anterior", command=self.previous_page,
+        )
+        self.prev_button.pack(side="left", padx=(0, 6))
+        self.next_button = ttk.Button(
+            footer, text="Siguiente ▶", command=self.next_page,
+        )
+        self.next_button.pack(side="left")
+        ttk.Label(footer, textvariable=self.page_var).pack(side="left", padx=12)
+        ttk.Label(
+            footer, text="Solo lectura · Selecciona texto y usa Ctrl+C",
+        ).pack(side="right")
+        self.text.bind("<Escape>", lambda _event: self.close())
+        self.text.focus_set()
+
+    def _change_format(self, _event=None):
+        self.offset = 0
+        self._render()
+
+    def _page_size(self):
+        return self.HEX_PAGE if self.mode_var.get() == "HEX" else self.TEXT_PAGE
+
+    def _decode_text(self, data):
+        selected = self.encoding_var.get()
+        encodings = {
+            "UTF-8": "utf-8",
+            "Latin-1": "latin-1",
+            "UTF-16 LE": "utf-16-le",
+            "UTF-16 BE": "utf-16-be",
+        }
+        if selected in encodings:
+            text = data.decode(encodings[selected], errors="replace")
+        elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+            text = data.decode("utf-16", errors="replace")
+        elif data.startswith(b"\xef\xbb\xbf"):
+            text = data.decode("utf-8-sig", errors="replace")
+        else:
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                text = data.decode("latin-1")
+        # Representar bytes de control para que cualquier binario sea visible.
+        text = text.replace("\x00", "␀")
+        return "".join(
+            ch if ch in "\n\r\t" or ord(ch) >= 32 else "·"
+            for ch in text
+        )
+
+    def _hex_text(self, data):
+        lines = []
+        for index in range(0, len(data), 16):
+            chunk = data[index:index + 16]
+            hx = " ".join(f"{byte:02X}" for byte in chunk)
+            printable = "".join(
+                chr(byte) if 32 <= byte < 127 else "."
+                for byte in chunk
+            )
+            lines.append(
+                f"{self.offset + index:08X}  {hx:<47}  {printable}"
+            )
+        return "\n".join(lines)
+
+    def _render(self):
+        try:
+            data = self.reader(self.offset, self._page_size())
+            if not isinstance(data, bytes):
+                data = bytes(data)
+            self.last_count = len(data)
+            content = (
+                self._hex_text(data)
+                if self.mode_var.get() == "HEX"
+                else self._decode_text(data)
+            )
+            if not data:
+                content = "(Archivo vacío)" if self.total_size == 0 else "(Sin datos)"
+            self.text.configure(state="normal")
+            self.text.delete("1.0", "end")
+            self.text.insert("1.0", content)
+            self.text.configure(state="disabled")
+            self.text.yview_moveto(0)
+            self.text.xview_moveto(0)
+            end = self.offset + self.last_count
+            self.page_var.set(
+                f"Bytes {self.offset:,}–{end:,} de {self.total_size:,} "
+                f"({human_size(self.total_size)})"
+            )
+            self.prev_button.configure(
+                state="normal" if self.offset > 0 else "disabled",
+            )
+            self.next_button.configure(
+                state="normal"
+                if self.last_count and end < self.total_size
+                else "disabled",
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Ver como TXT", f"No se pudo leer el archivo:\n{exc}",
+                parent=self,
+            )
+
+    def previous_page(self):
+        self.offset = max(0, self.offset - self._page_size())
+        self._render()
+
+    def next_page(self):
+        if self.last_count:
+            self.offset += self.last_count
+            self._render()
+
+    def close(self):
+        self.destroy()
+        if hasattr(self.parent_editor, "tree"):
+            try:
+                self.parent_editor.tree.focus_set()
+            except tk.TclError:
+                pass
+
+
+def show_file_as_text(parent, name, total_size, reader):
+    """Abre el visor dentro del editor ISO, FAT o INITRD, sin ventana externa."""
+    previous = getattr(parent, "_text_file_viewer", None)
+    if previous is not None and previous.winfo_exists():
+        previous.destroy()
+    viewer = FileAsTextViewer(parent, name, total_size, reader)
+    parent._text_file_viewer = viewer
+    return viewer
+
+
 class InitrdEditor(ttk.Frame):
     def __init__(self, owner, path, parent=None):
         super().__init__(parent if parent is not None else owner)
@@ -284,6 +484,7 @@ class InitrdEditor(ttk.Frame):
         ttk.Button(bar, text="Reemplazar", command=self.replace).pack(side="left", padx=3)
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
+        ttk.Button(bar, text="Ver como TXT", command=self.view_selected).pack(side="left", padx=3)
         ttk.Button(bar, text="Guardar INITRD", command=self.save).pack(side="left", padx=12)
         self.info = ttk.Label(bar, text=""); self.info.pack(side="right")
 
@@ -308,6 +509,20 @@ class InitrdEditor(ttk.Frame):
         self.tree.column("size", width=110, anchor="e")
         self.tree.column("mode", width=110, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=8, pady=(0,8))
+        self.tree.bind("<Double-Button-1>", lambda _event: self.view_selected())
+
+    def view_selected(self):
+        index = self.selected_index()
+        if index is None:
+            return
+        entry = self.entries[index]
+        if stat.S_ISDIR(entry.get("mode", 0)):
+            return
+        data = entry.get("data", b"")
+        show_file_as_text(
+            self, entry["name"], len(data),
+            lambda offset, count: data[offset:offset + count],
+        )
 
     def _load(self):
         raw = self.path.read_bytes()
@@ -417,6 +632,7 @@ class FatEditor(ttk.Frame):
         ttk.Button(bar, text="Reemplazar", command=self.replace).pack(side="left", padx=3)
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
+        ttk.Button(bar, text="Ver como TXT", command=self.view_selected).pack(side="left", padx=3)
         self.path_var = tk.StringVar(value="/")
         ttk.Label(bar, textvariable=self.path_var).pack(side="left", padx=12)
         search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
@@ -554,10 +770,37 @@ class FatEditor(ttk.Frame):
 
     def open_selected(self, _e=None):
         path = self.selected()
-        if path and self.fs.isdir(path):
+        if not path or self.fs is None:
+            return
+        if self.fs.isdir(path):
             self.current = path
             self.search_var.set("")
             self.refresh()
+        else:
+            self.view_selected()
+
+    def view_selected(self):
+        path = self.selected()
+        if not path or self.fs is None:
+            return
+        try:
+            if self.fs.isdir(path):
+                return
+            try:
+                size = self.fs.getinfo(path, namespaces=["details"]).size
+            except Exception:
+                with self.fs.openbin(path, "r") as stream:
+                    stream.seek(0, 2)
+                    size = stream.tell()
+
+            def read_chunk(offset, count):
+                with self.fs.openbin(path, "r") as stream:
+                    stream.seek(offset)
+                    return stream.read(count)
+
+            show_file_as_text(self, path, size, read_chunk)
+        except Exception as exc:
+            messagebox.showerror("Ver como TXT", str(exc), parent=self)
 
     def up(self):
         if self.current == "/":
@@ -645,6 +888,7 @@ class ISOEditor(ttk.Frame):
         ttk.Button(top, text="Reemplazar", command=self.replace_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Eliminar", command=self.delete_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Extraer", command=self.extract_selected).pack(side="left", padx=3)
+        ttk.Button(top, text="Ver como TXT", command=self.view_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Abrir contenedor", command=self.open_container).pack(side="left", padx=3)
         ttk.Button(top, text="Guardar copia ISO", command=self.save_iso_copy).pack(side="left", padx=14)
 
@@ -879,6 +1123,18 @@ class ISOEditor(ttk.Frame):
         except Exception as exc:
             self.preview_text.insert("end", str(exc))
 
+    def view_selected(self):
+        p = self.selected_path()
+        if not p or p.is_dir():
+            return
+        try:
+            show_file_as_text(
+                self, p.name, p.stat().st_size,
+                lambda offset, count: read_file_chunk(p, offset, count),
+            )
+        except Exception as exc:
+            messagebox.showerror("Ver como TXT", str(exc), parent=self)
+
     def replace_selected(self):
         p = self.selected_path()
         if not p or p.is_dir(): return
@@ -925,14 +1181,8 @@ class ISOEditor(ttk.Frame):
             elif kind == "fat":
                 self._open_container_editor(FatEditor, p)
             else:
-                messagebox.showinfo(
-                    "Contenedor",
-                    f"{p.name} no tiene una cabecera FAT ni INITRD "
-                    "reconocible. No se abrirá como FAT por su extensión "
-                    ".img. Puedes inspeccionarlo en HEX, reemplazarlo o "
-                    "extraerlo sin modificar el original.",
-                    parent=self,
-                )
+                # Doble clic en cualquier archivo no contenedor: visor TXT/HEX.
+                self.view_selected()
         except Exception as exc:
             messagebox.showerror(
                 "Abrir contenedor",
