@@ -6,7 +6,7 @@
       "name": "PTM",
       "description": "Buscador y lanzador de herramientas Python",
       "config": "PTM/config.json",
-      "active": true
+      "activo": true
     }
   ]
 }
