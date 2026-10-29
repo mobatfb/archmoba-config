@@ -6,14 +6,14 @@
       "name": "PTM",
       "description": "Buscador y lanzador de herramientas Python",
       "config": "PTM/config.json",
-      "activo": true
+      "active": true
     },
     {
       "id": "pyrion",
       "name": "PYRION",
       "description": "Entorno gráfico y sistema visual de PYRION Mini OS",
       "config": "PYRION/config.json",
-      "activo": false
+      "active": false
     }
   ]
 }
