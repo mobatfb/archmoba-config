@@ -1,4 +1,4 @@
-"""PYRION OS 0.4.4 - standalone PYRION 3D Engine.
+"""PYRION OS 0.4.5 - standalone PYRION 3D Engine.
 
 Mesh geometry, perspective projection, and Tk software renderer.
 Previous desktop preserved under PYRION/release/v0.3.0.
@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.4"
+APP_VERSION = "0.4.5"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -371,7 +371,7 @@ The UV-sphere geometry and software renderer are provided by PYRION Engine.
 
 
 ENGINE_VERSION = "0.1.0"
-DESKTOP_VERSION = "0.4.4"
+DESKTOP_VERSION = "0.4.5"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -388,7 +388,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.4"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.5"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -602,6 +602,7 @@ class Pyrion3DApp(tk.Tk):
         self.ram_mb = None
         self.update_ms = 0.0
         self._render_cpu_interval = 0.0
+        self._last_frame_error = -100.0
         self._system_cpu_prev = _hud_cpu_snapshot()
         self._fps_count = 0
         self._fps_periods = 0
@@ -789,8 +790,11 @@ class Pyrion3DApp(tk.Tk):
                         "#f4c376" if status in ("ACEPTABLE", "MEDIENDO") else "#75e2ad")
 
         def fmt(value, suffix="", decimals=1):
-            return ("--" if value is None else
-                    ("%." + str(decimals) + "f" + suffix) % value)
+            if value is None:
+                return "--"
+            # Format the number first; a literal percent suffix must not be
+            # interpreted as another Python percent-format placeholder.
+            return f"{value:.{decimals}f}{suffix}"
 
         memory = self.system_memory
         cores = max(1, os.cpu_count() or 1)
@@ -901,9 +905,27 @@ class Pyrion3DApp(tk.Tk):
                 self._fps_count = 0
                 self._fps_start = now
             self._draw()
-            self.after(16, self._frame)
         except tk.TclError:
-            pass
+            return
+        except Exception:
+            # A HUD/metrics exception must never permanently stop the desktop.
+            error_now = time.monotonic()
+            if error_now - self._last_frame_error >= 5.0:
+                self._last_frame_error = error_now
+                try:
+                    import traceback
+                    log_path = Path.home() / "pyrion_error.log"
+                    with log_path.open("a", encoding="utf-8") as log:
+                        log.write("\\n[PYRION 3D frame]\\n")
+                        log.write(traceback.format_exc())
+                except OSError:
+                    pass
+        finally:
+            try:
+                if self.winfo_exists():
+                    self.after(16, self._frame)
+            except tk.TclError:
+                pass
 
 
 def run():
