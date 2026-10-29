@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Visor multimedia tipo VLC integrado en PTM para imagenes, videos y musica, "
     "con playlist, arrastrar y soltar, progreso, volumen, velocidad y repeticion."
 )
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.1.1"
 
 CHILD_FLAG = "--ptm-media-child"
 
@@ -182,10 +182,41 @@ def _media_child(port, auth_hex, initial_hwnd):
 
                     if command == "target":
                         try:
-                            state["hwnd"] = int(message.get("hwnd", 0) or 0)
+                            new_hwnd = int(message.get("hwnd", 0) or 0)
                         except Exception:
-                            state["hwnd"] = 0
-                        apply_target()
+                            new_hwnd = 0
+                        if new_hwnd and new_hwnd != state["hwnd"]:
+                            reattach = bool(message.get("reattach", False))
+                            try:
+                                playing_before = bool(player.is_playing())
+                                paused_before = "Paused" in str(player.get_state())
+                                previous_ms = max(0, int(player.get_time()))
+                            except Exception:
+                                playing_before = False
+                                paused_before = False
+                                previous_ms = 0
+                            restart = reattach and (playing_before or paused_before)
+                            if restart:
+                                try:
+                                    player.stop()
+                                except Exception:
+                                    pass
+                            state["hwnd"] = new_hwnd
+                            apply_target()
+                            if restart:
+                                try:
+                                    player.play()
+                                    time.sleep(0.14)
+                                    if previous_ms > 0:
+                                        player.set_time(previous_ms)
+                                    player.set_rate(float(state["rate"]))
+                                    if paused_before:
+                                        player.set_pause(1)
+                                except Exception:
+                                    pass
+                        elif new_hwnd:
+                            state["hwnd"] = new_hwnd
+                            apply_target()
 
                     elif command == "load":
                         path = str(message.get("path", "") or "").strip()
@@ -412,6 +443,13 @@ class MultimediaViewerTool(ttk.Frame):
         self._source_image = None
         self._photo = None
         self._image_resize_job = None
+        self._fullscreen_window = None
+        self._fullscreen_stage = None
+        self._fullscreen_overlay = None
+        self._fullscreen_photo = None
+        self._fullscreen_image_job = None
+        self._fullscreen_root = None
+        self._fullscreen_key_bind = None
 
         self.duration_ms = 0
         self.current_ms = 0
@@ -440,6 +478,11 @@ class MultimediaViewerTool(ttk.Frame):
         self.state_path = self._state_file()
 
         self._build_ui()
+        # F11 funciona incluso si el foco está en la lista o en la búsqueda.
+        self._fullscreen_root = self.winfo_toplevel()
+        self._fullscreen_key_bind = self._fullscreen_root.bind(
+            "<F11>", self._on_fullscreen_key, add="+"
+        )
         self._init_image_backend()
         self._init_drag_drop()
         self._load_state()
@@ -699,12 +742,21 @@ class MultimediaViewerTool(ttk.Frame):
         right.columnconfigure(0, weight=1)
         right.rowconfigure(2, weight=1)
 
+        viewer_header = ttk.Frame(right)
+        viewer_header.grid(row=0, column=0, sticky="ew")
+        viewer_header.columnconfigure(0, weight=1)
         ttk.Label(
-            right,
+            viewer_header,
             textvariable=self.title_var,
             style="MediaTrack.TLabel",
             anchor="w",
         ).grid(row=0, column=0, sticky="ew")
+        self.fullscreen_btn = ttk.Button(
+            viewer_header,
+            text="⛶ Pantalla completa",
+            command=self.toggle_fullscreen,
+        )
+        self.fullscreen_btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
 
         ttk.Label(
             right,
@@ -713,13 +765,20 @@ class MultimediaViewerTool(ttk.Frame):
             anchor="w",
         ).grid(row=1, column=0, sticky="ew", pady=(1, 5))
 
-        self.stage = tk.Frame(
-            right,
-            bg="#101010",
-            highlightthickness=0,
-            bd=0,
+        # Canvas exterior redondeado. El frame nativo de VLC se mantiene
+        # dentro de un margen para que no tape las esquinas redondeadas.
+        stage_bg = style.lookup("TFrame", "background") or "#F0F0F0"
+        self.stage_canvas = tk.Canvas(
+            right, bg=stage_bg, highlightthickness=0, bd=0,
         )
-        self.stage.grid(row=2, column=0, sticky="nsew")
+        self.stage_canvas.grid(row=2, column=0, sticky="nsew")
+        self.stage_canvas.bind("<Configure>", self._on_stage_border_resize)
+
+        self.stage = tk.Frame(
+            self.stage_canvas, bg="#101010", highlightthickness=0, bd=0,
+        )
+        self.stage.place(x=10, y=10, relwidth=1, relheight=1,
+                         width=-20, height=-20)
         self.stage.bind("<Configure>", self._on_stage_resize)
         self.stage.bind("<Double-Button-1>", lambda _e: self.toggle_play())
 
@@ -1052,6 +1111,212 @@ class MultimediaViewerTool(ttk.Frame):
     def _scan_cache_path(self):
         return self.state_path.with_name("all_multimedia_cache.json")
 
+    # ---------- Visor redondeado y pantalla completa ----------
+
+    def _on_stage_border_resize(self, event):
+        """Dibuja un contenedor redondeado sin tapar el video nativo."""
+        width = max(1, int(event.width))
+        height = max(1, int(event.height))
+        self.stage_canvas.delete("rounded_stage")
+        if width < 30 or height < 30:
+            return
+        radius = min(22, width // 4, height // 4)
+        self.stage_canvas.create_polygon(
+            radius, 1, width - radius, 1,
+            width - 1, radius, width - 1, height - radius,
+            width - radius, height - 1, radius, height - 1,
+            1, height - radius, 1, radius,
+            smooth=True, splinesteps=24,
+            fill="#101010", outline="#46566E", width=2,
+            tags="rounded_stage",
+        )
+
+    def _on_fullscreen_key(self, _event=None):
+        self.toggle_fullscreen()
+        return "break"
+
+    def _active_video_stage(self):
+        if self._fullscreen_window is not None and self._fullscreen_stage is not None:
+            try:
+                if self._fullscreen_stage.winfo_exists():
+                    return self._fullscreen_stage
+            except tk.TclError:
+                pass
+        return self.stage
+
+    def _set_video_target(self, stage=None, reattach=False):
+        try:
+            stage = stage if stage is not None else self._active_video_stage()
+            hwnd = int(stage.winfo_id())
+            self._prepare_video_hwnd(hwnd)
+            self._send_media({
+                "cmd": "target", "hwnd": hwnd, "reattach": bool(reattach),
+            })
+        except (tk.TclError, ValueError):
+            pass
+
+    def toggle_fullscreen(self):
+        if self._fullscreen_window is not None:
+            self.exit_fullscreen()
+        else:
+            self.enter_fullscreen()
+
+    def enter_fullscreen(self):
+        if self._fullscreen_window is not None:
+            return
+        window = None
+        try:
+            window = tk.Toplevel(self)
+            window.title("Visor Multimedia - Pantalla completa")
+            window.configure(bg="#090D13")
+            window.protocol("WM_DELETE_WINDOW", self.exit_fullscreen)
+
+            # Barra siempre visible, incluso con la superficie nativa de VLC.
+            bar = tk.Frame(window, bg="#090D13", height=48)
+            bar.pack(side="top", fill="x")
+            tk.Label(
+                bar, textvariable=self.title_var,
+                bg="#090D13", fg="#F1F5FF",
+                font=("Segoe UI", 11, "bold"),
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True, padx=(18, 8), pady=8)
+            tk.Button(
+                bar, text="⤢ Salir de pantalla completa (Esc)",
+                command=self.exit_fullscreen,
+                bg="#23334D", fg="#FFFFFF",
+                activebackground="#354B6D", activeforeground="#FFFFFF",
+                relief="flat", bd=0, padx=14, pady=7,
+                cursor="hand2",
+            ).pack(side="right", padx=14, pady=5)
+
+            stage = tk.Frame(window, bg="#101010", bd=0, highlightthickness=0)
+            stage.pack(side="top", fill="both", expand=True)
+            overlay = tk.Label(
+                stage, bg="#101010", fg="#F4F4F4",
+                font=("Segoe UI", 16, "bold"),
+                justify="center", compound="top",
+            )
+            overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            overlay.bind("<Double-Button-1>", lambda _e: self.toggle_play())
+            stage.bind("<Double-Button-1>", lambda _e: self.toggle_play())
+            stage.bind("<Configure>", self._on_fullscreen_stage_resize)
+            window.bind("<Escape>", lambda _e: self.exit_fullscreen())
+            window.bind("<F11>", lambda _e: self.exit_fullscreen())
+            self._fullscreen_window = window
+            self._fullscreen_stage = stage
+            self._fullscreen_overlay = overlay
+            window.attributes("-fullscreen", True)
+            window.update_idletasks()
+            self._sync_fullscreen_view()
+            if self.current_kind == "video":
+                self._set_video_target(stage, reattach=True)
+            window.lift()
+            window.focus_force()
+        except Exception as exc:
+            if window is not None:
+                try:
+                    window.destroy()
+                except tk.TclError:
+                    pass
+            self._fullscreen_window = None
+            self._fullscreen_stage = None
+            self._fullscreen_overlay = None
+            self.status_var.set("No se pudo abrir pantalla completa: " + str(exc))
+
+    def exit_fullscreen(self, immediate=False):
+        window = self._fullscreen_window
+        if window is None:
+            return
+        if self._fullscreen_image_job is not None:
+            try:
+                self.after_cancel(self._fullscreen_image_job)
+            except tk.TclError:
+                pass
+            self._fullscreen_image_job = None
+        # El reproductor puede seguir activo; primero devolver su salida
+        # al frame original, luego destruir la ventana auxiliar.
+        self._fullscreen_window = None
+        self._fullscreen_stage = None
+        self._fullscreen_overlay = None
+        self._fullscreen_photo = None
+        if self.current_kind == "video" and self._alive:
+            self._set_video_target(self.stage, reattach=True)
+        try:
+            if immediate:
+                window.destroy()
+            else:
+                window.after(400, window.destroy)
+        except tk.TclError:
+            pass
+        try:
+            self.fullscreen_btn.focus_set()
+        except tk.TclError:
+            pass
+
+    def _on_fullscreen_stage_resize(self, _event=None):
+        if self.current_kind != "image" or self._fullscreen_window is None:
+            return
+        if self._fullscreen_image_job is not None:
+            try:
+                self.after_cancel(self._fullscreen_image_job)
+            except tk.TclError:
+                pass
+        self._fullscreen_image_job = self.after(90, self._render_fullscreen_image)
+
+    def _render_fullscreen_image(self):
+        self._fullscreen_image_job = None
+        if (
+            self._fullscreen_window is None
+            or self._fullscreen_stage is None
+            or self._fullscreen_overlay is None
+            or self._source_image is None
+            or self._imagetk_module is None
+            or self.current_kind != "image"
+        ):
+            return
+        try:
+            width = max(50, self._fullscreen_stage.winfo_width() - 24)
+            height = max(50, self._fullscreen_stage.winfo_height() - 24)
+            source = self._source_image.copy()
+            resampling = getattr(
+                getattr(self._image_module, "Resampling", self._image_module),
+                "LANCZOS",
+            )
+            source.thumbnail((width, height), resampling)
+            self._fullscreen_photo = self._imagetk_module.PhotoImage(source)
+            self._fullscreen_overlay.configure(
+                image=self._fullscreen_photo, text="",
+            )
+        except (tk.TclError, OSError):
+            pass
+
+    def _sync_fullscreen_view(self):
+        overlay = self._fullscreen_overlay
+        if overlay is None or self._fullscreen_window is None:
+            return
+        try:
+            if self.current_kind == "video":
+                overlay.place_forget()
+            elif self.current_kind == "image":
+                overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+                if self._source_image is None:
+                    overlay.configure(image="", text="Imagen no disponible")
+                else:
+                    self._render_fullscreen_image()
+            elif self.current_kind == "audio":
+                self._fullscreen_photo = None
+                overlay.configure(
+                    image="",
+                    text="♫\n\n" + Path(self.current_path() or "").name,
+                )
+                overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+            else:
+                self._fullscreen_photo = None
+                overlay.configure(image="", text="Arrastra contenido aquí")
+                overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        except tk.TclError:
+            pass
+
     def media_kind(self, path):
         suffix = Path(path).suffix.lower()
         if suffix in IMAGE_EXTS:
@@ -1305,6 +1570,7 @@ class MultimediaViewerTool(ttk.Frame):
                 relwidth=1,
                 relheight=1,
             )
+            self._sync_fullscreen_view()
             return
 
         try:
@@ -1320,6 +1586,7 @@ class MultimediaViewerTool(ttk.Frame):
             )
             self._render_image()
             self.status_var.set("Imagen lista")
+            self._sync_fullscreen_view()
         except Exception as exc:
             self._source_image = None
             self.overlay.configure(
@@ -1327,6 +1594,7 @@ class MultimediaViewerTool(ttk.Frame):
                 image="",
             )
             self.status_var.set("Error al abrir imagen")
+            self._sync_fullscreen_view()
 
     def _on_stage_resize(self, _event=None):
         if self.current_kind != "image" or self._source_image is None:
@@ -1378,6 +1646,7 @@ class MultimediaViewerTool(ttk.Frame):
             text=f"AUDIO\n\n{Path(path).name}",
             font=("Segoe UI", 16, "bold"),
         )
+        self._sync_fullscreen_view()
         self.overlay.place(
             relx=0,
             rely=0,
@@ -1390,18 +1659,8 @@ class MultimediaViewerTool(ttk.Frame):
         self._source_image = None
         self._photo = None
         self.overlay.place_forget()
-
-        try:
-            hwnd = int(self.stage.winfo_id())
-            self._prepare_video_hwnd(hwnd)
-            self._send_media(
-                {
-                    "cmd": "target",
-                    "hwnd": hwnd,
-                }
-            )
-        except Exception:
-            pass
+        self._sync_fullscreen_view()
+        self._set_video_target()
 
     def _show_idle(self):
         self.current_kind = "idle"
@@ -1423,6 +1682,7 @@ class MultimediaViewerTool(ttk.Frame):
             relwidth=1,
             relheight=1,
         )
+        self._sync_fullscreen_view()
 
     def _prepare_video_hwnd(self, hwnd):
         if os.name != "nt" or not hwnd:
@@ -1478,7 +1738,7 @@ class MultimediaViewerTool(ttk.Frame):
 
         try:
             self.update_idletasks()
-            hwnd = int(self.stage.winfo_id())
+            hwnd = int(self._active_video_stage().winfo_id())
             self._prepare_video_hwnd(hwnd)
 
             self._listener = Listener(
@@ -1690,6 +1950,7 @@ class MultimediaViewerTool(ttk.Frame):
                 "Audio/video no disponible · instala VLC Desktop · imagenes OK"
             )
             if self.current_kind in {"audio", "video"}:
+                self._sync_fullscreen_view()
                 self.overlay.configure(
                     image="",
                     text=(
@@ -1796,12 +2057,7 @@ class MultimediaViewerTool(ttk.Frame):
                 self.status_var.set("Esperando motor VLC...")
             return
 
-        try:
-            hwnd = int(self.stage.winfo_id())
-        except Exception:
-            hwnd = 0
-
-        self._send_media({"cmd": "target", "hwnd": hwnd})
+        self._set_video_target()
         self._send_media(
             {
                 "cmd": "load",
@@ -1963,14 +2219,10 @@ class MultimediaViewerTool(ttk.Frame):
     # ---------- Ciclo PTM ----------
     def on_show(self):
         if self.current_kind == "video" and self._vlc_ready:
-            try:
-                hwnd = int(self.stage.winfo_id())
-                self._prepare_video_hwnd(hwnd)
-                self._send_media({"cmd": "target", "hwnd": hwnd})
-            except Exception:
-                pass
+            self._set_video_target()
 
     def on_hide(self):
+        self.exit_fullscreen()
         self._save_state()
 
     # ---------- Escaneo incremental de multimedia ----------
@@ -2381,7 +2633,13 @@ class MultimediaViewerTool(ttk.Frame):
     def on_close(self):
         self._scan_cancel.set()
         self._all_render_token += 1
+        self.exit_fullscreen(immediate=True)
         self._alive = False
+        if self._fullscreen_root is not None and self._fullscreen_key_bind:
+            try:
+                self._fullscreen_root.unbind("<F11>", self._fullscreen_key_bind)
+            except tk.TclError:
+                pass
         self._save_state()
         self._stop_media_process()
 
