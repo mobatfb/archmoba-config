@@ -49,23 +49,25 @@
       boton.disabled = true;
       boton.textContent = 'Cargando...';
       try {
-        const nonce = Date.now();
+        const nonce = Date.now() + '-' + Math.random().toString(36).slice(2);
         if (mismoServidor) {
           // El navegador solicita de nuevo index.html y lo muestra como embed.
           visor.src = './index.html?refresh=' + nonce;
         } else {
           // Para un HTML descargado: leer index.html del repositorio y
           // mostrar su contenido dentro del iframe, sin copiarlo a este archivo.
+          // Pedimos la version actual a la API antes de RAW para evitar
+          // que un cache del CDN sirva el HTML anterior.
           let html;
           try {
-            html = await (await obtener(raw + '?refresh=' + nonce)).text();
-          } catch (errorRaw) {
             const datos = await (await obtener(api + '&refresh=' + nonce)).json();
             if (datos.encoding !== 'base64' || typeof datos.content !== 'string') {
               throw new Error('La API no devolvio el HTML.');
             }
             const binario = atob(datos.content.replace(/\s/g, ''));
             html = new TextDecoder().decode(Uint8Array.from(binario, c => c.charCodeAt(0)));
+          } catch (errorApi) {
+            html = await (await obtener(raw + '?refresh=' + nonce)).text();
           }
           visor.srcdoc = html;
         }
