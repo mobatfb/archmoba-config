@@ -1,0 +1,10 @@
+{
+  "app": "PYRION",
+  "name": "PYRION OS",
+  "description": "Carga de materiales por escena y metal dorado con reflejos de software y textura opcional",
+  "version": "0.4.6",
+  "app_path": "PYRION/app.py",
+  "release_commit": "a893d781fd18de7bdc5c6e41a0dfa5afbf58e747",
+  "maintenance": false,
+  "engine_version": "0.2.0"
+}
