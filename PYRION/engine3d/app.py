@@ -16,7 +16,7 @@ from .mesh import SphereMesh
 from .renderer import SoftwareRenderer
 
 ENGINE_VERSION = "0.2.0"
-DESKTOP_VERSION = "0.4.6"
+DESKTOP_VERSION = "0.4.7"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -33,7 +33,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.6"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.7"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -57,7 +57,7 @@ def _scene_texture(relative_path):
         else:
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
-                url, headers={"User-Agent": "PYRION/0.4.6"})
+                url, headers={"User-Agent": "PYRION/0.4.7"})
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
@@ -468,6 +468,9 @@ class Pyrion3DApp(tk.Tk):
         full = self.info_mode == "diagnostico"
         canvas.create_text(x, 20, text="PYRION 3D / " + str(self.scene.get("name", "Scene")),
                            anchor="nw", fill="#71cfff", font=("TkDefaultFont", 9, "bold"))
+        canvas.create_text(x, 38,
+                           text=f"VERSIÓN {DESKTOP_VERSION} · MOTOR 3D {ENGINE_VERSION}",
+                           anchor="nw", fill="#7894b7", font=("TkDefaultFont", 8))
         canvas.create_rectangle(208, 16, 306, 40, outline="#345878",
                                 fill="#10243c", width=1)
         canvas.create_text(257, 28, text="COMPACTO" if full else "DETALLES",
@@ -538,7 +541,7 @@ class Pyrion3DApp(tk.Tk):
                 ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
                 ("ESTADO", status),
             ]
-        y = 51
+        y = 66
         for label, value in rows:
             if y + 15 >= self._height:
                 break
