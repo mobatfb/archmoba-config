@@ -28,3 +28,16 @@ accesibles a traves del historial de Git.
 La automatizacion requiere que GitHub Actions este habilitado en el
 repositorio y tenga permiso de escritura en contenidos para GITHUB_TOKEN.
 Si la ejecucion falla, revisar la pestana Actions y sus permisos.
+
+## PYRION 3D Engine
+
+- Desktop 0.4.0: `PYRION/release/v0.4.0/` contains the standalone app.py
+  that directly launches the central rotating sphere.
+- Engine 0.1.0: `PYRION/release/engine3d/v0.1.0/` contains the editable
+  mesh, renderer, scene, launcher, build tool and README.
+- The previous 2D desktop v0.3.0 remains unchanged in `v0.3.0/`.
+
+The main app is a single-file bundle, so existing OTA updates work offline
+without downloading engine modules separately. Modular engine sources are
+published and separately archived for future development.
+
