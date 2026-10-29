@@ -47,6 +47,43 @@ class SoftwareRenderer:
                 for face in mesh.faces
             ]
         self.has_image_texture = self._texels is not None
+        self._surface_texture = None
+        self._surface_uv = None
+        self._surface_cache = None
+        self._surface_photo = None
+        self._fog = None
+        if texture is not None and self.material.get("texture_projection") == "box" and hasattr(texture, "convert"):
+            from PIL import Image
+            tile = texture.convert("RGB")
+            tile.thumbnail((256, 256))
+            tint = self.material.get("texture_tint")
+            if tint:
+                channels = tile.split()
+                tile = Image.merge("RGB", tuple(channel.point(
+                    [round(v * int(tint[1+k*2:3+k*2], 16) / 255) for v in range(256)])
+                    for k, channel in enumerate(channels)))
+            repeat = max(1, min(8, int(self.material.get("texture_repeat_y", 3))))
+            repeat_x = max(1, min(8, int(self.material.get("texture_repeat_x", 1))))
+            self._surface_texture = Image.new("RGB", (tile.width * repeat_x, tile.height * repeat))
+            for row in range(repeat):
+                for column in range(repeat_x):
+                    self._surface_texture.paste(tile, (column * tile.width, row * tile.height))
+            self._surface_uv = []
+            low = [min(v[k] for v in mesh.vertices) for k in range(3)]
+            span = [max(v[k] for v in mesh.vertices) - low[k] for k in range(3)]
+            for face in mesh.faces:
+                a, b, c = [mesh.vertices[i] for i in face.indices]
+                e, f = [b[k] - a[k] for k in range(3)], [c[k] - a[k] for k in range(3)]
+                normal = (e[1]*f[2]-e[2]*f[1], e[2]*f[0]-e[0]*f[2], e[0]*f[1]-e[1]*f[0])
+                axis = max(range(3), key=lambda k: abs(normal[k]))
+                u_axis, v_axis = ((2, 1) if axis == 0 else (0, 2) if axis == 1 else (0, 1))
+                uv = [((v[u_axis]-low[u_axis]) / max(span[u_axis], 1e-9) * (self._surface_texture.width-1),
+                       (1-(v[v_axis]-low[v_axis]) / max(span[v_axis], 1e-9)) * (self._surface_texture.height-1))
+                      for v in (a, b, c)]
+                self._surface_uv.append(uv)
+            self._texels = [self._surface_texture.getpixel((
+                int(sum(p[0] for p in uv)/3), int(sum(p[1] for p in uv)/3))) for uv in self._surface_uv]
+            self.material_mode = "img"
         self.camera_distance = 3.85
         self.rotation_y = 0.0
         self.rotation_x = -0.25
@@ -73,6 +110,18 @@ class SoftwareRenderer:
              1.013 * math.sin(t) * math.sin(0.92 + 0.45 * math.sin(t * 3.5)))
             for t in (math.pi * i / 76 for i in range(77))
         ]
+
+    def set_atmosphere(self, fog):
+        self._fog = dict(fog) if fog else None
+
+    def _apply_fog(self, color, depth):
+        if not self._fog:
+            return color
+        start, end = float(self._fog.get("start", 15)), float(self._fog.get("end", 40))
+        amount = max(0, min(1, (depth-start) / max(0.01, end-start)))
+        amount *= max(0, min(1, float(self._fog.get("strength", 0.35))))
+        tint = self._fog.get("color", "#416078")
+        return _rgb(tuple(int(color[i:i+2], 16)*(1-amount) + int(tint[i:i+2], 16)*amount for i in (1, 3, 5)))
 
     def set_lights(self, lights, ambient=0.56):
         """Prepare optional spot lights declared in scene.json.
@@ -153,7 +202,7 @@ class SoftwareRenderer:
                 incident[k] + towards_camera[k] for k in range(3)
             ))
             highlight = max(0.0, _dot(normal, half_vector)) ** gloss
-            specular = 0.60 * energy * highlight * facing
+            specular = 0.60 * energy * highlight * facing * float(self.material.get("specular_strength", 1.0))
             for k in range(3):
                 result[k] += spot["color"][k] * (
                     base[k] * diffuse + 255.0 * specular
@@ -191,10 +240,12 @@ class SoftwareRenderer:
             glint = max(0.0, _dot(normal, _unit((-0.28, 0.74, 0.62)))) ** 13
             white = max(0.0, _dot(normal, _unit((0.42, 0.68, 0.53)))) ** 38
             rim = (1.0 - max(0.0, front)) ** 3
+            strength = float(self.material.get("highlight_strength", 1.0))
+            exposure = float(self.material.get("exposure", 1.0))
             return _rgb((
-                base[0] * facet + 102 * glint + 108 * white + 30 * rim,
-                base[1] * facet + 115 * glint + 130 * white + 23 * rim,
-                base[2] * (facet + 0.12) + 135 * glint + 125 * white + 44 * rim,
+                exposure*(base[0] * facet + strength*(102 * glint + 108 * white + 30 * rim)),
+                exposure*(base[1] * facet + strength*(115 * glint + 130 * white + 23 * rim)),
+                exposure*(base[2] * (facet + 0.12) + strength*(135 * glint + 125 * white + 44 * rim)),
             ))
         if not self._pbr:
             edge = (1.0 - front) ** 1.9
@@ -260,11 +311,79 @@ class SoftwareRenderer:
                 clipped.append(current)
         return clipped
 
+    def _paint_surface(self, canvas, image, left, top):
+        if hasattr(canvas, "draw_surface"):
+            canvas.draw_surface(image, left, top)
+        else:
+            from PIL import ImageTk
+            if self._surface_photo is None:
+                self._surface_photo = ImageTk.PhotoImage(image, master=canvas)
+            canvas.create_image(left, top, anchor="nw", image=self._surface_photo)
+
+    def _raster_surface(self, faces, viewport):
+        """Affine texture patches; cache the finished static tower between frames."""
+        from PIL import Image, ImageDraw
+        points = [p for _, polygon, _, _ in faces for p in zip(polygon[::2], polygon[1::2])]
+        if not points:
+            return None
+        left = max(0, math.floor(min(p[0] for p in points)))
+        top = max(0, math.floor(min(p[1] for p in points)))
+        right = min(viewport[0], math.ceil(max(p[0] for p in points)) + 1)
+        bottom = min(viewport[1], math.ceil(max(p[1] for p in points)) + 1)
+        if right <= left or bottom <= top:
+            return None
+        output = Image.new("RGBA", (right-left, bottom-top))
+        for _, polygon, color, uv in faces:
+            coords = [(x-left, y-top) for x, y in zip(polygon[::2], polygon[1::2])]
+            if uv is None:
+                ImageDraw.Draw(output).polygon(coords, fill=color)
+                continue
+            x0, y0 = coords[0]
+            x1, y1 = coords[1]
+            x2, y2 = coords[2]
+            determinant = (x1-x0)*(y2-y0)-(x2-x0)*(y1-y0)
+            if abs(determinant) < 1e-8:
+                continue
+            planes = []
+            for k in (0, 1, 2):
+                values = [point[k] / point[2] if k < 2 else 1 / point[2] for point in uv]
+                d1, d2 = values[1]-values[0], values[2]-values[0]
+                a = (d1*(y2-y0)-d2*(y1-y0))/determinant
+                b = ((x1-x0)*d2-(x2-x0)*d1)/determinant
+                planes.append((a, b, values[0]-a*x0-b*y0))
+            normalizer = planes[2][2]
+            if abs(normalizer) < 1e-10:
+                continue
+            coefficients = tuple(value/normalizer for plane in planes[:2] for value in plane)
+            coefficients += (planes[2][0]/normalizer, planes[2][1]/normalizer)
+            patch = self._surface_texture.transform(output.size, Image.Transform.PERSPECTIVE, coefficients,
+                                                     resample=Image.Resampling.BILINEAR)
+            texel = self._surface_texture.getpixel((int(sum(p[0] for p in uv)/3), int(sum(p[1] for p in uv)/3)))
+            target = [int(color[i:i+2], 16) for i in (1, 3, 5)]
+            exposure = max(0.1, min(2.0, float(self.material.get("texture_exposure", 1.0))))
+            ambient = self.material.get("texture_lighting") == "ambient"
+            channels = [channel.point([min(255, round(v * exposure * (1 if ambient else target[k] / max(1, texel[k])))) for v in range(256)])
+                        for k, channel in enumerate(patch.split())]
+            patch = Image.merge("RGB", channels)
+            mask = Image.new("L", output.size)
+            ImageDraw.Draw(mask).polygon(coords, fill=255)
+            output.paste(patch, (0, 0), mask)
+        return output, left, top
+
     def draw(self, canvas, cx, cy, diameter, draw_graticules=True,
              object_position=(0.0, 0.0, 0.0),
              camera_position=(0.0, 0.0, 3.85),
              camera_yaw=0.0, camera_pitch=0.0):
         """Project rotating world-space models from a movable 3D camera."""
+        surface = self._surface_texture is not None and self.material_mode == "img" and not self.wireframe
+        signature = (cx, cy, diameter, tuple(object_position), tuple(camera_position), camera_yaw,
+                     camera_pitch, self.rotation_x, self.rotation_y, self.zoom,
+                     self.spotlight_enabled, str(self._spotlights), self._spot_ambient, str(self._fog))
+        if surface and self._surface_cache is not None and self._surface_cache[0] == signature:
+            _, cached, count = self._surface_cache
+            if cached is not None:
+                self._paint_surface(canvas, *cached)
+            return count
         focal = max(50.0, diameter * self.camera_distance * 0.47 * self.zoom)
         sy, cyaw = math.sin(camera_yaw), math.cos(camera_yaw)
         sp, cp = math.sin(camera_pitch), math.cos(camera_pitch)
@@ -325,9 +444,18 @@ class SoftwareRenderer:
                     color, normal, towards_camera, world_center
                 )
             depth = sum(v[2] for v in polygon) / len(polygon)
-            visible_faces.append((depth, projected, color))
+            color = self._apply_fog(color, depth)
+            uv = [(point[0], point[1], view[index][2]) for point, index in zip(self._surface_uv[face_index], (i, j, k))] if surface and len(polygon) == 3 and all(view[t][2] >= 0.32 for t in (i, j, k)) else None
+            visible_faces.append((depth, projected, color, uv))
         visible_faces.sort(key=lambda item: item[0], reverse=True)
-        for _, polygon, color in visible_faces:
+        if surface:
+            cached = self._raster_surface(visible_faces, (int(cx*2), int(cy*2)))
+            self._surface_cache = (signature, cached, len(visible_faces))
+            self._surface_photo = None
+            if cached is not None:
+                self._paint_surface(canvas, *cached)
+            return len(visible_faces)
+        for _, polygon, color, _ in visible_faces:
             canvas.create_polygon(
                 *polygon, fill=color,
                 outline="#22426e" if self.wireframe else color,

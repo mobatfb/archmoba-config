@@ -1,0 +1,12 @@
+{
+  "format": "pyrion.material",
+  "version": 2,
+  "name": "cyan",
+  "shader": "gem",
+  "base_color": "#25BFCD",
+  "metallic": 0.08,
+  "roughness": 0.16,
+  "specular_strength": 0.28,
+  "exposure": 0.82,
+  "highlight_strength": 0.35
+}

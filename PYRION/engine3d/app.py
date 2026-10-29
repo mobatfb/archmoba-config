@@ -16,10 +16,10 @@ import tkinter as tk
 from .mesh import SphereMesh, TriangleMesh
 from .renderer import SoftwareRenderer
 
-ENGINE_VERSION = "0.4.0"
-DESKTOP_VERSION = "0.4.13"
+ENGINE_VERSION = "0.4.3"
+DESKTOP_VERSION = "0.4.26"
 BACKGROUND = "#050917"
-REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
+REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-dev/main/PYRION"
 
 
 
@@ -33,6 +33,8 @@ def _scene_json(relative_path):
     local = engine / relative
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
+    if os.environ.get("AMDEV_MODE") == "local":
+        raise FileNotFoundError(f"No existe el recurso local: {local}")
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
     request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.13"})
     with urllib.request.urlopen(request, timeout=8) as response:
@@ -58,7 +60,7 @@ class _TkTexture:
         return tuple(pixel[:3])
 
 
-def _scene_texture(relative_path):
+def _scene_texture(relative_path, max_size=(512, 512)):
     """Load remote/local scene texture; GIF works with standard Tkinter."""
     relative = Path(relative_path)
     if relative.is_absolute() or ".." in relative.parts:
@@ -70,6 +72,8 @@ def _scene_texture(relative_path):
         if local.is_file():
             data = local.read_bytes()
         else:
+            if os.environ.get("AMDEV_MODE") == "local":
+                raise FileNotFoundError(f"No existe la textura local: {local}")
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
                 url, headers={"User-Agent": "PYRION/0.4.13"})
@@ -77,17 +81,15 @@ def _scene_texture(relative_path):
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
             raise ValueError("Scene texture exceeds 8 MiB")
-        if relative.suffix.lower() == ".gif":
-            # Tkinter understands GIF natively: no Pillow installation needed.
-            photo = tk.PhotoImage(data=base64.b64encode(data).decode("ascii"))
-            return _TkTexture(photo)
         try:
             from PIL import Image
             from io import BytesIO
         except ImportError:
-            return None
+            # Fallback to native Tk sampling when Pillow is unavailable.
+            photo = tk.PhotoImage(data=base64.b64encode(data).decode("ascii"))
+            return _TkTexture(photo)
         with Image.open(BytesIO(data)) as image:
-            image.thumbnail((512, 512))
+            image.thumbnail(max_size)
             return image.convert("RGB")
     except (OSError, ValueError, urllib.error.URLError, tk.TclError):
         return None
@@ -99,6 +101,9 @@ def load_selected_scene():
     scene = _scene_json(scene_path)
     if scene.get("format") != "pyrion.scene":
         raise ValueError("Unsupported scene format")
+    background_path = scene.get("background", {}).get("image")
+    if background_path:
+        scene["_background_image"] = _scene_texture((scene_path.parent / background_path).as_posix(), max_size=(1920, 1080))
     objects = []
     for obj in scene.get("objects", []):
         if not obj.get("visible", True):
@@ -144,10 +149,14 @@ def load_selected_scene():
                 image = _scene_texture(image_path)
                 if image is not None:
                     material["_texture_image"] = image
-        objects.append({"renderer": SoftwareRenderer(mesh, material=material),
+        objects.append({"id": str(obj.get("id", model_path)),
+                        "renderer": SoftwareRenderer(mesh, material=material),
                         "position": position,
+                        "render_layer": int(obj.get("render_layer", 0)),
                         "radius": radius, "speed": math.radians(speed),
+                        "rotation_x": math.radians(float(obj.get("rotation", [0, 0, 0])[0])),
                         "rotation": math.radians(float(obj.get("rotation", [0, 0, 0])[1]))})
+        objects[-1]["renderer"].set_atmosphere(scene.get("fog"))
     return scene, objects
 
 
@@ -291,24 +300,36 @@ class Pyrion3DApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PYRION OS")
-        self.scene, self.objects = load_selected_scene()
-        self.background = self.scene.get("background", {}).get("color", BACKGROUND)
-        self.configure(bg=self.background)
+        self._engine_generation = 0
+        self._engine_after = set()
         self.windowed = (
             "--windowed" in sys.argv or os.environ.get("PYRION_WINDOWED") == "1"
         )
         self._setup_window()
-
-        self.canvas = tk.Canvas(
-            self, bg=self.background, highlightthickness=0, bd=0,
-            relief="flat", takefocus=1
-        )
+        self.canvas = tk.Canvas(self, bg=BACKGROUND, highlightthickness=0, bd=0,
+                                relief="flat", takefocus=1)
         self.canvas.pack(fill="both", expand=True)
+        # La ventana y Canvas son el contenedor; todo lo demás pertenece al motor.
+        self._shell_keys = set(self.__dict__) | {"_shell_keys", "_control_bindings", "_live_module_name"}
+        self._initialize_engine(*load_selected_scene())
+        self.configure(bg=self.background)
+        self.canvas.configure(bg=self.background)
+        self._bind_controls()
+        self._start_engine()
+
+    def _initialize_engine(self, scene, objects):
+        """Mismo arranque limpio al abrir la app y en cada reset."""
+        self.scene, self.objects = scene, objects
+        self.background = scene.get("background", {}).get("color", BACKGROUND)
+        self.background_image = scene.get("_background_image")
+        self._background_cache = None
+        self._shadow_cache = None
         self.renderer = self.objects[0]["renderer"] if self.objects else None
         self.spotlight_enabled = True
         for item in self.objects:
             item["renderer"].rotation_y = item["rotation"]
-            item["renderer"].rotation_x = -0.28
+            item["renderer"].rotation_x = item.get("rotation_x", -0.28)
+            item["renderer"].material_mode = self.scene.get("material_mode", "mat")
             item["renderer"].set_lights(
                 self.scene.get("lights", []),
                 ambient=self.scene.get("ambient_light", 0.56)
@@ -319,8 +340,11 @@ class Pyrion3DApp(tk.Tk):
         self.visible_triangles = 0
         self.frames = 0
         self.info_mode = "compacto"
-        self.material_mode = "mat"
+        self.material_mode = self.scene.get("material_mode", "mat")
         self.material_notice = ""
+        import queue
+        self._update_events = queue.Queue()
+        self._update_running = False
         self.fps = 0.0
         self.frame_ms = 0.0
         self.render_ms = 0.0
@@ -367,33 +391,97 @@ class Pyrion3DApp(tk.Tk):
         self._sticks = {"move": (0.0, 0.0), "look": (0.0, 0.0)}
         self._active_stick = None
 
-        # HUD includes interactive details and material buttons.
-        self.bind("<space>", lambda _event: self.toggle_animation())
-        self.bind("<F3>", self._toggle_hud_mode)
-        self.bind("<m>", self._toggle_material_mode)
-        self.bind("<M>", self._toggle_material_mode)
-        self.bind("<l>", self._toggle_spotlight)
-        self.bind("<L>", self._toggle_spotlight)
-        self.bind("<Tab>", self._toggle_control_mode)
-        self.bind("<r>", self._reset_navigation)
-        self.bind("<R>", self._reset_navigation)
-        self.bind("<Left>", lambda _event: self._speed(-0.15))
-        self.bind("<Right>", lambda _event: self._speed(+0.15))
-        self.bind("<plus>", lambda _event: self._zoom(+0.10))
-        self.bind("<minus>", lambda _event: self._zoom(-0.10))
-        self.bind("<F11>", self._switch_to_window)
-        self.bind("<Escape>", self._switch_to_window)
-        self.bind("<Control-q>", lambda _event: self.close())
-        self.canvas.bind("<ButtonPress-1>", self._mouse_press)
-        self.canvas.bind("<B1-Motion>", self._mouse_move)
-        self.canvas.bind("<ButtonRelease-1>", self._mouse_release)
-        self.canvas.bind("<MouseWheel>", self._scroll)
-        self.canvas.bind("<Button-4>", lambda _event: self._zoom(+0.10))
-        self.canvas.bind("<Button-5>", lambda _event: self._zoom(-0.10))
-        self.canvas.bind("<Configure>", lambda _event: self._request_frame())
-        self.protocol("WM_DELETE_WINDOW", self.close)
-        self.after(80, self._frame)
-        self.after(1000, self._keep_as_desktop)
+
+    def _schedule_engine(self, delay, callback):
+        generation = self._engine_generation
+        timer_id = None
+
+        def fire():
+            self._engine_after.discard(timer_id)
+            if generation == self._engine_generation:
+                callback()
+
+        timer_id = tk.Misc.after(self, delay, fire)
+        self._engine_after.add(timer_id)
+        return timer_id
+
+    def _cancel_engine_callbacks(self, legacy=False):
+        timers = list(self._engine_after)
+        if legacy:
+            timers = list(self.tk.splitlist(self.tk.call("after", "info")))
+        for timer in timers:
+            try:
+                self.after_cancel(timer)
+            except tk.TclError:
+                pass
+        self._engine_after.clear()
+
+    def _start_engine(self):
+        self._schedule_engine(16, self._frame)
+        self._schedule_engine(1000, self._keep_as_desktop)
+        if not self.windowed and os.name != "nt":
+            self._schedule_engine(180, self._repair_fullscreen_geometry)
+
+    def _adopt_legacy_window(self):
+        """Primer reset desde versiones previas sin gestor de ciclo de vida."""
+        scene, objects = self.scene, self.objects
+        keys = {"master", "children", "tk", "_w", "_tclCommands", "_last_child_ids",
+                "_tkloaded", "_windowingsystem_cached", "canvas", "windowed", "_live_module_name", "_control_bindings"}
+        shell = {key: value for key, value in self.__dict__.items() if key in keys}
+        self._engine_after = set()
+        self._cancel_engine_callbacks(legacy=True)
+        self.__dict__.clear()
+        self.__dict__.update(shell)
+        self._shell_keys = keys | {"_shell_keys", "_control_bindings", "_engine_after", "_engine_generation"}
+        self._engine_after = set()
+        self._engine_generation = 1
+        self._initialize_engine(scene, objects)
+        self._start_engine()
+
+    def _bind_controls(self):
+        if "_engine_generation" not in self.__dict__:
+            self._adopt_legacy_window()
+        for widget, sequence, binding_id in getattr(self, "_control_bindings", []):
+            try:
+                widget.unbind(sequence, binding_id)
+            except tk.TclError:
+                pass
+        self._control_bindings = []
+
+        def bind(widget, sequence, callback):
+            binding_id = widget.bind(sequence, callback)
+            self._control_bindings.append((widget, sequence, binding_id))
+
+        bind(self, "<space>", lambda _event: self.toggle_animation())
+        bind(self, "<F3>", self._toggle_hud_mode)
+        bind(self, "<m>", self._toggle_material_mode)
+        bind(self, "<M>", self._toggle_material_mode)
+        bind(self, "<l>", self._toggle_spotlight)
+        bind(self, "<L>", self._toggle_spotlight)
+        bind(self, "<Tab>", self._toggle_control_mode)
+        bind(self, "<r>", self._reset_navigation)
+        bind(self, "<R>", self._reset_navigation)
+        bind(self, "<Left>", lambda _event: self._speed(-0.15))
+        bind(self, "<Right>", lambda _event: self._speed(+0.15))
+        bind(self, "<plus>", lambda _event: self._zoom(+0.10))
+        bind(self, "<minus>", lambda _event: self._zoom(-0.10))
+        bind(self, "<F11>", self._switch_to_window)
+        bind(self, "<Escape>", self._switch_to_window)
+        bind(self, "<Control-q>", lambda _event: self.close())
+        bind(self.canvas, "<ButtonPress-1>", self._mouse_press)
+        bind(self.canvas, "<B1-Motion>", self._mouse_move)
+        bind(self.canvas, "<ButtonRelease-1>", self._mouse_release)
+        bind(self.canvas, "<MouseWheel>", self._scroll)
+        bind(self.canvas, "<Button-4>", lambda _event: self._zoom(+0.10))
+        bind(self.canvas, "<Button-5>", lambda _event: self._zoom(-0.10))
+        bind(self.canvas, "<Configure>", lambda _event: self._request_frame())
+        old_protocol = self.protocol("WM_DELETE_WINDOW")
+        self.protocol("WM_DELETE_WINDOW", lambda: self.close())
+        if old_protocol:
+            try:
+                self.deletecommand(old_protocol)
+            except tk.TclError:
+                pass
 
     @staticmethod
     def _copy_pose(pose):
@@ -605,7 +693,6 @@ class Pyrion3DApp(tk.Tk):
             sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
             self.overrideredirect(True)
             self.geometry(f"{sw}x{sh}+0+0")
-            self.after(180, self._repair_fullscreen_geometry)
 
     def _repair_fullscreen_geometry(self):
         if not self.windowed:
@@ -618,7 +705,7 @@ class Pyrion3DApp(tk.Tk):
             if not self.windowed:
                 self.attributes("-topmost", False)
                 self.lower()
-            self.after(1250, self._keep_as_desktop)
+            self._schedule_engine(1250, self._keep_as_desktop)
         except tk.TclError:
             pass
 
@@ -634,6 +721,8 @@ class Pyrion3DApp(tk.Tk):
         self._request_frame()
 
     def close(self):
+        self._engine_generation += 1
+        self._cancel_engine_callbacks()
         if self.pending_frame is not None:
             try:
                 self.after_cancel(self.pending_frame)
@@ -689,7 +778,86 @@ class Pyrion3DApp(tk.Tk):
 
     def _request_frame(self):
         if self.pending_frame is None:
-            self.pending_frame = self.after_idle(self._draw)
+            self.pending_frame = self._schedule_engine("idle", self._draw)
+
+    def _draw_background(self, width, height):
+        source = self.background_image
+        if source is None:
+            return
+        key = (id(source), width, height)
+        if self._background_cache is None or self._background_cache[0] != key:
+            if hasattr(source, "convert"):
+                from PIL import Image, ImageOps
+                fitted = ImageOps.fit(source, (width, height), method=Image.Resampling.BILINEAR)
+                if hasattr(self.canvas, "draw_surface"):
+                    photo = fitted
+                else:
+                    from PIL import ImageTk
+                    photo = ImageTk.PhotoImage(fitted, master=self.canvas)
+                anchor = "nw"
+            else:
+                # Native Tk fallback: scale to cover the viewport without distortion.
+                original = source._photo
+                ratio = max(width / original.width(), height / original.height())
+                photo = original.zoom(max(1, math.ceil(ratio))) if ratio > 1 else original.subsample(max(1, int(1 / ratio)))
+                anchor = "center"
+            self._background_cache = (key, photo, anchor)
+        _, photo, anchor = self._background_cache
+        if hasattr(self.canvas, "draw_surface"):
+            self.canvas.draw_surface(photo, 0, 0)
+        else:
+            x, y = (0, 0) if anchor == "nw" else (width / 2, height / 2)
+            self.canvas.create_image(x, y, anchor=anchor, image=photo)
+
+    def _draw_contact_shadows(self, width, height, diameter):
+        shadows = self.scene.get("contact_shadows", [])
+        if not shadows:
+            return
+        pose = self.camera_pose
+        renderer = getattr(self, "renderer", None)
+        zoom = renderer.zoom if renderer is not None else 1.0
+        key = (width, height, diameter, tuple(pose["position"]), pose["yaw"], pose["pitch"], zoom, id(self.scene))
+        if self._shadow_cache is None or self._shadow_cache[0] != key:
+            try:
+                from PIL import Image, ImageDraw, ImageFilter
+            except ImportError:
+                return
+            image = Image.new("RGBA", (width, height))
+            draw = ImageDraw.Draw(image)
+            yaw, pitch = pose["yaw"], pose["pitch"]
+            right = (math.cos(yaw), 0, math.sin(yaw))
+            up = (-math.sin(yaw)*math.sin(pitch), math.cos(pitch), math.cos(yaw)*math.sin(pitch))
+            forward = self._pose_forward(pose)
+            focal = max(50, diameter * 3.85 * 0.47 * zoom)
+            ground = float(self.scene.get("ground_y", -2.4)) + 0.02
+            for shadow in shadows:
+                points = []
+                for i in range(24):
+                    angle = i*math.tau/24
+                    world = (shadow["x"] + math.cos(angle)*shadow["radius_x"], ground,
+                             shadow["z"] + math.sin(angle)*shadow["radius_z"])
+                    delta = tuple(world[k]-pose["position"][k] for k in range(3))
+                    depth = sum(delta[k]*forward[k] for k in range(3))
+                    if depth <= 0.32:
+                        points = []
+                        break
+                    points.append((width/2 + sum(delta[k]*right[k] for k in range(3))*focal/depth,
+                                   height/2 - sum(delta[k]*up[k] for k in range(3))*focal/depth))
+                if points:
+                    alpha = round(255*max(0, min(1, shadow.get("opacity", 0.38))))
+                    draw.polygon(points, fill=(5, 12, 18, alpha))
+            image = image.filter(ImageFilter.GaussianBlur(5))
+            if hasattr(self.canvas, "draw_surface"):
+                photo = image
+            else:
+                from PIL import ImageTk
+                photo = ImageTk.PhotoImage(image, master=self.canvas)
+            self._shadow_cache = (key, photo)
+        photo = self._shadow_cache[1]
+        if hasattr(self.canvas, "draw_surface"):
+            self.canvas.draw_surface(photo, 0, 0)
+        else:
+            self.canvas.create_image(0, 0, anchor="nw", image=photo)
 
     def _draw(self):
         self.pending_frame = None
@@ -703,6 +871,7 @@ class Pyrion3DApp(tk.Tk):
         draw_start = time.perf_counter()
         cpu_draw_start = time.process_time()
         self.canvas.delete("all")
+        self._draw_background(width, height)
         diameter = min(height * 0.60, width * 0.48, 520)
         self._orb_radius = diameter * 0.50
         self.visible_triangles = 0
@@ -710,13 +879,16 @@ class Pyrion3DApp(tk.Tk):
         forward = self._pose_forward(self.camera_pose)
         ordered = sorted(
             self.objects,
-            key=lambda obj: sum(
+            key=lambda obj: (obj.get("render_layer", 0), -sum(
                 (obj["position"][k] - eye[k]) * forward[k]
                 for k in range(3)
-            ),
-            reverse=True
+            ))
         )
+        shadows_drawn = False
         for item in ordered:
+            if not shadows_drawn and item.get("render_layer", 0) >= 0:
+                self._draw_contact_shadows(width, height, diameter)
+                shadows_drawn = True
             renderer = item["renderer"]
             self.visible_triangles += renderer.draw(
                 self.canvas, width / 2, height / 2, diameter,
@@ -764,6 +936,9 @@ class Pyrion3DApp(tk.Tk):
     def _hud_click(self, event):
         if self._width < 360:
             return False
+        if 16 <= event.x <= 40 and 14 <= event.y <= 38:
+            self._check_updates_now()
+            return True
         lx1, ly1, lx2, ly2 = self._spotlight_button_bounds()
         if lx1 <= event.x <= lx2 and ly1 <= event.y <= ly2:
             self._toggle_spotlight()
@@ -778,6 +953,135 @@ class Pyrion3DApp(tk.Tk):
             return True
         return False
 
+    def _check_updates_now(self):
+        if self._update_running:
+            return
+        import threading
+        self._update_running = True
+        self._request_frame()
+
+        def worker():
+            try:
+                checker = globals().get("check_self_update")
+                if checker is None:
+                    # El modo modular utiliza el mismo actualizador que app.py.
+                    import runpy
+                    target = Path(__file__).resolve().parent.parent / "app.py"
+                    checker = runpy.run_path(str(target))["check_self_update"]
+                    checker.__globals__["APP_VERSION"] = DESKTOP_VERSION
+                updated = checker(restart=False, raise_errors=True)
+                self._update_events.put(("done", updated))
+            except Exception as exc:
+                self._update_events.put(("error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._schedule_engine(100, self._poll_manual_update)
+
+    def _poll_manual_update(self):
+        import queue
+        from tkinter import messagebox
+        try:
+            kind, result = self._update_events.get_nowait()
+        except queue.Empty:
+            self._schedule_engine(100, self._poll_manual_update)
+            return
+        self._update_running = False
+        self._request_frame()
+        if kind == "error":
+            messagebox.showerror("PYRION", f"No se pudo buscar la actualización:\n\n{result}", parent=self)
+        else:
+            try:
+                self._refresh_live()
+            except Exception as exc:
+                messagebox.showerror("PYRION", f"No se pudo refrescar. La sesión actual se conserva:\n\n{exc}", parent=self)
+
+    def _refresh_live(self):
+        """El contenedor permanece; código y estado del motor se reconstruyen."""
+        import types
+        current = Path(__file__).resolve()
+        target = current.parent.parent / "app.py" if current.parent.name == "engine3d" else current
+        module_name = f"_pyrion_live_{time.time_ns()}"
+        module = types.ModuleType(module_name)
+        module.__file__ = str(target)
+        sys.modules[module_name] = module
+        old_class = self.__class__
+        old_state = self.__dict__.copy()
+        committed = False
+        try:
+            source = target.read_text(encoding="utf-8-sig")
+            exec(compile(source, str(target), "exec"), module.__dict__)
+            config = json.loads(target.with_name("config.json").read_text(encoding="utf-8-sig"))
+            if module.APP_VERSION != str(config.get("version", "")):
+                raise RuntimeError("El código nuevo no coincide con la versión de config.json")
+            engine_dir = target.parent / "engine3d"
+            if os.environ.get("AMDEV_MODE") == "local" and all((engine_dir / f"{name}.py").is_file() for name in ("mesh", "renderer", "app")):
+                # Paquete aislado: también se recompilan los módulos locales, sin
+                # reutilizar imports ni archivos .pyc de la generación anterior.
+                package = types.ModuleType(module_name)
+                package.__path__ = [str(engine_dir)]
+                package.__package__ = module_name
+                sys.modules[module_name] = package
+                for name in ("mesh", "renderer", "app"):
+                    path = engine_dir / f"{name}.py"
+                    child = types.ModuleType(f"{module_name}.{name}")
+                    child.__file__ = str(path)
+                    child.__package__ = module_name
+                    sys.modules[child.__name__] = child
+                    exec(compile(path.read_text(encoding="utf-8-sig"), str(path), "exec"), child.__dict__)
+                    setattr(package, name, child)
+                module = package.app
+                if module.DESKTOP_VERSION != str(config.get("version", "")):
+                    raise RuntimeError("La versión de engine3d no coincide con config.json")
+            new_class = module.Pyrion3DApp
+            scene, objects = module.load_selected_scene()
+            candidate = object.__new__(new_class)
+            # Conservar únicamente el contenedor Tk, no atributos del motor anterior.
+            candidate.__dict__ = {key: old_state[key] for key in self._shell_keys if key in old_state}
+            candidate._engine_generation = self._engine_generation + 1
+            candidate._engine_after = set()
+            candidate._initialize_engine(scene, objects)
+            candidate._live_module_name = module_name
+
+            committed = True
+            self._cancel_engine_callbacks()
+            self.__class__ = new_class
+            self.__dict__.clear()
+            self.__dict__.update(candidate.__dict__)
+            self.configure(bg=self.background)
+            self.canvas.configure(bg=self.background)
+            self.canvas.delete("all")
+            self._bind_controls()
+            self._start_engine()
+            self._request_frame()
+        except Exception:
+            if not committed:
+                for name in list(sys.modules):
+                    if name == module_name or name.startswith(module_name + "."):
+                        sys.modules.pop(name, None)
+                raise
+            try:
+                self._cancel_engine_callbacks()
+            finally:
+                self.__class__ = old_class
+                self.__dict__.clear()
+                self.__dict__.update(old_state)
+                self._engine_after = set()
+                self.pending_frame = None
+                self.configure(bg=self.background)
+                self.canvas.configure(bg=self.background)
+                self._bind_controls()
+                self._start_engine()
+                self._request_frame()
+                for name in list(sys.modules):
+                    if name == module_name or name.startswith(module_name + "."):
+                        sys.modules.pop(name, None)
+            raise
+        previous_module = old_state.get("_live_module_name")
+        if previous_module:
+            for name in list(sys.modules):
+                if name == previous_module or name.startswith(previous_module + "."):
+                    sys.modules.pop(name, None)
+
     def _toggle_hud_mode(self, _event=None):
         self.info_mode = "diagnostico" if self.info_mode == "compacto" else "compacto"
         self._request_frame()
@@ -788,7 +1092,13 @@ class Pyrion3DApp(tk.Tk):
         canvas = self.canvas
         x, right = 20, 308
         full = self.info_mode == "diagnostico"
-        canvas.create_text(x, 20, text="PYRION 3D / " + str(self.scene.get("name", "Scene")),
+        canvas.create_rectangle(16, 14, 40, 38, fill="#10243c", outline="#345878")
+        canvas.create_text(28, 26, text="…" if self._update_running else "↻",
+                           fill="#ffd895" if self._update_running else "#71cfff",
+                           font=("Segoe UI Symbol", 15))
+        name = str(self.scene.get("name", "Scene"))
+        name = name if len(name) <= 9 else name[:8] + "…"
+        canvas.create_text(48, 20, text="PYRION 3D / " + name,
                            anchor="nw", fill="#71cfff", font=("TkDefaultFont", 9, "bold"))
         canvas.create_text(x, 38,
                            text=f"VERSIÓN {DESKTOP_VERSION} · MOTOR 3D {ENGINE_VERSION}",
@@ -973,7 +1283,7 @@ class Pyrion3DApp(tk.Tk):
         finally:
             try:
                 if self.winfo_exists():
-                    self.after(16, self._frame)
+                    self._schedule_engine(16, self._frame)
             except tk.TclError:
                 pass
 

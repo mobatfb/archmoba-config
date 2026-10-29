@@ -29,13 +29,13 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.72"
-APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "18:55"
+APP_VERSION = "1.0.75"
+APP_UPDATE_DATE = "29/10/2026"
+APP_UPDATE_TIME = "10:21"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
-REPO_NAME = "archmoba-config"
+REPO_NAME = "archmoba-dev"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
 REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
@@ -103,6 +103,26 @@ def _version_tuple(value):
 
 def check_self_update(restart=True):
     """Busca una versión nueva de PTM y reemplaza app.py."""
+    if os.environ.get("AMDEV_MODE") == "local":
+        try:
+            current = Path(__file__).resolve()
+            config = json.loads(current.with_name("config.json").read_text(encoding="utf-8-sig"))
+            version = str(config.get("version", ""))
+            if _version_tuple(version) <= _version_tuple(APP_VERSION):
+                return False
+            source = current.read_text(encoding="utf-8-sig")
+            match = re.search(r'''APP_VERSION\s*=\s*["']([^"']+)["']''', source)
+            if not match or match.group(1) != version:
+                raise RuntimeError("La version local no coincide con config.json")
+            compile(source, str(current), "exec")
+            if restart:
+                if os.name == "nt":
+                    subprocess.Popen([sys.executable, str(current), *sys.argv[1:]], cwd=str(current.parent))
+                else:
+                    os.execv(sys.executable, [sys.executable, str(current), *sys.argv[1:]])
+            return True
+        except Exception:
+            return False
 
     try:
         remote_config = None
@@ -1889,6 +1909,8 @@ class PTMApp(tk.Tk):
 
     def _fetch_remote_guide_meta(self):
         """Consulta solo el archivo pequeño guide_meta.json."""
+        if os.environ.get("AMDEV_MODE") == "local":
+            return self._read_local_guide_meta()
         last_error = None
 
         try:
@@ -1951,6 +1973,8 @@ class PTMApp(tk.Tk):
 
     def _download_guide_text(self):
         """Descarga guide.csv únicamente cuando la metadata indica un cambio."""
+        if os.environ.get("AMDEV_MODE") == "local":
+            return self.guide_path.read_text(encoding="utf-8-sig")
         last_error = None
 
         try:
@@ -1987,6 +2011,13 @@ class PTMApp(tk.Tk):
 
     def _sync_guide_if_needed(self):
         """Valida metadata Y contenido real antes de dar guide.csv por vigente."""
+        if os.environ.get("AMDEV_MODE") == "local":
+            if not self.guide_path.is_file():
+                raise FileNotFoundError(f"No existe el catálogo local: {self.guide_path}")
+            current_sha = self._local_guide_git_sha()
+            changed = current_sha != getattr(self, "_local_catalog_sha", None)
+            self._local_catalog_sha = current_sha
+            return changed
         remote_meta = self._fetch_remote_guide_meta()
         local_meta = self._read_local_guide_meta()
         remote_sha = str(remote_meta.get("guide_sha", "")).strip()
@@ -2171,6 +2202,17 @@ class PTMApp(tk.Tk):
             raise ValueError("La herramienta no tiene una ruta válida en guide.csv.")
 
         local_path = self.base_dir / Path(repo_path)
+        if os.environ.get("AMDEV_MODE") == "local":
+            if not local_path.resolve().is_relative_to(self.base_dir.resolve()):
+                raise ValueError("La herramienta debe estar dentro del proyecto local.")
+            if is_current is not None and not is_current():
+                raise RuntimeError("Esta sesión de carga ya no está activa.")
+            if not stage_only:
+                return self._get_valid_cached_tool(tool, is_current=is_current)
+            data = local_path.read_bytes()
+            staged = local_path.with_name(local_path.name + ".ptmreload")
+            with self._tool_download_write_lock:
+                return self._store_tool_download(tool, repo_path, staged, data)
         local_path.parent.mkdir(parents=True, exist_ok=True)
         if stage_only:
             local_path = local_path.with_name(local_path.name + ".ptmreload")
@@ -3268,6 +3310,14 @@ class PTMApp(tk.Tk):
 
         if not missing:
             self._dependency_events.put(("success", key, tool, None, None))
+            return
+
+        if os.environ.get("AMDEV_MODE") == "local":
+            error = RuntimeError(
+                "Modo local: faltan dependencias instaladas: " + ", ".join(missing)
+                + ". Instálalas localmente o usa el modo repositorio."
+            )
+            self._dependency_events.put(("failed", key, tool, None, error))
             return
 
         meta["state"] = "preparing"

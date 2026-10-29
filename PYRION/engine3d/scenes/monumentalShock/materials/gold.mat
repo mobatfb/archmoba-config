@@ -1,0 +1,16 @@
+{
+  "format": "pyrion.material",
+  "version": 2,
+  "name": "gold",
+  "shader": "pbr",
+  "base_color": "#A28B5B",
+  "metallic": 0.55,
+  "roughness": 0.62,
+  "specular_strength": 0.28,
+  "texture": "../textures/limestone_ashlar.png",
+  "texture_status": "ready",
+  "texture_projection": "box",
+  "texture_repeat_y": 1,
+  "texture_exposure": 0.95,
+  "texture_tint": "#DBB577"
+}

@@ -16,13 +16,27 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.17"
-APP_UPDATE_DATE = "28/10/2026"
-APP_UPDATE_TIME = "05:35"
+APP_VERSION = "1.0.20"
+APP_UPDATE_DATE = "29/10/2026"
+APP_UPDATE_TIME = "09:14"
 
 REPO_OWNER = "mobatfb"
-REPO_NAME = "archmoba-config"
+REPO_NAME = "archmoba-dev"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
+
+# Interruptor: True = archivos locales ./; False = repositorio GitHub.
+MODO_LOCAL = True
+# Si falta apps.json junto a este app.py, usar GitHub automáticamente.
+MODO_LOCAL = MODO_LOCAL and Path(__file__).resolve().with_name("apps.json").is_file()
+# ./ es la raiz del proyecto, independientemente de la carpeta de arranque.
+LOCAL_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _local_path(repo_path):
+    path = (LOCAL_ROOT / repo_path).resolve()
+    if not path.is_relative_to(LOCAL_ROOT):
+        raise ValueError("La ruta debe estar dentro del proyecto local.")
+    return path
 
 def _windowless_python():
     """Devuelve pythonw.exe en Windows cuando está disponible."""
@@ -89,13 +103,23 @@ def _version_tuple(value):
 
 def _fetch_self_release():
     """Lee config y app.py evitando depender del rate limit de GitHub API."""
+    if MODO_LOCAL:
+        config = json.loads(_local_path("AMDEV/config.json").read_text(encoding="utf-8-sig"))
+        app_path = str(config.get("app_path", "AMDEV/app.py"))
+        source = _local_path(app_path).read_text(encoding="utf-8-sig")
+        match = re.search(r'''APP_VERSION\s*=\s*["']([^"']+)["']''', source)
+        version = str(config.get("version", "")).strip()
+        if not version or not match or match.group(1).strip() != version:
+            raise RuntimeError("La version del app.py local no coincide con config.json")
+        compile(source, app_path, "exec")
+        return config, source
     config = None
 
     # RAW primero: las consultas publicas de AMDEV no necesitan consumir
     # el limite de 60 peticiones/hora de la API sin autenticar.
     try:
         request = urllib.request.Request(
-            f"{REPO_RAW_BASE}/config.json?v={time.time_ns()}",
+            f"{REPO_RAW_BASE}/AMDEV/config.json?v={time.time_ns()}",
             headers={
                 "User-Agent": f"AMDEV/{APP_VERSION}",
                 "Cache-Control": "no-cache",
@@ -170,7 +194,8 @@ def _launch_update_helper(source):
     pending = current.with_suffix(current.suffix + ".pending")
     helper = current.with_suffix(current.suffix + ".updater.py")
 
-    pending.write_text(source, encoding="utf-8")
+    if not MODO_LOCAL:
+        pending.write_text(source, encoding="utf-8")
 
     helper_source = f'''import os
 import subprocess
@@ -213,7 +238,7 @@ while parent_alive(parent_pid) and time.time() < deadline:
     time.sleep(0.12)
 
 last_error = None
-for _ in range(80):
+for _ in range(0 if {MODO_LOCAL!r} else 80):
     try:
         os.replace(pending, target)
         last_error = None
@@ -286,9 +311,10 @@ def check_self_update():
         # execv(), que mantiene el mismo proceso en lugar de devolver el control
         # al init.
         current = Path(__file__).resolve()
-        pending = current.with_suffix(current.suffix + ".pending")
-        pending.write_text(source, encoding="utf-8")
-        os.replace(pending, current)
+        if not MODO_LOCAL:
+            pending = current.with_suffix(current.suffix + ".pending")
+            pending.write_text(source, encoding="utf-8")
+            os.replace(pending, current)
         os.execv(
             sys.executable,
             [sys.executable, str(current), *sys.argv[1:]],
@@ -365,6 +391,11 @@ class FloatingAMDEV(tk.Toplevel):
             fill=WHITE,
             font=("Segoe UI", 6, "bold"),
         )
+        self._draw_local_indicator()
+
+    def _draw_local_indicator(self):
+        if MODO_LOCAL:
+            self.canvas.create_oval(6, 6, 14, 14, fill=WHITE, outline=WHITE)
 
     def _place_default(self):
         self.update_idletasks()
@@ -458,6 +489,8 @@ class FloatingAMDEV(tk.Toplevel):
             fill=WHITE,
             font=("Segoe UI", 6, "bold"),
         )
+
+        self._draw_local_indicator()
 
         # Forzar el refresco para que cada cuadro sea visible.
         self.canvas.update_idletasks()
@@ -575,7 +608,11 @@ class AMDEVApp(tk.Tk):
 
         tk.Label(
             body,
-            text="Selecciona una aplicación. AMDEV leerá su config.json, descargará el app.py y lo ejecutará.",
+            text=(
+                "Modo local: ejecuta las aplicaciones desde los archivos del proyecto."
+                if MODO_LOCAL else
+                "Modo repositorio: descarga y ejecuta las aplicaciones de GitHub."
+            ),
             bg=BG, fg=MUTED_FG,
             font=("Segoe UI", 9),
             anchor="w",
@@ -630,6 +667,8 @@ class AMDEVApp(tk.Tk):
     def _request_repo_file_main(self, repo_path, timeout=12):
         """Lee HEAD de main: RAW primero y API como respaldo."""
         clean = str(repo_path).strip().replace("\\", "/").lstrip("/")
+        if MODO_LOCAL:
+            return _local_path(clean).read_text(encoding="utf-8-sig")
 
         try:
             return self._request_text(
@@ -664,10 +703,14 @@ class AMDEVApp(tk.Tk):
         text = None
         try:
             text = self._request_repo_file_main(APPS_REPO_PATH)
-            self.apps_cache.write_text(text, encoding="utf-8")
-            self.status.configure(text="Catálogo actualizado desde GitHub.")
+            if not MODO_LOCAL:
+                self.apps_cache.write_text(text, encoding="utf-8")
+            self.status.configure(text=(
+                "Catálogo cargado desde ./AMDEV/apps.json."
+                if MODO_LOCAL else "Catálogo actualizado desde GitHub."
+            ))
         except Exception as exc:
-            if self.apps_cache.is_file():
+            if not MODO_LOCAL and self.apps_cache.is_file():
                 text = self.apps_cache.read_text(encoding="utf-8-sig")
                 self.status.configure(text=f"Usando catálogo local. GitHub no respondió: {exc}")
             else:
@@ -976,6 +1019,14 @@ class AMDEVApp(tk.Tk):
         local_dir = self.cache_dir / app_id
         local_app = local_dir / "app.py"
 
+        if MODO_LOCAL:
+            try:
+                config = json.loads(self._request_repo_file_main(item["config"]))
+                local_app = _local_path(config["app_path"])
+            except Exception as exc:
+                messagebox.showerror(APP_SHORT, f"No se pudo leer la aplicación local:\n\n{exc}")
+                return
+
         self._stop_cached_app_processes(app_id, local_app)
         self.launch_app(item, force_update=True)
 
@@ -1001,80 +1052,90 @@ class AMDEVApp(tk.Tk):
                 raise ValueError("El config.json no contiene app_path.")
 
             app_id = str(item.get("id", "app")).strip() or "app"
-            local_dir = self.cache_dir / app_id
-            local_dir.mkdir(parents=True, exist_ok=True)
-            local_app = local_dir / "app.py"
+            if MODO_LOCAL:
+                local_app = _local_path(app_path)
+                if not local_app.is_file():
+                    raise FileNotFoundError(f"No existe la aplicación local: {local_app}")
+                local_dir = local_app.parent
+            else:
+                local_dir = self.cache_dir / app_id
+                local_dir.mkdir(parents=True, exist_ok=True)
+                local_app = local_dir / "app.py"
 
-            self.status.configure(text=f"Descargando {app_path}...")
-            self.update_idletasks()
+                self.status.configure(text=f"Descargando {app_path}...")
+                self.update_idletasks()
 
-            release_commit = str(config.get("release_commit", "")).strip()
-            if not re.fullmatch(r"[0-9a-fA-F]{40}", release_commit):
-                raise RuntimeError(
-                    "El config.json no contiene un release_commit válido."
+                release_commit = str(config.get("release_commit", "")).strip()
+                if not re.fullmatch(r"[0-9a-fA-F]{40}", release_commit):
+                    raise RuntimeError(
+                        "El config.json no contiene un release_commit válido."
+                    )
+
+                immutable_app_url = f"{REPO_RAW_ROOT}/{release_commit}/{app_path}"
+
+                source = None
+                last_error = None
+                for attempt in range(4):
+                    try:
+                        source = self._request_text(immutable_app_url, timeout=20)
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        self.status.configure(
+                            text=f"Esperando release confirmado... intento {attempt + 1}/4"
+                        )
+                        self.update_idletasks()
+                        if attempt < 3:
+                            time.sleep(0.8)
+
+                if source is None:
+                    raise RuntimeError(
+                        f"No se pudo descargar el release confirmado: {last_error}"
+                    )
+
+                compile(source, app_path, "exec")
+
+                expected_version = str(config.get("version", "")).strip()
+                version_match = re.search(
+                    r'''APP_VERSION\s*=\s*["']([^"']+)["']''',
+                    source,
                 )
+                downloaded_version = version_match.group(1).strip() if version_match else ""
 
-            immutable_app_url = f"{REPO_RAW_ROOT}/{release_commit}/{app_path}"
+                if expected_version:
+                    if not downloaded_version:
+                        raise RuntimeError(
+                            f"El app.py descargado no declara APP_VERSION; se esperaba v{expected_version}."
+                        )
+                    if downloaded_version != expected_version:
+                        raise RuntimeError(
+                            "Versión inconsistente: "
+                            f"config.json indica v{expected_version}, "
+                            f"pero app.py contiene v{downloaded_version}."
+                        )
 
-            source = None
-            last_error = None
-            for attempt in range(4):
+                temp = local_app.with_suffix(".py.tmp")
+                temp.write_text(source, encoding="utf-8")
                 try:
-                    source = self._request_text(immutable_app_url, timeout=20)
-                    break
-                except Exception as exc:
-                    last_error = exc
-                    self.status.configure(
-                        text=f"Esperando release confirmado... intento {attempt + 1}/4"
-                    )
-                    self.update_idletasks()
-                    if attempt < 3:
-                        time.sleep(0.8)
+                    local_app.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                temp.replace(local_app)
 
-            if source is None:
-                raise RuntimeError(
-                    f"No se pudo descargar el release confirmado: {last_error}"
-                )
-
-            compile(source, app_path, "exec")
-
-            expected_version = str(config.get("version", "")).strip()
-            version_match = re.search(
-                r'''APP_VERSION\s*=\s*["']([^"']+)["']''',
-                source,
-            )
-            downloaded_version = version_match.group(1).strip() if version_match else ""
-
-            if expected_version:
-                if not downloaded_version:
-                    raise RuntimeError(
-                        f"El app.py descargado no declara APP_VERSION; se esperaba v{expected_version}."
-                    )
-                if downloaded_version != expected_version:
-                    raise RuntimeError(
-                        "Versión inconsistente: "
-                        f"config.json indica v{expected_version}, "
-                        f"pero app.py contiene v{downloaded_version}."
-                    )
-
-            temp = local_app.with_suffix(".py.tmp")
-            temp.write_text(source, encoding="utf-8")
-            try:
-                local_app.unlink(missing_ok=True)
-            except Exception:
-                pass
-            temp.replace(local_app)
-
-            local_config = local_dir / "config.json"
-            local_config.write_text(config_text, encoding="utf-8")
+                local_config = local_dir / "config.json"
+                local_config.write_text(config_text, encoding="utf-8")
 
             self.status.configure(
                 text=f"Ejecutando {config.get('name', item.get('name', app_id))} v{config.get('version', '')}..."
             )
             log_handle = None
             launch_log = local_dir / "launch.log"
+            child_env = os.environ.copy()
+            child_env["AMDEV_MODE"] = "local" if MODO_LOCAL else "repo"
+            child_env["AMDEV_LOCAL_ROOT"] = str(LOCAL_ROOT)
             popen_kwargs = {
                 "cwd": str(local_dir),
+                "env": child_env,
             }
 
             if os.name != "nt":
@@ -1087,7 +1148,6 @@ class AMDEVApp(tk.Tk):
                 )
                 popen_kwargs["stdout"] = log_handle
                 popen_kwargs["stderr"] = subprocess.STDOUT
-                popen_kwargs["env"] = os.environ.copy()
 
             process = subprocess.Popen(
                 [_windowless_python(), str(local_app)],
@@ -1182,7 +1242,8 @@ class AMDEVApp(tk.Tk):
             return
 
         self._update_running = True
-        self.status.configure(text="Buscando actualizacion de AMDEV...")
+        origin = "archivos locales" if MODO_LOCAL else "GitHub"
+        self.status.configure(text=f"Buscando actualizacion de AMDEV en {origin}...")
 
         def worker():
             try:

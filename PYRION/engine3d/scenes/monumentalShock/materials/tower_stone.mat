@@ -1,0 +1,15 @@
+{
+  "format": "pyrion.material",
+  "version": 1,
+  "name": "Weathered limestone masonry",
+  "shader": "pbr",
+  "base_color": "#737984",
+  "metallic": 0.02,
+  "roughness": 0.88,
+  "texture": "../textures/limestone_ashlar.png",
+  "texture_status": "ready",
+  "texture_projection": "box",
+  "texture_repeat_y": 3,
+  "texture_exposure": 0.95,
+  "specular_strength": 0.2
+}
