@@ -16,9 +16,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.21"
+APP_VERSION = "1.0.22"
 APP_UPDATE_DATE = "29/10/2026"
-APP_UPDATE_TIME = "15:18"
+APP_UPDATE_TIME = "16:12"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-dev"
@@ -92,14 +92,14 @@ MUTED = "#666666"
 
 
 def _is_app_active(item):
-    """Visibilidad del catálogo: 'activo' tiene prioridad sobre 'active'.
+    """Visibilidad del catalogo: 'active' tiene prioridad sobre 'activo'.
 
     Si falta el campo, la app se mantiene visible por compatibilidad.
     Solo el valor booleano JSON true habilita una entrada definida.
     """
     if not isinstance(item, dict):
         return False
-    return item.get("activo", item.get("active", True)) is True
+    return item.get("active", item.get("activo", True)) is True
 
 
 def _version_tuple(value):
@@ -676,11 +676,15 @@ class AMDEVApp(tk.Tk):
             return response.read().decode("utf-8-sig")
 
     def _request_repo_file_main(self, repo_path, timeout=12):
-        """Lee HEAD de main: RAW primero y API como respaldo."""
+        """Lee archivos locales en modo desarrollo, o GitHub en modo remoto."""
         clean = str(repo_path).strip().replace("\\", "/").lstrip("/")
         if MODO_LOCAL:
             return _local_path(clean).read_text(encoding="utf-8-sig")
+        return self._request_remote_repo_file_main(clean, timeout=timeout)
 
+    def _request_remote_repo_file_main(self, repo_path, timeout=12):
+        """Lee GitHub incluso en modo local para sincronizar active."""
+        clean = str(repo_path).strip().replace("\\", "/").lstrip("/")
         try:
             return self._request_text(
                 f"{REPO_RAW_BASE}/{clean}",
@@ -730,9 +734,56 @@ class AMDEVApp(tk.Tk):
 
         try:
             payload = json.loads(text)
+            entries = payload.get("apps", [])
+            if not isinstance(entries, list):
+                raise ValueError("El campo apps debe ser una lista.")
+
+            # En modo local se conservan las apps locales, pero el campo
+            # active publicado en GitHub controla su visibilidad.
+            remote_flags = None
+            if MODO_LOCAL:
+                remote_catalog = None
+                source = None
+                try:
+                    remote_text = self._request_remote_repo_file_main(
+                        APPS_REPO_PATH, timeout=4
+                    )
+                    remote_catalog = json.loads(remote_text)
+                    if not isinstance(remote_catalog.get("apps"), list):
+                        raise ValueError("Catálogo remoto inválido.")
+                    self.apps_cache.write_text(remote_text, encoding="utf-8")
+                    source = "GitHub"
+                except Exception:
+                    if self.apps_cache.is_file():
+                        try:
+                            remote_catalog = json.loads(
+                                self.apps_cache.read_text(encoding="utf-8-sig")
+                            )
+                            if not isinstance(remote_catalog.get("apps"), list):
+                                raise ValueError("Caché de aplicaciones inválida.")
+                            source = "caché"
+                        except Exception:
+                            remote_catalog = None
+
+                if remote_catalog is not None:
+                    remote_flags = {
+                        str(item.get("id", "")).strip(): _is_app_active(item)
+                        for item in remote_catalog["apps"]
+                        if isinstance(item, dict) and str(item.get("id", "")).strip()
+                    }
+                    self.status.configure(
+                        text="Aplicaciones locales; visibilidad desde " + source
+                    )
+                else:
+                    self.status.configure(
+                        text="Sin conexión: usando active del catálogo local."
+                    )
+
             self.apps = [
-                item for item in payload.get("apps", [])
-                if _is_app_active(item)
+                item for item in entries
+                if isinstance(item, dict)
+                and (remote_flags.get(str(item.get("id", "")).strip(), _is_app_active(item))
+                     if remote_flags is not None else _is_app_active(item))
             ]
 
             if self.selected_app:
