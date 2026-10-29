@@ -18,9 +18,9 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 TOOL_NAME = "Visor ISO Linux"
 TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
-    "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver cualquier archivo como TXT/HEX, y genera una copia ISO modificada."
+    "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver, editar y guardar archivos TXT/HEX en ISO, FAT e INITRD, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.1.1"
 
 
 def human_size(n):
@@ -273,22 +273,31 @@ def read_file_chunk(path, offset, count):
 
 
 class FileAsTextViewer(ttk.Frame):
-    """Visor integrado de cualquier archivo, en modo TXT o HEX, sin modificarlo."""
+    """Visor/editor TXT y HEX integrado para ISO, FAT e INITRD."""
 
     TEXT_PAGE = 128 * 1024
     HEX_PAGE = 32 * 1024
+    MAX_TEXT_EDIT = 4 * 1024 * 1024
+    MAX_HEX_EDIT = 256 * 1024
 
-    def __init__(self, parent, name, total_size, reader):
+    def __init__(self, parent, name, total_size, reader, save_callback=None):
         super().__init__(parent, padding=8)
         self.parent_editor = parent
         self.name = str(name)
         self.total_size = max(0, int(total_size))
         self.reader = reader
+        self.save_callback = save_callback
         self.offset = 0
         self.last_count = 0
+        self.editing = False
+        self.dirty = False
+        self._original_data = None
+        self._edit_encoding = "utf-8"
+        self._newline = "\n"
         self.mode_var = tk.StringVar(value="TXT")
         self.encoding_var = tk.StringVar(value="Automático")
         self.page_var = tk.StringVar(value="")
+        self.info_var = tk.StringVar(value="")
         self._build()
         self.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.lift()
@@ -297,22 +306,37 @@ class FileAsTextViewer(ttk.Frame):
     def _build(self):
         bar = ttk.Frame(self)
         bar.pack(fill="x", pady=(0, 5))
-        ttk.Button(bar, text="Volver", command=self.close).pack(side="left", padx=(0, 8))
+        ttk.Button(bar, text="Volver", command=self.close).pack(
+            side="left", padx=(0, 8),
+        )
+        self.edit_button = ttk.Button(
+            bar, text="Editar", command=self.toggle_edit,
+        )
+        self.edit_button.pack(side="left", padx=(0, 5))
+        self.save_button = ttk.Button(
+            bar, text="Guardar (Ctrl+S)", command=self.save_changes,
+            state="disabled",
+        )
+        self.save_button.pack(side="left", padx=(0, 12))
         ttk.Label(bar, text="Ver como:").pack(side="left", padx=(0, 4))
-        mode = ttk.Combobox(
+        self.mode_box = ttk.Combobox(
             bar, textvariable=self.mode_var, values=("TXT", "HEX"),
             state="readonly", width=6,
         )
-        mode.pack(side="left", padx=(0, 12))
-        mode.bind("<<ComboboxSelected>>", self._change_format)
+        self.mode_box.pack(side="left", padx=(0, 12))
+        self.mode_box.bind("<<ComboboxSelected>>", self._change_format)
         ttk.Label(bar, text="Codificación:").pack(side="left", padx=(0, 4))
-        encoding = ttk.Combobox(
+        self.encoding_box = ttk.Combobox(
             bar, textvariable=self.encoding_var,
             values=("Automático", "UTF-8", "Latin-1", "UTF-16 LE", "UTF-16 BE"),
             state="readonly", width=13,
         )
-        encoding.pack(side="left", padx=(0, 8))
-        encoding.bind("<<ComboboxSelected>>", lambda _event: self._render())
+        self.encoding_box.pack(side="left", padx=(0, 8))
+        self.encoding_box.bind(
+            "<<ComboboxSelected>>", lambda _event: self._render(),
+        )
+        if self.save_callback is None:
+            self.edit_button.configure(state="disabled")
 
         ttk.Label(
             self, text=self.name, anchor="w", wraplength=950,
@@ -321,7 +345,7 @@ class FileAsTextViewer(ttk.Frame):
         content.pack(fill="both", expand=True)
         self.text = tk.Text(
             content, wrap="none", font=("DejaVu Sans Mono", 9),
-            undo=False, state="disabled",
+            undo=True, state="disabled",
         )
         vscroll = ttk.Scrollbar(content, orient="vertical", command=self.text.yview)
         hscroll = ttk.Scrollbar(content, orient="horizontal", command=self.text.xview)
@@ -333,6 +357,10 @@ class FileAsTextViewer(ttk.Frame):
         self.text.grid(row=0, column=0, sticky="nsew")
         vscroll.grid(row=0, column=1, sticky="ns")
         hscroll.grid(row=1, column=0, sticky="ew")
+        self.text.bind("<<Modified>>", self._on_modified)
+        self.text.bind("<Control-s>", self._shortcut_save)
+        self.text.bind("<Control-S>", self._shortcut_save)
+        self.text.bind("<Escape>", lambda _event: self.close())
 
         footer = ttk.Frame(self)
         footer.pack(fill="x", pady=(6, 0))
@@ -345,20 +373,19 @@ class FileAsTextViewer(ttk.Frame):
         )
         self.next_button.pack(side="left")
         ttk.Label(footer, textvariable=self.page_var).pack(side="left", padx=12)
-        ttk.Label(
-            footer, text="Solo lectura · Selecciona texto y usa Ctrl+C",
-        ).pack(side="right")
-        self.text.bind("<Escape>", lambda _event: self.close())
+        ttk.Label(footer, textvariable=self.info_var).pack(side="right")
         self.text.focus_set()
 
     def _change_format(self, _event=None):
+        if self.editing:
+            return
         self.offset = 0
         self._render()
 
     def _page_size(self):
         return self.HEX_PAGE if self.mode_var.get() == "HEX" else self.TEXT_PAGE
 
-    def _decode_text(self, data):
+    def _encoding_for(self, data):
         selected = self.encoding_var.get()
         encodings = {
             "UTF-8": "utf-8",
@@ -366,18 +393,26 @@ class FileAsTextViewer(ttk.Frame):
             "UTF-16 LE": "utf-16-le",
             "UTF-16 BE": "utf-16-be",
         }
-        if selected in encodings:
-            text = data.decode(encodings[selected], errors="replace")
-        elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
-            text = data.decode("utf-16", errors="replace")
-        elif data.startswith(b"\xef\xbb\xbf"):
-            text = data.decode("utf-8-sig", errors="replace")
-        else:
+        if selected == "Automático":
+            if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+                return "utf-16"
+            if data.startswith(b"\xef\xbb\xbf"):
+                return "utf-8-sig"
             try:
-                text = data.decode("utf-8")
+                data.decode("utf-8")
+                return "utf-8"
             except UnicodeDecodeError:
-                text = data.decode("latin-1")
-        # Representar bytes de control para que cualquier binario sea visible.
+                return "latin-1"
+        if selected == "UTF-8" and data.startswith(b"\xef\xbb\xbf"):
+            return "utf-8-sig"
+        if selected in ("UTF-16 LE", "UTF-16 BE"):
+            if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+                return "utf-16"
+        return encodings[selected]
+
+    def _decode_text(self, data):
+        encoding = self._encoding_for(data)
+        text = data.decode(encoding, errors="replace")
         text = text.replace("\x00", "␀")
         return "".join(
             ch if ch in "\n\r\t" or ord(ch) >= 32 else "·"
@@ -399,6 +434,8 @@ class FileAsTextViewer(ttk.Frame):
         return "\n".join(lines)
 
     def _render(self):
+        if self.editing:
+            return
         try:
             data = self.reader(self.offset, self._page_size())
             if not isinstance(data, bytes):
@@ -415,6 +452,7 @@ class FileAsTextViewer(ttk.Frame):
             self.text.delete("1.0", "end")
             self.text.insert("1.0", content)
             self.text.configure(state="disabled")
+            self.text.edit_modified(False)
             self.text.yview_moveto(0)
             self.text.xview_moveto(0)
             end = self.offset + self.last_count
@@ -430,23 +468,185 @@ class FileAsTextViewer(ttk.Frame):
                 if self.last_count and end < self.total_size
                 else "disabled",
             )
+            self.info_var.set("Vista previa · pulsa Editar para modificar")
         except Exception as exc:
             messagebox.showerror(
-                "Ver como TXT", f"No se pudo leer el archivo:\n{exc}",
+                "Visor TXT/HEX", f"No se pudo leer el archivo:\n{exc}",
                 parent=self,
             )
 
+    def _on_modified(self, _event=None):
+        if not self.text.edit_modified():
+            return
+        self.text.edit_modified(False)
+        if self.editing:
+            self.dirty = True
+            self.save_button.configure(state="normal")
+            self.info_var.set("Cambios sin guardar")
+
+    def _shortcut_save(self, _event=None):
+        self.save_changes()
+        return "break"
+
+    def toggle_edit(self):
+        if self.editing:
+            self.cancel_edit()
+        else:
+            self.begin_edit()
+
+    def begin_edit(self):
+        if self.save_callback is None:
+            return
+        mode = self.mode_var.get()
+        limit = self.MAX_HEX_EDIT if mode == "HEX" else self.MAX_TEXT_EDIT
+        if self.total_size > limit:
+            messagebox.showinfo(
+                "Editar archivo",
+                f"Para proteger la memoria, la edición {mode} admite "
+                f"hasta {human_size(limit)}.\n"
+                "Este archivo puede seguir visualizándose por páginas.",
+                parent=self,
+            )
+            return
+        try:
+            data = self.reader(0, self.total_size)
+            if not isinstance(data, bytes):
+                data = bytes(data)
+            if len(data) != self.total_size:
+                raise IOError("No se pudo leer el archivo completo.")
+            if mode == "HEX":
+                content = "\n".join(
+                    " ".join(f"{byte:02X}" for byte in data[i:i + 16])
+                    for i in range(0, len(data), 16)
+                )
+            else:
+                self._edit_encoding = self._encoding_for(data)
+                decoded = data.decode(self._edit_encoding, errors="strict")
+                if "\x00" in decoded:
+                    raise ValueError(
+                        "El archivo contiene bytes nulos. "
+                        "Para editar archivos binarios usa el modo HEX."
+                    )
+                controls = sum(
+                    1 for ch in decoded
+                    if ord(ch) < 32 and ch not in "\r\n\t"
+                )
+                if controls > max(2, len(decoded) // 100):
+                    raise ValueError(
+                        "Se detectó contenido binario. Usa el modo HEX "
+                        "para evitar dañar el archivo."
+                    )
+                self._newline = (
+                    "\r\n" if "\r\n" in decoded
+                    else "\r" if "\r" in decoded else "\n"
+                )
+                content = decoded.replace("\r\n", "\n").replace("\r", "\n")
+        except Exception as exc:
+            messagebox.showwarning("Editar archivo", str(exc), parent=self)
+            return
+
+        self._original_data = data
+        self.editing = True
+        self.dirty = False
+        self.offset = 0
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", content)
+        self.text.edit_reset()
+        self.text.edit_modified(False)
+        self.text.focus_set()
+        self.edit_button.configure(text="Cancelar edición")
+        self.save_button.configure(state="disabled")
+        self.mode_box.configure(state="disabled")
+        self.encoding_box.configure(state="disabled")
+        self.prev_button.configure(state="disabled")
+        self.next_button.configure(state="disabled")
+        self.page_var.set(f"Editando archivo completo · {human_size(len(data))}")
+        self.info_var.set(
+            "Edición HEX: bytes hexadecimales separados por espacios"
+            if mode == "HEX" else "Edición TXT · Ctrl+S para guardar"
+        )
+
+    def save_changes(self):
+        if not self.editing or self.save_callback is None:
+            return False
+        try:
+            content = self.text.get("1.0", "end-1c")
+            if self.mode_var.get() == "HEX":
+                data = bytes.fromhex(content)
+            else:
+                if self._newline != "\n":
+                    content = content.replace("\n", self._newline)
+                data = content.encode(self._edit_encoding, errors="strict")
+            if data != self._original_data:
+                self.save_callback(data)
+            self.total_size = len(data)
+            self._original_data = None
+            self._finish_edit()
+            self.info_var.set("Cambios guardados en la copia de trabajo")
+            return True
+        except ValueError as exc:
+            messagebox.showerror(
+                "Guardar archivo",
+                f"Contenido inválido: {exc}\n"
+                "En modo HEX utiliza solo pares 00–FF separados por espacios.",
+                parent=self,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Guardar archivo",
+                f"No se pudo guardar el archivo:\n{exc}",
+                parent=self,
+            )
+        return False
+
+    def _finish_edit(self):
+        self.editing = False
+        self.dirty = False
+        self.offset = 0
+        self.edit_button.configure(text="Editar")
+        self.save_button.configure(state="disabled")
+        self.mode_box.configure(state="readonly")
+        self.encoding_box.configure(state="readonly")
+        self._render()
+
+    def cancel_edit(self):
+        if self.dirty and not messagebox.askyesno(
+            "Descartar cambios",
+            "Hay cambios sin guardar. ¿Descartarlos?",
+            parent=self,
+        ):
+            return
+        self._original_data = None
+        self._finish_edit()
+
     def previous_page(self):
+        if self.editing:
+            return
         self.offset = max(0, self.offset - self._page_size())
         self._render()
 
     def next_page(self):
+        if self.editing:
+            return
         if self.last_count:
             self.offset += self.last_count
             self._render()
 
     def close(self):
+        if self.editing and self.dirty:
+            answer = messagebox.askyesnocancel(
+                "Cambios sin guardar",
+                "¿Guardar los cambios antes de volver?",
+                parent=self,
+            )
+            if answer is None:
+                return
+            if answer and not self.save_changes():
+                return
         self.destroy()
+        if getattr(self.parent_editor, "_text_file_viewer", None) is self:
+            self.parent_editor._text_file_viewer = None
         if hasattr(self.parent_editor, "tree"):
             try:
                 self.parent_editor.tree.focus_set()
@@ -454,12 +654,25 @@ class FileAsTextViewer(ttk.Frame):
                 pass
 
 
-def show_file_as_text(parent, name, total_size, reader):
-    """Abre el visor dentro del editor ISO, FAT o INITRD, sin ventana externa."""
+def show_file_as_text(parent, name, total_size, reader, save_callback=None):
+    """Editor embebido: persiste cambios mediante callback del contenedor."""
     previous = getattr(parent, "_text_file_viewer", None)
     if previous is not None and previous.winfo_exists():
+        # Evitar descartar accidentalmente cambios al abrir otro archivo.
+        if previous.editing and previous.dirty:
+            answer = messagebox.askyesnocancel(
+                "Cambios sin guardar",
+                "¿Guardar los cambios antes de abrir otro archivo?",
+                parent=previous,
+            )
+            if answer is None:
+                return previous
+            if answer and not previous.save_changes():
+                return previous
         previous.destroy()
-    viewer = FileAsTextViewer(parent, name, total_size, reader)
+    viewer = FileAsTextViewer(
+        parent, name, total_size, reader, save_callback=save_callback,
+    )
     parent._text_file_viewer = viewer
     return viewer
 
@@ -519,9 +732,20 @@ class InitrdEditor(ttk.Frame):
         if stat.S_ISDIR(entry.get("mode", 0)):
             return
         data = entry.get("data", b"")
+        def save_entry(updated):
+            previous = entry.get("data", b"")
+            entry["data"] = updated
+            try:
+                self.save(silent=True)
+                self.refresh()
+            except Exception:
+                entry["data"] = previous
+                raise
+
         show_file_as_text(
             self, entry["name"], len(data),
-            lambda offset, count: data[offset:offset + count],
+            lambda offset, count: entry.get("data", b"")[offset:offset + count],
+            save_callback=save_entry,
         )
 
     def _load(self):
@@ -598,16 +822,38 @@ class InitrdEditor(ttk.Frame):
         if dst:
             Path(dst).write_bytes(e.get("data",b""))
 
-    def save(self):
+    def save(self, silent=False):
+        temporary = None
         try:
             raw = build_cpio_newc(self.entries)
             # Preservar exactamente las capas CPIO iniciales no editadas.
             updated = self.prefix + compress_bytes(raw, self.compression)
-            self.path.write_bytes(updated)
-            messagebox.showinfo("INITRD", "Cambios guardados en la copia de trabajo.", parent=self)
+            with tempfile.NamedTemporaryFile(
+                dir=self.path.parent, prefix=".ptm_initrd_",
+                suffix=".tmp", delete=False,
+            ) as output:
+                temporary = Path(output.name)
+                output.write(updated)
+            os.replace(temporary, self.path)
+            temporary = None
             self.owner.refresh_tree()
+            if not silent:
+                messagebox.showinfo(
+                    "INITRD", "Cambios guardados en la copia de trabajo.",
+                    parent=self,
+                )
+            return True
         except Exception as exc:
+            if silent:
+                raise
             messagebox.showerror("INITRD", str(exc), parent=self)
+            return False
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 class FatEditor(ttk.Frame):
@@ -798,7 +1044,27 @@ class FatEditor(ttk.Frame):
                     stream.seek(offset)
                     return stream.read(count)
 
-            show_file_as_text(self, path, size, read_chunk)
+            def save_chunk(data):
+                with self.fs.openbin(path, "r") as stream:
+                    original = stream.read()
+                try:
+                    with self.fs.openbin(path, "w") as stream:
+                        stream.write(data)
+                except Exception:
+                    # Intentar recuperar el contenido anterior ante fallo de escritura.
+                    try:
+                        with self.fs.openbin(path, "w") as stream:
+                            stream.write(original)
+                    except Exception:
+                        pass
+                    raise
+                self._search_index = None
+                self.refresh()
+                self.owner.refresh_tree()
+
+            show_file_as_text(
+                self, path, size, read_chunk, save_callback=save_chunk,
+            )
         except Exception as exc:
             messagebox.showerror("Ver como TXT", str(exc), parent=self)
 
@@ -1128,9 +1394,35 @@ class ISOEditor(ttk.Frame):
         if not p or p.is_dir():
             return
         try:
+            def save_chunk(data):
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        dir=p.parent, prefix=".ptm_edit_",
+                        suffix=".tmp", delete=False,
+                    ) as output:
+                        temporary = Path(output.name)
+                        output.write(data)
+                    shutil.copymode(p, temporary)
+                    os.replace(temporary, p)
+                    temporary = None
+                finally:
+                    if temporary is not None:
+                        try:
+                            temporary.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                self._search_index = None
+                self.refresh_tree()
+                self.set_status(
+                    f"Archivo guardado en la copia de trabajo: {p.name}. "
+                    "Usa Guardar copia ISO para generar el ISO final."
+                )
+
             show_file_as_text(
                 self, p.name, p.stat().st_size,
                 lambda offset, count: read_file_chunk(p, offset, count),
+                save_callback=save_chunk,
             )
         except Exception as exc:
             messagebox.showerror("Ver como TXT", str(exc), parent=self)
