@@ -19,7 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "ARCHMOBA SNES"
 TOOL_DESCRIPTION = "Emulador SNES experimental con nucleo 65C816/PPU integrado en Python sin programas externos."
-TOOL_VERSION = "2.0.0"
+TOOL_VERSION = "2.0.1"
 ROM_EXTS = {".sfc", ".smc", ".fig", ".swc", ".zip"}
 INNER_EXTS = ROM_EXTS - {".zip"}
 MAX_ZIP_ROM = 32 * 1024 * 1024
@@ -942,12 +942,22 @@ class NativeSnesWindow(tk.Toplevel):
         'x': 8, 's': 9, 'q': 10, 'w': 11,
     }
 
-    def __init__(self, parent, rom_path, rom_bytes, save_path, fullscreen=False):
+    def __init__(self, parent, rom_path, rom_bytes, save_path, fullscreen=False, on_closed=None):
         super().__init__(parent)
         self.title('ARCHMOBA SNES · ' + Path(rom_path).stem)
         self.configure(bg='#101827')
-        self.geometry('548x545')
-        self.minsize(300, 290)
+        self.geometry('590x550')
+        self.minsize(330, 300)
+        # Independent floating window, always above the PTM main window.
+        try:
+            host = parent.winfo_toplevel()
+            self.transient(host)
+            host.update_idletasks()
+            x = host.winfo_rootx() + max(20, (host.winfo_width() - 590) // 2)
+            y = host.winfo_rooty() + max(20, (host.winfo_height() - 550) // 2)
+            self.geometry(f'590x550+{x}+{y}')
+        except tk.TclError:
+            pass
         self.machine = NativeSnesMachine(rom_bytes, save_path)
         self._stopping = threading.Event()
         self._paused = threading.Event()
@@ -956,6 +966,7 @@ class NativeSnesWindow(tk.Toplevel):
         self._image = None
         self._photo_item = None
         self._closed = False
+        self._on_closed = on_closed
         self._fullscreen = False
         self._frame_displayed = 0
         self._last_fps_time = time.monotonic()
@@ -971,19 +982,31 @@ class NativeSnesWindow(tk.Toplevel):
         footer.grid(row=1, column=0, sticky='ew')
         ttk.Button(footer, text='Pausa / Continuar', command=self.toggle_pause).pack(side='left')
         ttk.Button(footer, text='⛶ Pantalla completa', command=self.toggle_fullscreen).pack(side='left', padx=5)
-        ttk.Label(footer, textvariable=self._status).pack(side='right')
+        ttk.Button(footer, text='✕ Cerrar juego', command=self.close, width=15).pack(side='right')
+        ttk.Label(footer, textvariable=self._status).pack(side='right', padx=(5, 12))
         self.bind('<KeyPress>', self._key_down)
         self.bind('<KeyRelease>', self._key_up)
         self.bind('<FocusOut>', self._focus_out)
         self.bind('<F11>', lambda _event: self.toggle_fullscreen())
         self.bind('<Escape>', self._escape)
+        self.bind('<Control-w>', lambda _event: self.close())
         self.protocol('WM_DELETE_WINDOW', self.close)
         self._thread = threading.Thread(target=self._run, daemon=True, name='ARCHMOBA-SNES-CPU')
         self._thread.start()
         self.after(50, self._pump)
         if fullscreen:
             self.after(100, self.toggle_fullscreen)
-        self.after(130, self.focus_force)
+        self.after(130, self._focus_floating)
+
+    def _focus_floating(self):
+        if self._closed:
+            return
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except tk.TclError:
+            pass
 
     def _run(self):
         try:
@@ -1108,6 +1131,8 @@ class NativeSnesWindow(tk.Toplevel):
             self.destroy()
         except tk.TclError:
             pass
+        if self._on_closed is not None:
+            self._on_closed(self)
 
 
 def _demo_rom():
@@ -1162,6 +1187,7 @@ class SnesEmulatorTool(ttk.Frame):
         self._selected_path = ""
         self._game_window = None
         self._running_rom = ""
+        self._startup_demo_pending = True
         self._scan_queue = queue.Queue()
         self._scan_thread = None
         self._scan_cancel = threading.Event()
@@ -1178,6 +1204,9 @@ class SnesEmulatorTool(ttk.Frame):
         self._load_state()
         self._refresh_lists()
         self.after(150, self._poll)
+        # Opening the PTM tool immediately starts the original demo in a
+        # floating window. Playing a ROM replaces that demo.
+        self.after(450, self._open_startup_demo)
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
@@ -1279,8 +1308,9 @@ class SnesEmulatorTool(ttk.Frame):
                   "Sprites básicos; sin audio SPC700, prioridad exacta ni chips especiales.",
                   style="SnesMuted.TLabel", wraplength=490).grid(
             row=1, column=0, sticky="w", pady=(5, 0))
-        ttk.Checkbutton(config, text="Pantalla completa al iniciar",
-                        variable=self.fullscreen_var, command=self._save_state).grid(
+        ttk.Label(config, text="Al iniciar, el juego aparece en una ventana flotante. "
+                  "F11 permite cambiar a pantalla completa.",
+                  style="SnesMuted.TLabel", wraplength=490).grid(
             row=2, column=0, sticky="w", pady=(7, 0))
         ttk.Label(config, text="Controles: flechas = mover; Z = B; X = A; A = Y; S = X; "
                   "Enter = Start; Shift = Select; Q/W = L/R; F11 = pantalla completa.",
@@ -1489,6 +1519,16 @@ class SnesEmulatorTool(ttk.Frame):
         except tk.TclError:
             pass
 
+    def _open_startup_demo(self):
+        if not self._alive or not self._startup_demo_pending:
+            return
+        # Do not open windows for tools that PTM has instantiated but hidden.
+        if not self.winfo_ismapped():
+            return
+        self._startup_demo_pending = False
+        if self._game_window is None or not self._game_window.winfo_exists():
+            self.play_demo()
+
     def play_demo(self):
         if self._game_window is not None and self._game_window.winfo_exists():
             self._game_window.lift()
@@ -1496,8 +1536,10 @@ class SnesEmulatorTool(ttk.Frame):
         try:
             self._game_window = NativeSnesWindow(
                 self, 'Demo original ARCHMOBA SNES', _demo_rom(), None,
-                fullscreen=self.fullscreen_var.get())
-            self.status_var.set('Demo original ejecutándose con CPU y PPU de Python.')
+                fullscreen=False, on_closed=self._game_window_closed)
+            self._running_rom = '__demo__'
+            self._startup_demo_pending = False
+            self.status_var.set('Demo original ejecutándose en ventana flotante. Usa Cerrar juego para salir.')
         except (OSError, ValueError, RuntimeError, tk.TclError) as exc:
             messagebox.showerror(TOOL_NAME, str(exc), parent=self)
 
@@ -1507,8 +1549,13 @@ class SnesEmulatorTool(ttk.Frame):
             messagebox.showinfo(TOOL_NAME, "Selecciona un juego de la biblioteca.", parent=self)
             return
         if self._game_window is not None and self._game_window.winfo_exists():
-            messagebox.showinfo(TOOL_NAME, "Cierra el juego actual antes de abrir otro.", parent=self)
-            return
+            if self._running_rom == '__demo__':
+                self._game_window.close()
+                self._game_window = None
+            else:
+                messagebox.showinfo(TOOL_NAME, "Cierra el juego actual antes de abrir otro.", parent=self)
+                self._game_window.lift()
+                return
         rom = Path(path)
         if not rom.is_file():
             messagebox.showerror(TOOL_NAME, "No se encontró la ROM:\n" + path, parent=self)
@@ -1520,8 +1567,10 @@ class SnesEmulatorTool(ttk.Frame):
             save_name = hashlib.sha256(raw).hexdigest()[:24] + ".srm"
             save_path = self.data_dir / "saves" / save_name
             self._game_window = NativeSnesWindow(
-                self, path, raw, save_path, fullscreen=self.fullscreen_var.get())
+                self, path, raw, save_path, fullscreen=False,
+                on_closed=self._game_window_closed)
             self._running_rom = path
+            self._startup_demo_pending = False
             self.recent = [path] + [item for item in self.recent if item != path]
             self.recent = self.recent[:50]
             self._save_state()
@@ -1594,6 +1643,13 @@ class SnesEmulatorTool(ttk.Frame):
         finally:
             menu.grab_release()
 
+    def _game_window_closed(self, window):
+        if self._game_window is window:
+            self._game_window = None
+            self._running_rom = ''
+            if self._alive:
+                self.status_var.set('Ventana del juego cerrada. Selecciona una ROM para jugar.')
+
     def close_game(self):
         if self._game_window is None or not self._game_window.winfo_exists():
             self.status_var.set("No hay un juego en ejecución.")
@@ -1604,6 +1660,8 @@ class SnesEmulatorTool(ttk.Frame):
 
     def on_show(self):
         self._schedule_render()
+        if self._startup_demo_pending:
+            self.after(250, self._open_startup_demo)
 
     def on_hide(self):
         # La ventana Tk de juego permanece abierta dentro del mismo proceso.
