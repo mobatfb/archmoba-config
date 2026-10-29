@@ -4,7 +4,7 @@
   "models": [
     {
       "id": "purple_crystal",
-      "name": "Cristal",
+      "name": "Cristalx",
       "mesh": "PYRION/engine3d/scenes/onlydeskplace/models/crystal.mesh",
       "material": "PYRION/engine3d/scenes/onlydeskplace/materials/crystal_purple.mat",
       "scale": [0.72, 0.77, 0.72]
