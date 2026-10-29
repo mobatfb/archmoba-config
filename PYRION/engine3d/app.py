@@ -106,7 +106,8 @@ def load_selected_scene():
                 raise ValueError("Unsupported material: " + material_path.as_posix())
             material = dict(material)
             if material.get("texture") and material.get("texture_status") == "ready":
-                image_path = (material_path.parent / material["texture"]).as_posix()
+                image_path = Path(os.path.normpath(str(
+                    material_path.parent / material["texture"]))).as_posix()
                 image = _scene_texture(image_path)
                 if image is not None:
                     material["_texture_image"] = image
