@@ -75,3 +75,41 @@ No requiere OpenGL ni dependencias externas.
 En pantalla, el boton **FOCO: ON/OFF** y la tecla **L** alternan entre
 iluminacion de escena y el aspecto previo. La configuracion del foco se
 modifica en el JSON de la escena y se carga al iniciar.
+
+## Navegación con dos analógicos (PYRION 0.4.13)
+
+El visor contiene una **cámara móvil en perspectiva real**, además de un foco
+dirigible. Se puede manejar ambos mediante dos joysticks sobre el Canvas:
+
+- **TANQUE (izquierda):** adelante/atrás para avanzar o retroceder sobre el
+  plano horizontal XZ; izquierda/derecha para girar como un tanque.
+- **MIRAR (derecha):** desplazar la vista a izquierda/derecha y arriba/abajo.
+- **CONTROL: CAMARA / CONTROL: FOCO:** selecciona si los analógicos mueven
+  al observador o al primer foco spotlight activo de la escena.
+- **RESET POS.:** restablece la cámara y el foco a sus posiciones y
+  orientaciones declaradas inicialmente en `scene.json`.
+
+Se pueden pulsar y arrastrar con ratón; algunas pantallas táctiles convierten
+esos gestos en eventos de ratón. El sistema no permite control multitáctil
+simultáneo de los dos joysticks. Teclas opcionales: **Tab** cambia el modo y
+**R** restablece las posiciones. Permanecen: **M** (MAT/IMG), **L** (encender o
+apagar foco), **F3** (diagnóstico), rueda (zoom) y espacio (pausa).
+
+### Configuración de cámara en la escena
+
+El atributo `navigation` de `scene.json` contiene:
+
+- `camera_position`: posición inicial XYZ de la cámara.
+- `camera_yaw_degrees` y `camera_pitch_degrees`: orientación inicial.
+- `walk_speed`: unidades de mundo por segundo del joystick TANQUE.
+- `turn_speed_degrees`: grados por segundo de giro tipo tanque.
+- `look_speed_degrees`: grados por segundo de orientación con MIRAR.
+
+La cámara aplica traslación y rotación en espacio 3D a los tres objetos de
+OnlyDeskPlace, sin desplazar sus modelos. El foco modifica su posición y su
+vector director; la iluminación se recalcula por cara conforme a la escena.
+Se implementó recorte de polígonos cercanos a la cámara para evitar que
+los triángulos se proyecten detrás del observador.
+
+**Límites técnicos:** no se calculan colisiones al caminar ni sombras
+proyectadas físicas; el renderizador sigue siendo CPU/Tk Canvas.

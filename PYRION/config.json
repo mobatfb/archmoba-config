@@ -1,10 +1,10 @@
 {
   "app": "PYRION",
   "name": "PYRION OS",
-  "description": "OnlyDeskPlace: foco configurable tipo spotlight con cono, distancia, iluminacion especular y boton FOCO ON/OFF",
-  "version": "0.4.12",
+  "description": "Dos analogicos flotantes: caminar como tanque, orientar camara o foco, alternar controles y restablecer posiciones",
+  "version": "0.4.13",
   "app_path": "PYRION/app.py",
-  "release_commit": "110a4f6691062a6307798cadc92961e4a559697e",
+  "release_commit": "308f17a6eb209d675ee4118faa29ed2277e6fad1",
   "maintenance": false,
-  "engine_version": "0.3.1"
+  "engine_version": "0.4.0"
 }
