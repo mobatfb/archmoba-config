@@ -1,0 +1,10 @@
+{
+  "app": "PYRION",
+  "name": "PYRION OS",
+  "description": "Versión del sistema y motor 3D visible bajo el título en el panel de rendimiento",
+  "version": "0.4.7",
+  "app_path": "PYRION/app.py",
+  "release_commit": "5421e020d3cce0aa0b24bf683c9446eb07aa3833",
+  "maintenance": false,
+  "engine_version": "0.2.0"
+}
