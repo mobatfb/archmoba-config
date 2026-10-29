@@ -4,7 +4,7 @@
   "description": "Carga de materiales por escena y metal dorado con reflejos de software y textura opcional",
   "version": "0.4.6",
   "app_path": "PYRION/app.py",
-  "release_commit": "a893d781fd18de7bdc5c6e41a0dfa5afbf58e747",
+  "release_commit": "bf2098a14ed431beabefdce7d1fa65342c50fa77",
   "maintenance": false,
   "engine_version": "0.2.0"
 }
