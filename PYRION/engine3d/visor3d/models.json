@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "source_scene": "PYRION/engine3d/scenes/onlydeskplace/scene.json",
+  "models": [
+    {
+      "id": "purple_crystal",
+      "name": "Cristal",
+      "mesh": "PYRION/engine3d/scenes/onlydeskplace/models/crystal.mesh",
+      "material": "PYRION/engine3d/scenes/onlydeskplace/materials/crystal_purple.mat",
+      "scale": [0.72, 0.77, 0.72]
+    },
+    {
+      "id": "sphere",
+      "name": "Sphere",
+      "mesh": "PYRION/engine3d/scenes/onlydeskplace/models/sphere.mesh",
+      "material": "PYRION/engine3d/scenes/onlydeskplace/materials/gold_reflective.mat",
+      "scale": [0.75, 0.75, 0.75]
+    },
+    {
+      "id": "dark_gem",
+      "name": "Gema",
+      "mesh": "PYRION/engine3d/scenes/onlydeskplace/models/gem.mesh",
+      "material": "PYRION/engine3d/scenes/onlydeskplace/materials/gem_dark.mat",
+      "scale": [0.43, 0.46, 0.43]
+    }
+  ]
+}
