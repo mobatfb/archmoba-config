@@ -25,7 +25,30 @@
   "background": {
     "color": "#050917"
   },
-  "objects": [],
+  "objects": [
+    {
+      "id": "chest",
+      "name": "chest",
+      "model": "models/chest.mesh",
+      "material": "materials/chest.mat",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "visible": true
+    }
+  ],
   "ambient_light": 0.56,
   "lights": []
 }
