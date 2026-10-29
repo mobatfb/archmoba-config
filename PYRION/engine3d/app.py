@@ -15,8 +15,8 @@ import tkinter as tk
 from .mesh import SphereMesh
 from .renderer import SoftwareRenderer
 
-ENGINE_VERSION = "0.1.0"
-DESKTOP_VERSION = "0.4.5"
+ENGINE_VERSION = "0.2.0"
+DESKTOP_VERSION = "0.4.6"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -33,9 +33,40 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.5"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.6"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
+
+
+def _scene_texture(relative_path):
+    """Optional JPEG/PNG texture; scene remains usable without Pillow."""
+    try:
+        from PIL import Image
+        from io import BytesIO
+    except ImportError:
+        return None
+    relative = Path(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("Invalid scene texture path")
+    root = Path(__file__).resolve().parent
+    engine = root if root.name == "engine3d" else root / "engine3d"
+    local = engine / relative
+    try:
+        if local.is_file():
+            data = local.read_bytes()
+        else:
+            url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "PYRION/0.4.6"})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                data = response.read(8 * 1024 * 1024 + 1)
+        if len(data) > 8 * 1024 * 1024:
+            raise ValueError("Scene texture exceeds 8 MiB")
+        with Image.open(BytesIO(data)) as image:
+            image.thumbnail((512, 512))
+            return image.convert("RGB")
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
 
 
 def load_selected_scene():
@@ -67,7 +98,20 @@ def load_selected_scene():
         speed = float(animation.get("speed_degrees_per_second", 0))
         if animation.get("type") != "spin" or animation.get("axis") != [0, 1, 0]:
             speed = 0
-        objects.append({"renderer": SoftwareRenderer(mesh), "position": position,
+        material = model.get("material", {})
+        if obj.get("material"):
+            material_path = scene_path.parent / obj["material"]
+            material = _scene_json(material_path.as_posix())
+            if material.get("format") != "pyrion.material":
+                raise ValueError("Unsupported material: " + material_path.as_posix())
+            material = dict(material)
+            if material.get("texture") and material.get("texture_status") == "ready":
+                image_path = (material_path.parent / material["texture"]).as_posix()
+                image = _scene_texture(image_path)
+                if image is not None:
+                    material["_texture_image"] = image
+        objects.append({"renderer": SoftwareRenderer(mesh, material=material),
+                        "position": position,
                         "radius": radius, "speed": math.radians(speed),
                         "rotation": math.radians(float(obj.get("rotation", [0, 0, 0])[1]))})
     return scene, objects

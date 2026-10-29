@@ -8,5 +8,5 @@
   "roughness": 0.12,
   "texture": "../textures/gold_reflective.jpg",
   "texture_status": "pending_upload",
-  "notes": "Material dorado reflectivo. El motor 3D aun no interpreta .mat ni texturas."
+  "notes": "CPU renderer supports approximate metallic highlights; JPEG texture is optional and pending upload."
 }

@@ -1,4 +1,4 @@
-"""PYRION OS 0.4.5 - standalone PYRION 3D Engine.
+"""PYRION OS 0.4.6 - standalone PYRION 3D Engine.
 
 Mesh geometry, perspective projection, and Tk software renderer.
 Previous desktop preserved under PYRION/release/v0.3.0.
@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.5"
+APP_VERSION = "0.4.6"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -260,8 +260,29 @@ def _rgb(values):
 class SoftwareRenderer:
     """Perspective camera + z sorted triangle meshes, without a GPU dependency."""
 
-    def __init__(self, mesh):
+    def __init__(self, mesh, material=None):
         self.mesh = mesh
+        self.material = material if isinstance(material, dict) else {}
+        self._pbr = self.material.get("shader") == "pbr"
+        color = str(self.material.get("base_color", "#2767d7"))
+        if len(color) != 7 or not color.startswith("#"):
+            raise ValueError("Invalid material base_color")
+        try:
+            self._base_rgb = tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
+        except ValueError as exc:
+            raise ValueError("Invalid material base_color") from exc
+        self._metallic = max(0.0, min(1.0, float(self.material.get("metallic", 0))))
+        self._roughness = max(0.04, min(1.0, float(self.material.get("roughness", 0.5))))
+        self._texels = None
+        texture = self.material.get("_texture_image")
+        if texture is not None:
+            pixels = texture.load()
+            tw, th = texture.size
+            self._texels = [
+                pixels[min(th - 1, max(0, int(face.latitude / math.pi * (th - 1)))),
+                       min(tw - 1, max(0, int((face.longitude % (2 * math.pi)) / (2 * math.pi) * (tw - 1))))]
+                for face in mesh.faces
+            ]
         self.camera_distance = 3.85
         self.rotation_y = 0.0
         self.rotation_x = -0.25
@@ -304,15 +325,41 @@ class SoftwareRenderer:
         veining += 0.38 * math.cos(7.4 * lon - lat * 4.7)
         return max(0.0, min(1.0, (veining + 0.12) * 0.60))
 
-    def _color(self, normal, accent, front):
+    def _color(self, normal, accent, front, view, texel=None):
+        """CPU approximation of metallic PBR with environment-like highlights."""
         a = max(0.0, _dot(normal, self._light_a))
         b = max(0.0, _dot(normal, self._light_b))
-        edge = (1.0 - front) ** 1.9
-        spec = max(0.0, _dot(normal, _unit((-0.13, 0.62, 0.78)))) ** 24
-        return _rgb((
-            17 + 53 * a + 14 * b + 14 * accent + 56 * spec + 24 * edge,
-            30 + 80 * a + 21 * b + 19 * accent + 73 * spec + 19 * edge,
-            69 + 112 * a + 71 * b + 46 * accent + 48 * spec + 36 * edge,
+        if not self._pbr:
+            edge = (1.0 - front) ** 1.9
+            spec = max(0.0, _dot(normal, _unit((-0.13, 0.62, 0.78)))) ** 24
+            return _rgb((
+                17 + 53 * a + 14 * b + 14 * accent + 56 * spec + 24 * edge,
+                30 + 80 * a + 21 * b + 19 * accent + 73 * spec + 19 * edge,
+                69 + 112 * a + 71 * b + 46 * accent + 48 * spec + 36 * edge,
+            ))
+        metallic, rough = self._metallic, self._roughness
+        base = self._base_rgb
+        if texel is not None:
+            base = tuple(base[k] * (0.30 + 0.70 * texel[k] / 255.0)
+                         for k in range(3))
+        half_a = _unit(tuple(self._light_a[i] + view[i] for i in range(3)))
+        half_b = _unit(tuple(self._light_b[i] + view[i] for i in range(3)))
+        exponent = min(180.0, max(5.0, 2.0 / (rough * rough)))
+        sharp = max(0.0, _dot(normal, half_a)) ** exponent
+        sharp += 0.45 * max(0.0, _dot(normal, half_b)) ** exponent
+        panel = max(0.0, _dot(normal, _unit((-0.38, 0.44, 0.82)))) ** (
+            5.0 + 13.0 * (1.0 - rough))
+        strip = max(0.0, _dot(normal, _unit((0.68, 0.22, 0.70)))) ** (
+            12.0 + 28.0 * (1.0 - rough))
+        fresnel = (1.0 - max(0.0, min(1.0, front))) ** 5
+        diffuse = (0.15 + 0.46 * a + 0.15 * b) * (1.0 - 0.72 * metallic)
+        reflected = (0.18 + 0.16 * a + 0.22 * b +
+                     0.70 * panel + 0.38 * strip +
+                     1.55 * sharp + 0.16 * fresnel) * (0.3 + 0.7 * metallic)
+        return _rgb(tuple(
+            base[k] * (diffuse + reflected) +
+            (1.0 - metallic) * 10.0 * (a + b)
+            for k in range(3)
         ))
 
     def _visible_curve(self, canvas, points, color, cx, cy, focal,
@@ -334,7 +381,7 @@ class SoftwareRenderer:
         projected = [self._project(p, cx, cy, focal) for p in rotated]
         visible_faces = []
 
-        for face, accent in zip(self.mesh.faces, self._material):
+        for face_index, (face, accent) in enumerate(zip(self.mesh.faces, self._material)):
             i, j, k = face.indices
             a, b, c = rotated[i], rotated[j], rotated[k]
             center = ((a[0] + b[0] + c[0]) / 3,
@@ -347,7 +394,8 @@ class SoftwareRenderer:
             if front <= 0.02:
                 continue
             pts = (*projected[i], *projected[j], *projected[k])
-            color = self._color(normal, accent, front)
+            color = self._color(normal, accent, front, towards_camera,
+                                self._texels[face_index] if self._texels is not None else None)
             visible_faces.append((center[2], pts, color))
 
         visible_faces.sort(key=lambda row: row[0])
@@ -370,8 +418,8 @@ The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
 
 
-ENGINE_VERSION = "0.1.0"
-DESKTOP_VERSION = "0.4.5"
+ENGINE_VERSION = "0.2.0"
+DESKTOP_VERSION = "0.4.6"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -388,9 +436,40 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.5"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.6"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
+
+
+def _scene_texture(relative_path):
+    """Optional JPEG/PNG texture; scene remains usable without Pillow."""
+    try:
+        from PIL import Image
+        from io import BytesIO
+    except ImportError:
+        return None
+    relative = Path(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("Invalid scene texture path")
+    root = Path(__file__).resolve().parent
+    engine = root if root.name == "engine3d" else root / "engine3d"
+    local = engine / relative
+    try:
+        if local.is_file():
+            data = local.read_bytes()
+        else:
+            url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "PYRION/0.4.6"})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                data = response.read(8 * 1024 * 1024 + 1)
+        if len(data) > 8 * 1024 * 1024:
+            raise ValueError("Scene texture exceeds 8 MiB")
+        with Image.open(BytesIO(data)) as image:
+            image.thumbnail((512, 512))
+            return image.convert("RGB")
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
 
 
 def load_selected_scene():
@@ -422,7 +501,20 @@ def load_selected_scene():
         speed = float(animation.get("speed_degrees_per_second", 0))
         if animation.get("type") != "spin" or animation.get("axis") != [0, 1, 0]:
             speed = 0
-        objects.append({"renderer": SoftwareRenderer(mesh), "position": position,
+        material = model.get("material", {})
+        if obj.get("material"):
+            material_path = scene_path.parent / obj["material"]
+            material = _scene_json(material_path.as_posix())
+            if material.get("format") != "pyrion.material":
+                raise ValueError("Unsupported material: " + material_path.as_posix())
+            material = dict(material)
+            if material.get("texture") and material.get("texture_status") == "ready":
+                image_path = (material_path.parent / material["texture"]).as_posix()
+                image = _scene_texture(image_path)
+                if image is not None:
+                    material["_texture_image"] = image
+        objects.append({"renderer": SoftwareRenderer(mesh, material=material),
+                        "position": position,
                         "radius": radius, "speed": math.radians(speed),
                         "rotation": math.radians(float(obj.get("rotation", [0, 0, 0])[1]))})
     return scene, objects
@@ -931,6 +1023,7 @@ class Pyrion3DApp(tk.Tk):
 def run():
     app = Pyrion3DApp()
     app.mainloop()
+
 
 
 
