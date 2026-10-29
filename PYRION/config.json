@@ -1,10 +1,10 @@
 {
   "app": "PYRION",
   "name": "PYRION OS",
-  "description": "Monitor 3D compacto y diagnostico con boton DETALLES y atajo F3",
-  "version": "0.4.3",
+  "description": "HUD 3D: metricas separadas de sistema, proceso PYRION y renderizado, con boton DETALLES",
+  "version": "0.4.4",
   "app_path": "PYRION/app.py",
-  "release_commit": "c03c8ce81723f27afa97bc48e288a5eb30ed42e5",
+  "release_commit": "a475998b4b21b7fd8ea71230bfc1211d415fda5d",
   "maintenance": false,
   "engine_version": "0.1.0"
 }
