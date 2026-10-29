@@ -242,52 +242,97 @@ class SoftwareRenderer:
                 canvas.create_line(*old, *current, fill=color, width=width)
             old = current
 
-    def draw(self, canvas, cx, cy, diameter, draw_graticules=True,
-             object_position=(0.0, 0.0, 0.0)):
-        """Draw 3D mesh centered at cx,cy; returns visible face count."""
-        focal = max(50, diameter * self.camera_distance * 0.47 * self.zoom)
-        rotated = [self._rotate(p) for p in self.mesh.vertices]
-        projected = [self._project(p, cx, cy, focal) for p in rotated]
-        visible_faces = []
+    @staticmethod
+    def _clip_near_plane(polygon, near=0.32):
+        """Clip view-space polygons to keep walking close to meshes stable."""
+        clipped = []
+        for i, current in enumerate(polygon):
+            previous = polygon[i - 1]
+            was_inside = previous[2] >= near
+            is_inside = current[2] >= near
+            if was_inside != is_inside:
+                fraction = (near - previous[2]) / (current[2] - previous[2])
+                clipped.append(tuple(
+                    previous[k] + fraction * (current[k] - previous[k])
+                    for k in range(3)
+                ))
+            if is_inside:
+                clipped.append(current)
+        return clipped
 
+    def draw(self, canvas, cx, cy, diameter, draw_graticules=True,
+             object_position=(0.0, 0.0, 0.0),
+             camera_position=(0.0, 0.0, 3.85),
+             camera_yaw=0.0, camera_pitch=0.0):
+        """Project rotating world-space models from a movable 3D camera."""
+        focal = max(50.0, diameter * self.camera_distance * 0.47 * self.zoom)
+        sy, cyaw = math.sin(camera_yaw), math.cos(camera_yaw)
+        sp, cp = math.sin(camera_pitch), math.cos(camera_pitch)
+        right = (cyaw, 0.0, sy)
+        forward = (sy * cp, sp, -cyaw * cp)
+        up = (-sy * sp, cp, cyaw * sp)
+        eye = camera_position
+        rotated = [self._rotate(v) for v in self.mesh.vertices]
+        world = [
+            tuple(v[k] + object_position[k] for k in range(3))
+            for v in rotated
+        ]
+        view = []
+        for vertex in world:
+            delta = tuple(vertex[k] - eye[k] for k in range(3))
+            view.append((
+                _dot(delta, right), _dot(delta, up), _dot(delta, forward)
+            ))
+        visible_faces = []
         for face_index, (face, accent) in enumerate(zip(self.mesh.faces, self._material)):
             i, j, k = face.indices
             a, b, c = rotated[i], rotated[j], rotated[k]
-            center = ((a[0] + b[0] + c[0]) / 3,
-                      (a[1] + b[1] + c[1]) / 3,
-                      (a[2] + b[2] + c[2]) / 3)
+            world_center = tuple(
+                (world[i][t] + world[j][t] + world[k][t]) / 3.0
+                for t in range(3)
+            )
             if getattr(self.mesh, "flat_shading", False):
-                edge_a = tuple(b[k] - a[k] for k in range(3))
-                edge_b = tuple(c[k] - a[k] for k in range(3))
+                e1 = tuple(b[t] - a[t] for t in range(3))
+                e2 = tuple(c[t] - a[t] for t in range(3))
                 normal = _unit((
-                    edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
-                    edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
-                    edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0],
+                    e1[1] * e2[2] - e1[2] * e2[1],
+                    e1[2] * e2[0] - e1[0] * e2[2],
+                    e1[0] * e2[1] - e1[1] * e2[0]
                 ))
             else:
-                normal = _unit(center)
-            towards_camera = _unit((-
-                center[0], -center[1], self.camera_distance - center[2]))
+                normal = _unit(tuple(
+                    (a[t] + b[t] + c[t]) / 3.0 for t in range(3)
+                ))
+            towards_camera = _unit(tuple(
+                eye[t] - world_center[t] for t in range(3)
+            ))
             front = _dot(normal, towards_camera)
             if front <= 0.02:
                 continue
-            pts = (*projected[i], *projected[j], *projected[k])
-            color = self._color(normal, accent, front, towards_camera,
-                                self._texels[face_index] if self._texels is not None else None)
+            polygon = self._clip_near_plane([view[i], view[j], view[k]])
+            if len(polygon) < 3:
+                continue
+            projected = []
+            for vx, vy, depth in polygon:
+                factor = focal / depth
+                projected.extend((cx + vx * factor, cy - vy * factor))
+            color = self._color(
+                normal, accent, front, towards_camera,
+                self._texels[face_index] if self._texels is not None else None
+            )
             if self._spotlights and self.spotlight_enabled:
-                world_point = tuple(
-                    center[k] + object_position[k] for k in range(3)
-                )
                 color = self._shade_spotlights(
-                    color, normal, towards_camera, world_point
+                    color, normal, towards_camera, world_center
                 )
-            visible_faces.append((center[2], pts, color))
-
-        visible_faces.sort(key=lambda row: row[0])
-        for _, pts, color in visible_faces:
-            canvas.create_polygon(*pts, fill=color,
-                                  outline="#22426e" if self.wireframe else color,
-                                  width=0.7 if self.wireframe else 0.2)
+            depth = sum(v[2] for v in polygon) / len(polygon)
+            visible_faces.append((depth, projected, color))
+        visible_faces.sort(key=lambda item: item[0], reverse=True)
+        for _, polygon, color in visible_faces:
+            canvas.create_polygon(
+                *polygon, fill=color,
+                outline="#22426e" if self.wireframe else color,
+                width=0.7 if self.wireframe else 0.2
+            )
         if draw_graticules:
             for points, color in self._lines:
                 self._visible_curve(canvas, points, color, cx, cy, focal,

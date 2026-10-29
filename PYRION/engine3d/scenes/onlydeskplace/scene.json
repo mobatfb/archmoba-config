@@ -142,5 +142,17 @@
       "angle_degrees": 100,
       "softness": 0.3
     }
-  ]
+  ],
+  "navigation": {
+    "camera_position": [
+      0,
+      0,
+      3.85
+    ],
+    "camera_yaw_degrees": 0,
+    "camera_pitch_degrees": 0,
+    "walk_speed": 1.9,
+    "turn_speed_degrees": 95,
+    "look_speed_degrees": 115
+  }
 }

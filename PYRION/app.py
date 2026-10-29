@@ -1,4 +1,4 @@
-"""PYRION OS 0.4.12 - standalone PYRION 3D Engine.
+"""PYRION OS 0.4.13 - standalone PYRION 3D Engine.
 
 Mesh geometry, perspective projection, and Tk software renderer.
 Previous desktop preserved under PYRION/release/v0.3.0.
@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.12"
+APP_VERSION = "0.4.13"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -288,6 +288,7 @@ class TriangleMesh:
         return ("triangle_mesh", self.vertex_count, self.triangle_count)
 
 
+
 """Software 3D triangle projection and shading for a Tkinter canvas."""
 
 
@@ -531,52 +532,97 @@ class SoftwareRenderer:
                 canvas.create_line(*old, *current, fill=color, width=width)
             old = current
 
-    def draw(self, canvas, cx, cy, diameter, draw_graticules=True,
-             object_position=(0.0, 0.0, 0.0)):
-        """Draw 3D mesh centered at cx,cy; returns visible face count."""
-        focal = max(50, diameter * self.camera_distance * 0.47 * self.zoom)
-        rotated = [self._rotate(p) for p in self.mesh.vertices]
-        projected = [self._project(p, cx, cy, focal) for p in rotated]
-        visible_faces = []
+    @staticmethod
+    def _clip_near_plane(polygon, near=0.32):
+        """Clip view-space polygons to keep walking close to meshes stable."""
+        clipped = []
+        for i, current in enumerate(polygon):
+            previous = polygon[i - 1]
+            was_inside = previous[2] >= near
+            is_inside = current[2] >= near
+            if was_inside != is_inside:
+                fraction = (near - previous[2]) / (current[2] - previous[2])
+                clipped.append(tuple(
+                    previous[k] + fraction * (current[k] - previous[k])
+                    for k in range(3)
+                ))
+            if is_inside:
+                clipped.append(current)
+        return clipped
 
+    def draw(self, canvas, cx, cy, diameter, draw_graticules=True,
+             object_position=(0.0, 0.0, 0.0),
+             camera_position=(0.0, 0.0, 3.85),
+             camera_yaw=0.0, camera_pitch=0.0):
+        """Project rotating world-space models from a movable 3D camera."""
+        focal = max(50.0, diameter * self.camera_distance * 0.47 * self.zoom)
+        sy, cyaw = math.sin(camera_yaw), math.cos(camera_yaw)
+        sp, cp = math.sin(camera_pitch), math.cos(camera_pitch)
+        right = (cyaw, 0.0, sy)
+        forward = (sy * cp, sp, -cyaw * cp)
+        up = (-sy * sp, cp, cyaw * sp)
+        eye = camera_position
+        rotated = [self._rotate(v) for v in self.mesh.vertices]
+        world = [
+            tuple(v[k] + object_position[k] for k in range(3))
+            for v in rotated
+        ]
+        view = []
+        for vertex in world:
+            delta = tuple(vertex[k] - eye[k] for k in range(3))
+            view.append((
+                _dot(delta, right), _dot(delta, up), _dot(delta, forward)
+            ))
+        visible_faces = []
         for face_index, (face, accent) in enumerate(zip(self.mesh.faces, self._material)):
             i, j, k = face.indices
             a, b, c = rotated[i], rotated[j], rotated[k]
-            center = ((a[0] + b[0] + c[0]) / 3,
-                      (a[1] + b[1] + c[1]) / 3,
-                      (a[2] + b[2] + c[2]) / 3)
+            world_center = tuple(
+                (world[i][t] + world[j][t] + world[k][t]) / 3.0
+                for t in range(3)
+            )
             if getattr(self.mesh, "flat_shading", False):
-                edge_a = tuple(b[k] - a[k] for k in range(3))
-                edge_b = tuple(c[k] - a[k] for k in range(3))
+                e1 = tuple(b[t] - a[t] for t in range(3))
+                e2 = tuple(c[t] - a[t] for t in range(3))
                 normal = _unit((
-                    edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
-                    edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
-                    edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0],
+                    e1[1] * e2[2] - e1[2] * e2[1],
+                    e1[2] * e2[0] - e1[0] * e2[2],
+                    e1[0] * e2[1] - e1[1] * e2[0]
                 ))
             else:
-                normal = _unit(center)
-            towards_camera = _unit((-
-                center[0], -center[1], self.camera_distance - center[2]))
+                normal = _unit(tuple(
+                    (a[t] + b[t] + c[t]) / 3.0 for t in range(3)
+                ))
+            towards_camera = _unit(tuple(
+                eye[t] - world_center[t] for t in range(3)
+            ))
             front = _dot(normal, towards_camera)
             if front <= 0.02:
                 continue
-            pts = (*projected[i], *projected[j], *projected[k])
-            color = self._color(normal, accent, front, towards_camera,
-                                self._texels[face_index] if self._texels is not None else None)
+            polygon = self._clip_near_plane([view[i], view[j], view[k]])
+            if len(polygon) < 3:
+                continue
+            projected = []
+            for vx, vy, depth in polygon:
+                factor = focal / depth
+                projected.extend((cx + vx * factor, cy - vy * factor))
+            color = self._color(
+                normal, accent, front, towards_camera,
+                self._texels[face_index] if self._texels is not None else None
+            )
             if self._spotlights and self.spotlight_enabled:
-                world_point = tuple(
-                    center[k] + object_position[k] for k in range(3)
-                )
                 color = self._shade_spotlights(
-                    color, normal, towards_camera, world_point
+                    color, normal, towards_camera, world_center
                 )
-            visible_faces.append((center[2], pts, color))
-
-        visible_faces.sort(key=lambda row: row[0])
-        for _, pts, color in visible_faces:
-            canvas.create_polygon(*pts, fill=color,
-                                  outline="#22426e" if self.wireframe else color,
-                                  width=0.7 if self.wireframe else 0.2)
+            depth = sum(v[2] for v in polygon) / len(polygon)
+            visible_faces.append((depth, projected, color))
+        visible_faces.sort(key=lambda item: item[0], reverse=True)
+        for _, polygon, color in visible_faces:
+            canvas.create_polygon(
+                *polygon, fill=color,
+                outline="#22426e" if self.wireframe else color,
+                width=0.7 if self.wireframe else 0.2
+            )
         if draw_graticules:
             for points, color in self._lines:
                 self._visible_curve(canvas, points, color, cx, cy, focal,
@@ -592,8 +638,8 @@ The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
 
 
-ENGINE_VERSION = "0.3.1"
-DESKTOP_VERSION = "0.4.12"
+ENGINE_VERSION = "0.4.0"
+DESKTOP_VERSION = "0.4.13"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -610,7 +656,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.12"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.13"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -648,7 +694,7 @@ def _scene_texture(relative_path):
         else:
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
-                url, headers={"User-Agent": "PYRION/0.4.12"})
+                url, headers={"User-Agent": "PYRION/0.4.13"})
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
@@ -922,6 +968,26 @@ class Pyrion3DApp(tk.Tk):
         self._width = 1
         self._height = 1
         self._orb_radius = 1
+        self._navigation = self.scene.get("navigation", {})
+        self._camera_home = {
+            "position": list(self._navigation.get(
+                "camera_position", [0.0, 0.0, 3.85])),
+            "yaw": math.radians(float(
+                self._navigation.get("camera_yaw_degrees", 0.0))),
+            "pitch": math.radians(float(
+                self._navigation.get("camera_pitch_degrees", 0.0)))
+        }
+        self.camera_pose = self._copy_pose(self._camera_home)
+        self._lights = [dict(light) for light in self.scene.get("lights", [])]
+        self._spot_index = next(
+            (i for i, light in enumerate(self._lights)
+             if light.get("type") == "spot" and light.get("enabled", True)),
+            None
+        )
+        self.focus_pose = self._focus_pose_from_scene()
+        self.control_mode = "camara"
+        self._sticks = {"move": (0.0, 0.0), "look": (0.0, 0.0)}
+        self._active_stick = None
 
         # HUD includes interactive details and material buttons.
         self.bind("<space>", lambda _event: self.toggle_animation())
@@ -930,6 +996,9 @@ class Pyrion3DApp(tk.Tk):
         self.bind("<M>", self._toggle_material_mode)
         self.bind("<l>", self._toggle_spotlight)
         self.bind("<L>", self._toggle_spotlight)
+        self.bind("<Tab>", self._toggle_control_mode)
+        self.bind("<r>", self._reset_navigation)
+        self.bind("<R>", self._reset_navigation)
         self.bind("<Left>", lambda _event: self._speed(-0.15))
         self.bind("<Right>", lambda _event: self._speed(+0.15))
         self.bind("<plus>", lambda _event: self._zoom(+0.10))
@@ -947,6 +1016,204 @@ class Pyrion3DApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.after(80, self._frame)
         self.after(1000, self._keep_as_desktop)
+
+    @staticmethod
+    def _copy_pose(pose):
+        return {
+            "position": list(pose["position"]),
+            "yaw": float(pose["yaw"]),
+            "pitch": float(pose["pitch"])
+        }
+
+    def _focus_pose_from_scene(self):
+        if self._spot_index is None:
+            return None
+        light = self._lights[self._spot_index]
+        position = [float(v) for v in light["position"]]
+        target = [float(v) for v in light["target"]]
+        delta = [target[k] - position[k] for k in range(3)]
+        horizontal = math.hypot(delta[0], delta[2])
+        return {
+            "position": position,
+            "yaw": math.atan2(delta[0], -delta[2]),
+            "pitch": math.atan2(delta[1], horizontal),
+            "distance": max(0.1, math.sqrt(sum(v * v for v in delta)))
+        }
+
+    @staticmethod
+    def _pose_forward(pose):
+        yaw, pitch = pose["yaw"], pose["pitch"]
+        return (
+            math.sin(yaw) * math.cos(pitch),
+            math.sin(pitch),
+            -math.cos(yaw) * math.cos(pitch)
+        )
+
+    def _sync_focus_light(self):
+        if self._spot_index is None or self.focus_pose is None:
+            return
+        pose = self.focus_pose
+        point = pose["position"]
+        direction = self._pose_forward(pose)
+        light = self._lights[self._spot_index]
+        light["position"] = list(point)
+        light["target"] = [
+            point[k] + direction[k] * pose["distance"]
+            for k in range(3)
+        ]
+        for item in self.objects:
+            item["renderer"].set_lights(
+                self._lights, ambient=self.scene.get("ambient_light", 0.56)
+            )
+
+    def _toggle_control_mode(self, _event=None):
+        if self._spot_index is None:
+            return
+        self.control_mode = (
+            "foco" if self.control_mode == "camara" else "camara"
+        )
+        self._sticks = {"move": (0.0, 0.0), "look": (0.0, 0.0)}
+        self._active_stick = None
+        self._request_frame()
+
+    def _reset_navigation(self, _event=None):
+        self.camera_pose = self._copy_pose(self._camera_home)
+        self._lights = [dict(light) for light in self.scene.get("lights", [])]
+        self.focus_pose = self._focus_pose_from_scene()
+        self._sticks = {"move": (0.0, 0.0), "look": (0.0, 0.0)}
+        self._active_stick = None
+        self._sync_focus_light()
+        self._request_frame()
+
+    def _advance_navigation(self, seconds):
+        move_x, move_y = self._sticks["move"]
+        look_x, look_y = self._sticks["look"]
+        if max(abs(move_x), abs(move_y), abs(look_x), abs(look_y)) < 0.015:
+            return
+        pose = (self.camera_pose if self.control_mode == "camara"
+                else self.focus_pose)
+        if pose is None:
+            return
+        walk_speed = max(0.1, min(12.0, float(
+            self._navigation.get("walk_speed", 1.9)
+        )))
+        turn_speed = math.radians(float(
+            self._navigation.get("turn_speed_degrees", 95.0)
+        ))
+        look_speed = math.radians(float(
+            self._navigation.get("look_speed_degrees", 115.0)
+        ))
+        # Tank steering stays horizontal; the other stick tilts the view.
+        pose["yaw"] += (move_x * turn_speed + look_x * look_speed) * seconds
+        pose["pitch"] = max(-1.35, min(
+            1.35, pose["pitch"] - look_y * look_speed * seconds
+        ))
+        distance = -move_y * walk_speed * seconds
+        pose["position"][0] += math.sin(pose["yaw"]) * distance
+        pose["position"][2] -= math.cos(pose["yaw"]) * distance
+        if self.control_mode == "foco":
+            self._sync_focus_light()
+
+    def _analog_geometry(self, name):
+        radius = max(32.0, min(
+            57.0, self._width * 0.09, self._height * 0.14
+        ))
+        center_x = (
+            23.0 + radius if name == "move"
+            else self._width - 23.0 - radius
+        )
+        center_y = self._height - 23.0 - radius
+        return center_x, center_y, radius
+
+    def _navigation_button_bounds(self):
+        mid = self._width * 0.5
+        top = self._height - (79 if self._width >= 540 else 165)
+        return (
+            (mid - 145, top, mid - 12, top + 34),
+            (mid + 12, top, mid + 137, top + 34)
+        )
+
+    def _navigation_mouse_press(self, event):
+        for index, rect in enumerate(self._navigation_button_bounds()):
+            x1, y1, x2, y2 = rect
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                if index == 0:
+                    self._toggle_control_mode()
+                else:
+                    self._reset_navigation()
+                return True
+        for name in ("move", "look"):
+            cx, cy, radius = self._analog_geometry(name)
+            if ((event.x - cx) ** 2 + (event.y - cy) ** 2
+                    <= (radius + 14) ** 2):
+                self._active_stick = name
+                self._move_analog_thumb(event)
+                return True
+        return False
+
+    def _move_analog_thumb(self, event):
+        if self._active_stick is None:
+            return
+        cx, cy, radius = self._analog_geometry(self._active_stick)
+        x = (event.x - cx) / radius
+        y = (event.y - cy) / radius
+        length = math.hypot(x, y)
+        if length > 1.0:
+            x /= length
+            y /= length
+        if math.hypot(x, y) < 0.08:
+            x, y = 0.0, 0.0
+        self._sticks[self._active_stick] = (x, y)
+        self._request_frame()
+
+    def _draw_analog_controls(self):
+        canvas = self.canvas
+        for name, text in (("move", "TANQUE"), ("look", "MIRAR")):
+            cx, cy, radius = self._analog_geometry(name)
+            dx, dy = self._sticks[name]
+            canvas.create_oval(
+                cx - radius, cy - radius, cx + radius, cy + radius,
+                fill="#0e1d32", outline="#486b8e", width=2
+            )
+            canvas.create_line(
+                cx - radius * 0.62, cy, cx + radius * 0.62, cy,
+                fill="#294463", width=1
+            )
+            canvas.create_line(
+                cx, cy - radius * 0.62, cx, cy + radius * 0.62,
+                fill="#294463", width=1
+            )
+            thumb_x = cx + dx * radius * 0.72
+            thumb_y = cy + dy * radius * 0.72
+            canvas.create_line(
+                cx, cy, thumb_x, thumb_y, fill="#83b6df", width=3
+            )
+            knob = max(11.0, radius * 0.24)
+            canvas.create_oval(
+                thumb_x - knob, thumb_y - knob,
+                thumb_x + knob, thumb_y + knob,
+                fill="#3e709b", outline="#a4d8fd", width=2
+            )
+            canvas.create_text(
+                cx, cy - radius - 14, text=text,
+                fill="#c7e5ff", font=("TkDefaultFont", 9, "bold")
+            )
+        mode_rect, reset_rect = self._navigation_button_bounds()
+        for rect, title, active in (
+            (mode_rect, "CONTROL: " + self.control_mode.upper(), True),
+            (reset_rect, "RESET POS.", False)
+        ):
+            x1, y1, x2, y2 = rect
+            canvas.create_rectangle(
+                x1, y1, x2, y2,
+                fill="#203c59" if active else "#182d45",
+                outline="#6796bd", width=1
+            )
+            canvas.create_text(
+                (x1 + x2) * 0.5, (y1 + y2) * 0.5,
+                text=title, fill="#d9ecff",
+                font=("TkDefaultFont", 9, "bold")
+            )
 
     def _setup_window(self):
         self.update_idletasks()
@@ -1011,13 +1278,16 @@ class Pyrion3DApp(tk.Tk):
         self._request_frame()
 
     def _mouse_press(self, event):
-        if self._hud_click(event):
+        if self._hud_click(event) or self._navigation_mouse_press(event):
             return
         cx, cy = self._width / 2, self._height / 2
         if (event.x - cx) ** 2 + (event.y - cy) ** 2 <= self._orb_radius ** 2:
             self.drag_start = (event.x, event.y)
 
     def _mouse_move(self, event):
+        if self._active_stick is not None:
+            self._move_analog_thumb(event)
+            return
         if self.drag_start is None:
             return
         dx, dy = event.x - self.drag_start[0], event.y - self.drag_start[1]
@@ -1031,6 +1301,10 @@ class Pyrion3DApp(tk.Tk):
 
     def _mouse_release(self, _event):
         self.drag_start = None
+        if self._active_stick is not None:
+            self._sticks[self._active_stick] = (0.0, 0.0)
+            self._active_stick = None
+            self._request_frame()
 
     def _scroll(self, event):
         self._zoom(0.10 if event.delta > 0 else -0.10)
@@ -1054,20 +1328,30 @@ class Pyrion3DApp(tk.Tk):
         diameter = min(height * 0.60, width * 0.48, 520)
         self._orb_radius = diameter * 0.50
         self.visible_triangles = 0
-        for item in sorted(self.objects, key=lambda obj: obj["position"][2]):
-            px, py, pz = item["position"]
-            depth = max(0.5, 3.85 - pz)
-            factor = 3.85 / depth
+        eye = self.camera_pose["position"]
+        forward = self._pose_forward(self.camera_pose)
+        ordered = sorted(
+            self.objects,
+            key=lambda obj: sum(
+                (obj["position"][k] - eye[k]) * forward[k]
+                for k in range(3)
+            ),
+            reverse=True
+        )
+        for item in ordered:
             renderer = item["renderer"]
             self.visible_triangles += renderer.draw(
-                self.canvas, width / 2 + px * diameter * 0.47 * factor,
-                height / 2 - py * diameter * 0.47 * factor,
-                diameter * factor, draw_graticules=False,
-                object_position=item["position"]
+                self.canvas, width / 2, height / 2, diameter,
+                draw_graticules=False,
+                object_position=item["position"],
+                camera_position=eye,
+                camera_yaw=self.camera_pose["yaw"],
+                camera_pitch=self.camera_pose["pitch"]
             )
         self.render_ms = (time.perf_counter() - draw_start) * 1000.0
         self._render_cpu_interval += max(0.0, time.process_time() - cpu_draw_start)
         self._draw_hud()
+        self._draw_analog_controls()
 
 
     def _material_button_bounds(self):
@@ -1224,6 +1508,12 @@ class Pyrion3DApp(tk.Tk):
                 ("CPU RENDER", fmt(render_cpu, "%")),
                 ("% FRAME 3D", fmt(ratio, "%")),
                 ("MODELOS", str(len(self.objects))),
+                ("CONTROL", self.control_mode.upper()),
+                ("CAM POS", ", ".join("%.2f" % v for v in
+                                    self.camera_pose["position"])),
+                ("FOCO POS", (", ".join("%.2f" % v for v in
+                             self.focus_pose["position"])
+                             if self.focus_pose else "--")),
                 ("VERTICES", str(vertices)),
                 ("TRIANGULOS", "%s / %s" % (self.visible_triangles, faces)),
                 ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
@@ -1252,6 +1542,7 @@ class Pyrion3DApp(tk.Tk):
             self.last_time = now
             elapsed = min(0.1, raw_elapsed)  # Cap animation delta, not FPS measurements.
             update_start = time.perf_counter()
+            self._advance_navigation(elapsed)
             if self.running:
                 for item in self.objects:
                     renderer = item["renderer"]
