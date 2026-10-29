@@ -4,6 +4,6 @@
   "description": "Buscador y lanzador de herramientas Python",
   "version": "1.0.75",
   "app_path": "PTM/app.py",
-  "release_commit": "4ac8dd03534c02e5d55ea7ce9441de7fe3d81e59",
+  "release_commit": "93a05e62229bd2af37506e36fbebfe0be167a810",
   "maintenance": false
 }
