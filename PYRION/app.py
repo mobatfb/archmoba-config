@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -370,8 +370,60 @@ The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
 
 ENGINE_VERSION = "0.1.0"
-DESKTOP_VERSION = "0.4.1"
+DESKTOP_VERSION = "0.4.2"
 BACKGROUND = "#050917"
+
+
+
+def _scene_json(relative_path):
+    """Prefer local scene assets; standalone OTA can fetch missing files."""
+    root = Path(__file__).resolve().parent
+    engine = root if root.name == "engine3d" else root / "engine3d"
+    relative = Path(relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("Invalid scene path")
+    local = engine / relative
+    if local.is_file():
+        return json.loads(local.read_text(encoding="utf-8"))
+    url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.2"})
+    with urllib.request.urlopen(request, timeout=8) as response:
+        return json.loads(response.read().decode("utf-8-sig"))
+
+
+def load_selected_scene():
+    selection = _scene_json("scene_selected.json")
+    scene_path = Path(selection["selected_scene"])
+    scene = _scene_json(scene_path)
+    if scene.get("format") != "pyrion.scene":
+        raise ValueError("Unsupported scene format")
+    objects = []
+    for obj in scene.get("objects", []):
+        if not obj.get("visible", True):
+            continue
+        model_path = (scene_path.parent / obj["model"]).as_posix()
+        model = _scene_json(model_path)
+        if model.get("format") != "pyrion.mesh" or model.get("primitive") != "uv_sphere":
+            raise ValueError("Unsupported model: " + model_path)
+        params = model["parameters"]
+        scale = obj.get("scale", [1, 1, 1])
+        if len(scale) != 3 or any(float(s) <= 0 for s in scale):
+            raise ValueError("Invalid model scale")
+        # The current software renderer supports uniform sphere scaling.
+        radius = float(params["radius"]) * sum(map(float, scale)) / 3
+        mesh = SphereMesh(rings=int(params["rings"]),
+                          segments=int(params["segments"]), radius=radius)
+        position = tuple(float(v) for v in obj.get("position", [0, 0, 0]))
+        if len(position) != 3:
+            raise ValueError("Invalid model position")
+        animation = obj.get("animation", {})
+        speed = float(animation.get("speed_degrees_per_second", 0))
+        if animation.get("type") != "spin" or animation.get("axis") != [0, 1, 0]:
+            speed = 0
+        objects.append({"renderer": SoftwareRenderer(mesh), "position": position,
+                        "radius": radius, "speed": math.radians(speed),
+                        "rotation": math.radians(float(obj.get("rotation", [0, 0, 0])[1]))})
+    return scene, objects
 
 
 class Pyrion3DApp(tk.Tk):
@@ -380,23 +432,25 @@ class Pyrion3DApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PYRION OS")
-        self.configure(bg=BACKGROUND)
+        self.scene, self.objects = load_selected_scene()
+        self.background = self.scene.get("background", {}).get("color", BACKGROUND)
+        self.configure(bg=self.background)
         self.windowed = (
             "--windowed" in sys.argv or os.environ.get("PYRION_WINDOWED") == "1"
         )
         self._setup_window()
 
         self.canvas = tk.Canvas(
-            self, bg=BACKGROUND, highlightthickness=0, bd=0,
+            self, bg=self.background, highlightthickness=0, bd=0,
             relief="flat", takefocus=1
         )
         self.canvas.pack(fill="both", expand=True)
-        self.mesh = SphereMesh(rings=17, segments=34)
-        self.renderer = SoftwareRenderer(self.mesh)
-        self.renderer.rotation_y = 0.53
-        self.renderer.rotation_x = -0.28
+        self.renderer = self.objects[0]["renderer"] if self.objects else None
+        for item in self.objects:
+            item["renderer"].rotation_y = item["rotation"]
+            item["renderer"].rotation_x = -0.28
         self.base_pitch = -0.28
-        self.spin_rate = 0.78
+        self.spin_rate = 1.0
         self.running = True
         self.visible_triangles = 0
         self.frames = 0
@@ -484,7 +538,9 @@ class Pyrion3DApp(tk.Tk):
         self.spin_rate = max(0.15, min(3.5, self.spin_rate + amount))
 
     def _zoom(self, amount):
-        self.renderer.zoom = max(0.55, min(1.42, self.renderer.zoom + amount))
+        for item in self.objects:
+            r = item["renderer"]
+            r.zoom = max(0.55, min(1.42, r.zoom + amount))
         self._request_frame()
 
     def _mouse_press(self, event):
@@ -496,9 +552,11 @@ class Pyrion3DApp(tk.Tk):
         if self.drag_start is None:
             return
         dx, dy = event.x - self.drag_start[0], event.y - self.drag_start[1]
-        self.renderer.rotation_y += dx * 0.007
+        for item in self.objects:
+            item["renderer"].rotation_y += dx * 0.007
         self.base_pitch = max(-1.35, min(1.35, self.base_pitch - dy * 0.007))
-        self.renderer.rotation_x = self.base_pitch
+        for item in self.objects:
+            item["renderer"].rotation_x = self.base_pitch
         self.drag_start = (event.x, event.y)
         self._request_frame()
 
@@ -523,11 +581,18 @@ class Pyrion3DApp(tk.Tk):
         self._width, self._height = width, height
         self.canvas.delete("all")
         diameter = min(height * 0.60, width * 0.48, 520)
-        self._orb_radius = diameter * 0.50 * self.renderer.zoom
-        self.visible_triangles = self.renderer.draw(
-            self.canvas, width / 2, height / 2, diameter,
-            draw_graticules=False
-        )
+        self._orb_radius = diameter * 0.50
+        self.visible_triangles = 0
+        for item in sorted(self.objects, key=lambda obj: obj["position"][2]):
+            px, py, pz = item["position"]
+            depth = max(0.5, 3.85 - pz)
+            factor = 3.85 / depth
+            renderer = item["renderer"]
+            self.visible_triangles += renderer.draw(
+                self.canvas, width / 2 + px * diameter * 0.47 * factor,
+                height / 2 - py * diameter * 0.47 * factor,
+                diameter * factor, draw_graticules=False
+            )
 
     def _frame(self):
         try:
@@ -535,9 +600,11 @@ class Pyrion3DApp(tk.Tk):
             elapsed = max(0.0, min(0.1, now - self.last_time))
             self.last_time = now
             if self.running:
-                self.renderer.rotation_y = (
-                    self.renderer.rotation_y + self.spin_rate * elapsed
-                ) % (math.pi * 2)
+                for item in self.objects:
+                    renderer = item["renderer"]
+                    renderer.rotation_y = (
+                        renderer.rotation_y + item["speed"] * self.spin_rate * elapsed
+                    ) % (math.pi * 2)
             self.frames += 1
             self._draw()
             self.after(40, self._frame)
