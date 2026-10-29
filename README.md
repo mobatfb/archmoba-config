@@ -1,2 +1,0 @@
-# archmoba-config
-archmoba-config
