@@ -1,9 +1,9 @@
 {
   "app": "PYRION",
   "name": "PYRION OS",
-  "description": "Entorno gráfico y sistema visual de PYRION Mini OS",
-  "version": "0.1.5",
+  "description": "Escritorio gráfico interactivo PYRION OS 2030 con paneles, núcleo y estado de sistema",
+  "version": "0.2.0",
   "app_path": "PYRION/app.py",
-  "release_commit": "4acd2713746cd5b51c0e859cee05386fd49e3bb3",
+  "release_commit": "6e9743469f70a5949f02834a6e32e2fa5dcf5c35",
   "maintenance": false
 }
