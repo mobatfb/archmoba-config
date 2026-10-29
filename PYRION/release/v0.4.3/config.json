@@ -4,7 +4,7 @@
   "description": "Monitor 3D compacto y diagnostico con boton DETALLES y atajo F3",
   "version": "0.4.3",
   "app_path": "PYRION/app.py",
-  "release_commit": "0e616d15a40a0e462710bbd2be406055008f03b9",
+  "release_commit": "c03c8ce81723f27afa97bc48e288a5eb30ed42e5",
   "maintenance": false,
   "engine_version": "0.1.0"
 }
