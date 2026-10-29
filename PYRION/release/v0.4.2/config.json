@@ -1,0 +1,10 @@
+{
+  "app": "PYRION",
+  "name": "PYRION OS",
+  "description": "Visor 3D carga scene_selected.json, escena y modelos .mesh",
+  "version": "0.4.2",
+  "app_path": "PYRION/app.py",
+  "release_commit": "da345f6cb3b67f6781f3ed5fd8ffa664fe8268a4",
+  "maintenance": false,
+  "engine_version": "0.1.0"
+}
