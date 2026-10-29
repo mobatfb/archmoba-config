@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.8"
+TOOL_VERSION = "2.0.9"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -51,6 +51,7 @@ class Mp3PlayerTool(ttk.Frame):
         self.finished_guard = False
         self.cover_photo = None
         self._save_job = None
+        self._search_job = None
 
         self.title_var = tk.StringVar(value="Sin reproduccion")
         self.artist_var = tk.StringVar(value="Selecciona o agrega canciones")
@@ -195,7 +196,7 @@ class Mp3PlayerTool(ttk.Frame):
         left = ttk.Frame(body, padding=6)
         body.add(left, weight=2)
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(4, weight=1)
+        left.rowconfigure(3, weight=1)
 
         title_row = ttk.Frame(left)
         title_row.grid(row=0, column=0, sticky="ew")
@@ -227,10 +228,6 @@ class Mp3PlayerTool(ttk.Frame):
         )
         self.drop_hint.grid(row=2, column=0, sticky="ew", pady=(0, 4))
 
-        search = ttk.Entry(left, textvariable=self.search_var)
-        search.grid(row=3, column=0, sticky="ew", pady=(0, 5))
-        self.search_var.trace_add("write", lambda *_: self._refresh_active_tab())
-
         style.configure(
             "MP3.TNotebook", background="#D6E3FF", borderwidth=0
         )
@@ -245,7 +242,7 @@ class Mp3PlayerTool(ttk.Frame):
         )
 
         self.library_tabs = ttk.Notebook(left, style="MP3.TNotebook")
-        self.library_tabs.grid(row=4, column=0, sticky="nsew")
+        self.library_tabs.grid(row=3, column=0, sticky="nsew")
         self.tab_recent = ttk.Frame(self.library_tabs, padding=6)
         self.tab_favorites = ttk.Frame(self.library_tabs, padding=6)
         self.tab_all = ttk.Frame(self.library_tabs, padding=6)
@@ -285,6 +282,34 @@ class Mp3PlayerTool(ttk.Frame):
                 "<Control-Button-1>",
                 lambda event, source=tab: self._tab_context_menu(source, event),
             )
+
+        # Buscador global fijo debajo de las pestañas: un solo filtro
+        # para Recientes, Favoritos y Todos.
+        search_panel = ttk.Frame(left)
+        search_panel.grid(row=4, column=0, sticky="ew", pady=(9, 2))
+        search_panel.columnconfigure(1, weight=1)
+        ttk.Label(
+            search_panel, text="Buscar en todas las pestañas",
+            style="Muted.TLabel",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        ttk.Label(search_panel, text="⌕").grid(
+            row=1, column=0, padx=(0, 6)
+        )
+        self.search_entry = ttk.Entry(
+            search_panel, textvariable=self.search_var,
+        )
+        self.search_entry.grid(row=1, column=1, sticky="ew")
+        self.search_entry.bind(
+            "<Escape>", lambda _event: self.clear_search()
+        )
+        ttk.Button(
+            search_panel, text="✕", width=3,
+            command=self.clear_search,
+        ).grid(row=1, column=2, padx=(5, 0))
+        self.search_var.trace_add(
+            "write", lambda *_: self._schedule_search_filter()
+        )
+
 
         # Reproductor compacto y responsivo para la altura real de una pestaña PTM.
         right = ttk.Frame(body, padding=(14, 4))
@@ -431,6 +456,29 @@ class Mp3PlayerTool(ttk.Frame):
             self._refresh_favorites()
         else:
             self._refresh_recent()
+
+    def clear_search(self):
+        """Quita el filtro global sin borrar la biblioteca ni la caché."""
+        self.search_var.set("")
+        self.search_entry.focus_set()
+
+    def _schedule_search_filter(self):
+        """Espera brevemente mientras se escribe para evitar bloqueos."""
+        if self._search_job is not None:
+            try:
+                self.after_cancel(self._search_job)
+            except tk.TclError:
+                pass
+        self._search_job = self.after(130, self._apply_search_filter)
+
+    def _apply_search_filter(self):
+        self._search_job = None
+        # Recalcular las tres pestañas aunque alguna no esté seleccionada.
+        self._refresh_recent()
+        self._refresh_favorites()
+        self._refresh_all()
+        self._refresh_playlist()
+
 
     @staticmethod
     def _matches_search(path, query):
@@ -1496,6 +1544,12 @@ class Mp3PlayerTool(ttk.Frame):
             pass
 
     def on_close(self):
+        if self._search_job is not None:
+            try:
+                self.after_cancel(self._search_job)
+            except tk.TclError:
+                pass
+            self._search_job = None
         self._scan_cancel.set()
         self._all_render_token += 1
         self._remember_position()
