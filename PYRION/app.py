@@ -1,4 +1,4 @@
-"""PYRION OS 0.4.3 - standalone PYRION 3D Engine.
+"""PYRION OS 0.4.4 - standalone PYRION 3D Engine.
 
 Mesh geometry, perspective projection, and Tk software renderer.
 Previous desktop preserved under PYRION/release/v0.3.0.
@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.3"
+APP_VERSION = "0.4.4"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -369,9 +369,11 @@ The desktop has no panels, labels, orbital rings or visible UI controls.
 The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
 
+
 ENGINE_VERSION = "0.1.0"
-DESKTOP_VERSION = "0.4.3"
+DESKTOP_VERSION = "0.4.4"
 BACKGROUND = "#050917"
+REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
 
 
@@ -386,7 +388,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.3"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.4"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -427,21 +429,111 @@ def load_selected_scene():
 
 
 
-def _hud_memory_mb():
-    """Current RSS in MB when the OS exposes it."""
+
+def _hud_cpu_snapshot():
+    """Machine-wide CPU counters: (total ticks, idle ticks)."""
     try:
         if sys.platform.startswith("linux"):
-            status = Path("/proc/self/status").read_text(encoding="utf-8")
-            for line in status.splitlines():
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) / 1024.0
+            data = Path("/proc/stat").read_text(encoding="ascii").splitlines()[0].split()
+            ticks = [float(value) for value in data[1:]]
+            return sum(ticks), ticks[3] + (ticks[4] if len(ticks) > 4 else 0)
         if os.name == "nt":
             import ctypes
 
-            class Counters(ctypes.Structure):
+            class FileTime(ctypes.Structure):
+                _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
+
+            idle, kernel, user = FileTime(), FileTime(), FileTime()
+            api = ctypes.WinDLL("kernel32", use_last_error=True)
+            api.GetSystemTimes.argtypes = [
+                ctypes.POINTER(FileTime), ctypes.POINTER(FileTime), ctypes.POINTER(FileTime)
+            ]
+            api.GetSystemTimes.restype = ctypes.c_int
+            if api.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel),
+                                  ctypes.byref(user)):
+                def ticks(value):
+                    return (value.high << 32) | value.low
+                return ticks(kernel) + ticks(user), ticks(idle)
+        # psutil is only an optional fallback (not a dependency).
+        import psutil
+        times = psutil.cpu_times()
+        return sum(times), times.idle + getattr(times, "iowait", 0)
+    except (OSError, ValueError, IndexError, ImportError, AttributeError):
+        return None
+
+
+def _hud_cpu_usage(previous, current):
+    if previous is None or current is None:
+        return None
+    delta = current[0] - previous[0]
+    idle_delta = current[1] - previous[1]
+    return max(0.0, min(100.0, 100.0 * (delta - idle_delta) / delta)) if delta > 0 else None
+
+
+def _hud_system_memory():
+    """Percent, used GiB and total GiB of physical RAM on this computer."""
+    try:
+        if sys.platform.startswith("linux"):
+            values = {}
+            for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+                key, _, data = line.partition(":")
+                values[key] = int(data.split()[0])
+            total = values["MemTotal"]
+            available = values.get("MemAvailable")
+            if available is None:
+                available = (values.get("MemFree", 0) + values.get("Buffers", 0)
+                             + values.get("Cached", 0))
+            used = max(0, total - available)
+            return 100.0 * used / total, used / 1048576.0, total / 1048576.0
+        if os.name == "nt":
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
                 _fields_ = [
-                    ("cb", ctypes.c_ulong), ("page_faults", ctypes.c_ulong),
-                    ("peak_ws", ctypes.c_size_t), ("working_set", ctypes.c_size_t),
+                    ("length", ctypes.c_ulong), ("load", ctypes.c_ulong),
+                    ("total", ctypes.c_ulonglong), ("available", ctypes.c_ulonglong),
+                    ("total_pagefile", ctypes.c_ulonglong),
+                    ("available_pagefile", ctypes.c_ulonglong),
+                    ("total_virtual", ctypes.c_ulonglong),
+                    ("available_virtual", ctypes.c_ulonglong),
+                    ("available_extended", ctypes.c_ulonglong),
+                ]
+
+            info = MemoryStatus()
+            info.length = ctypes.sizeof(info)
+            api = ctypes.WinDLL("kernel32", use_last_error=True)
+            api.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(MemoryStatus)]
+            api.GlobalMemoryStatusEx.restype = ctypes.c_int
+            if api.GlobalMemoryStatusEx(ctypes.byref(info)) and info.total:
+                used = info.total - info.available
+                return (100.0 * used / info.total,
+                        used / 1073741824.0, info.total / 1073741824.0)
+        import psutil
+        mem = psutil.virtual_memory()
+        return (float(mem.percent), (mem.total - mem.available) / 1073741824.0,
+                mem.total / 1073741824.0)
+    except (OSError, ValueError, KeyError, ImportError, AttributeError, ZeroDivisionError):
+        return None
+
+
+def _hud_memory_mb():
+    """Current RSS of PYRION, not the RAM usage of the full system."""
+    try:
+        if sys.platform.startswith("linux"):
+            status = Path("/proc/self/status").read_text(encoding="ascii")
+            for line in status.splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+            pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[1])
+            return pages * os.sysconf("SC_PAGE_SIZE") / 1048576.0
+        if os.name == "nt":
+            import ctypes
+
+            class ProcessMemoryCounters(ctypes.Structure):
+                _fields_ = [
+                    ("size", ctypes.c_ulong), ("page_faults", ctypes.c_ulong),
+                    ("peak_working_set", ctypes.c_size_t),
+                    ("working_set", ctypes.c_size_t),
                     ("peak_paged_pool", ctypes.c_size_t),
                     ("paged_pool", ctypes.c_size_t),
                     ("peak_nonpaged_pool", ctypes.c_size_t),
@@ -449,19 +541,25 @@ def _hud_memory_mb():
                     ("pagefile", ctypes.c_size_t),
                     ("peak_pagefile", ctypes.c_size_t),
                 ]
-            counters = Counters()
-            counters.cb = ctypes.sizeof(counters)
-            process = ctypes.windll.kernel32.GetCurrentProcess()
-            if ctypes.windll.psapi.GetProcessMemoryInfo(
-                process, ctypes.byref(counters), counters.cb
+
+            counters = ProcessMemoryCounters()
+            counters.size = ctypes.sizeof(counters)
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            psapi = ctypes.WinDLL("psapi", use_last_error=True)
+            kernel.GetCurrentProcess.restype = ctypes.c_void_p
+            psapi.GetProcessMemoryInfo.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ProcessMemoryCounters), ctypes.c_ulong
+            ]
+            psapi.GetProcessMemoryInfo.restype = ctypes.c_int
+            if psapi.GetProcessMemoryInfo(
+                kernel.GetCurrentProcess(), ctypes.byref(counters), counters.size
             ):
                 return counters.working_set / 1048576.0
-        if sys.platform == "darwin":
-            import resource
-            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1048576.0
-    except (OSError, ValueError, AttributeError, ImportError):
-        pass
-    return None
+        import psutil
+        return psutil.Process(os.getpid()).memory_info().rss / 1048576.0
+    except (OSError, ValueError, ImportError, AttributeError):
+        return None
+
 
 
 class Pyrion3DApp(tk.Tk):
@@ -498,7 +596,13 @@ class Pyrion3DApp(tk.Tk):
         self.render_ms = 0.0
         self.average_fps = 0.0
         self.cpu_percent = 0.0
+        self.cpu_render_percent = 0.0
+        self.cpu_system_percent = None
+        self.system_memory = None
         self.ram_mb = None
+        self.update_ms = 0.0
+        self._render_cpu_interval = 0.0
+        self._system_cpu_prev = _hud_cpu_snapshot()
         self._fps_count = 0
         self._fps_periods = 0
         self._frame_time_history = []
@@ -633,8 +737,9 @@ class Pyrion3DApp(tk.Tk):
         if width < 100 or height < 100:
             return
         self._width, self._height = width, height
-        self.canvas.delete("all")
         draw_start = time.perf_counter()
+        cpu_draw_start = time.process_time()
+        self.canvas.delete("all")
         diameter = min(height * 0.60, width * 0.48, 520)
         self._orb_radius = diameter * 0.50
         self.visible_triangles = 0
@@ -649,6 +754,7 @@ class Pyrion3DApp(tk.Tk):
                 diameter * factor, draw_graticules=False
             )
         self.render_ms = (time.perf_counter() - draw_start) * 1000.0
+        self._render_cpu_interval += max(0.0, time.process_time() - cpu_draw_start)
         self._draw_hud()
 
 
@@ -667,77 +773,111 @@ class Pyrion3DApp(tk.Tk):
         if self._width < 360:
             return
         canvas = self.canvas
-        x = 20
+        x, right = 20, 308
         full = self.info_mode == "diagnostico"
-        canvas.create_text(
-            x, 20, text="PYRION 3D  /  " + str(self.scene.get("name", "Scene")),
-            anchor="nw", fill="#71cfff", font=("TkDefaultFont", 9, "bold")
-        )
-        canvas.create_rectangle(
-            208, 16, 306, 40, outline="#345878", fill="#10243c", width=1
-        )
-        canvas.create_text(
-            257, 28, text="COMPACTO" if full else "DETALLES",
-            fill="#d5eaff", font=("TkDefaultFont", 9)
-        )
-        status = ("FLUIDO" if self.fps >= 50 else
-                  "ACEPTABLE" if self.fps >= 25 else "LENTO")
-        # FPS and frame time come from measured frame intervals, not estimates.
-        lines = [
-            ("FPS", "%.1f" % self.fps),
-            ("FRAME", "%.1f ms" % self.frame_ms),
-            ("CPU PROCESO", "%.1f%%" % self.cpu_percent),
-            ("RAM PROCESO", "%.1f MB" % self.ram_mb if self.ram_mb is not None else "--"),
-            ("TRIANGULOS", str(self.visible_triangles)),
-            ("ESTADO", status if self.running else "PAUSADO"),
-        ]
-        if full:
-            durations = sorted(self._frame_time_history, reverse=True)
-            slow_frames = durations[:max(1, math.ceil(len(durations) * 0.01))]
-            low = len(slow_frames) / sum(slow_frames) if slow_frames else 0.0
-            vertices = sum(len(item["renderer"].mesh.vertices) for item in self.objects)
-            total_faces = sum(len(item["renderer"].mesh.faces) for item in self.objects)
-            seconds = int(time.perf_counter() - self.started_at)
-            lines = [
-                ("ESCENA", str(self.scene.get("name", "Scene"))),
-                ("FPS", "%.1f" % self.fps),
-                ("FPS PROMEDIO", "%.1f" % self.average_fps),
-                ("FPS 1% BAJO", "%.1f" % low if len(durations) >= 60 else "--"),
-                ("FRAME", "%.1f ms" % self.frame_ms),
-                ("RENDER", "%.1f ms" % self.render_ms),
-                ("CPU PROCESO", "%.1f%%" % self.cpu_percent),
-                ("RAM PROCESO", "%.1f MB" % self.ram_mb if self.ram_mb is not None else "--"),
-                ("MODELOS", str(len(self.objects))),
-                ("VERTICES", str(vertices)),
-                ("TRIANGULOS", str(self.visible_triangles) + " / " + str(total_faces)),
-                ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
-                ("UPTIME", "%02d:%02d:%02d" % (seconds // 3600, (seconds // 60) % 60, seconds % 60)),
+        canvas.create_text(x, 20, text="PYRION 3D / " + str(self.scene.get("name", "Scene")),
+                           anchor="nw", fill="#71cfff", font=("TkDefaultFont", 9, "bold"))
+        canvas.create_rectangle(208, 16, 306, 40, outline="#345878",
+                                fill="#10243c", width=1)
+        canvas.create_text(257, 28, text="COMPACTO" if full else "DETALLES",
+                           fill="#d5eaff", font=("TkDefaultFont", 9))
+        status = ("MEDIENDO" if self.fps <= 0 else "FLUIDO" if self.fps >= 50
+                  else "ACEPTABLE" if self.fps >= 25 else "LENTO")
+        if not self.running:
+            status = "PAUSADO"
+        status_color = ("#ff8194" if status == "LENTO" else
+                        "#f4c376" if status in ("ACEPTABLE", "MEDIENDO") else "#75e2ad")
+
+        def fmt(value, suffix="", decimals=1):
+            return ("--" if value is None else
+                    ("%." + str(decimals) + "f" + suffix) % value)
+
+        memory = self.system_memory
+        cores = max(1, os.cpu_count() or 1)
+        process_cpu = self.cpu_percent / cores
+        render_cpu = self.cpu_render_percent / cores
+        ratio = (100.0 * self.render_ms / self.frame_ms
+                 if self.frame_ms > 0 else None)
+        ratio = min(100.0, ratio) if ratio is not None else None
+        if not full:
+            rows = [
+                ("FPS", fmt(self.fps)),
+                ("FRAME", fmt(self.frame_ms, " ms")),
+                ("RENDER 3D", fmt(self.render_ms, " ms")),
+                ("CPU PYRION", fmt(process_cpu, "%")),
+                ("RAM PYRION", fmt(self.ram_mb, " MB")),
+                ("TRIANGULOS", str(self.visible_triangles)),
                 ("ESTADO", status),
             ]
-        y = 50
-        for label, value in lines:
+        else:
+            frames = sorted(self._frame_time_history, reverse=True)
+            nslow = max(1, math.ceil(len(frames) * 0.01))
+            low_fps = nslow / sum(frames[:nslow]) if len(frames) >= 60 else None
+            vertices = sum(len(o["renderer"].mesh.vertices) for o in self.objects)
+            faces = sum(len(o["renderer"].mesh.faces) for o in self.objects)
+            up = int(time.perf_counter() - self.started_at)
+            rows = [
+                ("#SISTEMA", ""),
+                ("CPU EQUIPO", fmt(self.cpu_system_percent, "%")),
+                ("RAM EQUIPO", fmt(memory[0], "%") if memory else "--"),
+                ("RAM USADA", ("%.1f / %.1f GB" % (memory[1], memory[2])) if memory else "--"),
+                ("NUCLEOS LOG.", str(cores)),
+                ("#PYRION", ""),
+                ("CPU PYRION", fmt(process_cpu, "%")),
+                ("CPU 1 NUCLEO", fmt(self.cpu_percent, "%")),
+                ("RAM PYRION", fmt(self.ram_mb, " MB")),
+                ("TIEMPO ACTIVO", "%02d:%02d:%02d" % (
+                    up // 3600, (up // 60) % 60, up % 60)),
+                ("#MOTOR 3D", ""),
+                ("ESCENA", str(self.scene.get("name", "Scene"))),
+                ("FPS", fmt(self.fps)),
+                ("FPS PROMEDIO", fmt(self.average_fps)),
+                ("FPS 1% BAJO", fmt(low_fps)),
+                ("FRAME", fmt(self.frame_ms, " ms")),
+                ("RENDER", fmt(self.render_ms, " ms")),
+                ("UPDATE", fmt(self.update_ms, " ms")),
+                ("CPU RENDER", fmt(render_cpu, "%")),
+                ("% FRAME 3D", fmt(ratio, "%")),
+                ("MODELOS", str(len(self.objects))),
+                ("VERTICES", str(vertices)),
+                ("TRIANGULOS", "%s / %s" % (self.visible_triangles, faces)),
+                ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
+                ("ESTADO", status),
+            ]
+        y = 51
+        for label, value in rows:
+            if y + 15 >= self._height:
+                break
+            if label.startswith("#"):
+                canvas.create_text(x, y + 1, text=label[1:], anchor="nw",
+                                   fill="#71cfff", font=("TkDefaultFont", 9, "bold"))
+                y += 22
+                continue
             canvas.create_text(x, y, text=label, anchor="nw",
                                fill="#92aaca", font=("TkDefaultFont", 9))
-            canvas.create_text(308, y, text=value, anchor="ne",
-                               fill="#d1e6fa" if label != "ESTADO" else "#75e2ad",
+            canvas.create_text(right, y, text=value, anchor="ne",
+                               fill=status_color if label == "ESTADO" else "#d1e6fa",
                                font=("TkDefaultFont", 9))
-            y += 19
+            y += 18
 
     def _frame(self):
         try:
             now = time.perf_counter()
-            elapsed = max(0.0, min(0.1, now - self.last_time))
+            raw_elapsed = max(0.0, now - self.last_time)
             self.last_time = now
+            elapsed = min(0.1, raw_elapsed)  # Cap animation delta, not FPS measurements.
+            update_start = time.perf_counter()
             if self.running:
                 for item in self.objects:
                     renderer = item["renderer"]
                     renderer.rotation_y = (
                         renderer.rotation_y + item["speed"] * self.spin_rate * elapsed
                     ) % (math.pi * 2)
+            self.update_ms = (time.perf_counter() - update_start) * 1000.0
             self.frames += 1
             self._fps_count += 1
-            if elapsed > 0:
-                self._frame_time_history.append(elapsed)
+            if raw_elapsed > 0:
+                self._frame_time_history.append(raw_elapsed)
                 self._frame_time_history = self._frame_time_history[-600:]
             interval = now - self._fps_start
             if interval >= 0.6:
@@ -748,7 +888,15 @@ class Pyrion3DApp(tk.Tk):
                 self.cpu_percent = 100.0 * max(
                     0.0, time.process_time() - self._cpu_start
                 ) / interval
+                self.cpu_render_percent = 100.0 * self._render_cpu_interval / interval
+                system_snapshot = _hud_cpu_snapshot()
+                self.cpu_system_percent = _hud_cpu_usage(
+                    self._system_cpu_prev, system_snapshot
+                )
+                self._system_cpu_prev = system_snapshot
+                self.system_memory = _hud_system_memory()
                 self.ram_mb = _hud_memory_mb()
+                self._render_cpu_interval = 0.0
                 self._cpu_start = time.process_time()
                 self._fps_count = 0
                 self._fps_start = now
@@ -761,7 +909,6 @@ class Pyrion3DApp(tk.Tk):
 def run():
     app = Pyrion3DApp()
     app.mainloop()
-
 
 
 
