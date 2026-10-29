@@ -13,7 +13,7 @@
       "name": "PYRION",
       "description": "Entorno gráfico y sistema visual de PYRION Mini OS",
       "config": "PYRION/config.json",
-      "activo": true
+      "activo": false
     }
   ]
 }
