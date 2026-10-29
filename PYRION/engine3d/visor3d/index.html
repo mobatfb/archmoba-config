@@ -34,7 +34,7 @@
     <div class="brand">PYRION 3D <small>· MODELOS</small></div>
     <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
   </header>
-  <canvas id="visor" aria-label="Visualización fija de la malla 3D seleccionada"></canvas>
+  <canvas id="visor" aria-label="Visualización 3D con rotación automática de la malla seleccionada"></canvas>
   <div class="control">
     <label for="zoom">Zoom</label>
     <input id="zoom" type="range" min="50" max="220" value="100">
@@ -58,7 +58,10 @@
   let active = null;
   let serial = 0;
   let zoom = 1, width = 1, height = 1;
-  const yaw = 0.55, pitch = 0.22; // Vista fija: solo se permite zoom.
+  let yaw = 0.55;
+  const pitch = 0.22; // Inclinación fija: el modelo gira sobre su eje Y.
+  const ROTATION_SPEED = Math.PI / 9; // 20 grados por segundo.
+  const FRAME_INTERVAL = 1000 / 30; // Hasta 30 FPS en el renderizador Canvas 2D.
 
   function validPath(path) {
     return typeof path === 'string' &&
@@ -199,9 +202,14 @@
       const rx=x*cy+z*sy,rz=-x*sy+z*cy;
       return [rx,y*cp-rz*sp,y*sp+rz*cp];
     });
-    const bounds2=[0,1].map(i=>[Math.min(...points.map(p=>p[i])),Math.max(...points.map(p=>p[i]))]);
-    const scale=Math.min(width*.78/Math.max(.1,bounds2[0][1]-bounds2[0][0]),
-                         height*.76/Math.max(.1,bounds2[1][1]-bounds2[1][0])) * zoom;
+    // Escala constante durante la rotacion: evita que el modelo pulse
+    // o cambie de tamaño al girar sobre el eje vertical.
+    const xSpan=bounds[0][1]-bounds[0][0];
+    const ySpan=bounds[1][1]-bounds[1][0];
+    const zSpan=bounds[2][1]-bounds[2][0];
+    const diameter=Math.hypot(xSpan,zSpan);
+    const scale=Math.min(width*.78/Math.max(.1,diameter),
+                         height*.76/Math.max(.1,ySpan*Math.cos(pitch)+diameter*Math.abs(Math.sin(pitch)))) * zoom;
     const screen=points.map(p=>{const k=4.8/(4.8-p[2]);return [width/2+p[0]*scale*k,height/2-p[1]*scale*k];});
     const col=active.color, metal=active.metallic, rough=active.roughness;
     const triangles=[];
@@ -302,7 +310,24 @@
   },{passive:false});
   if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
   else window.addEventListener('resize',resize);
+
+  // Animacion propia del visor: recarga de modelos y zoom siguen funcionando.
+  // Un solo bucle de animacion por pagina; no se crean bucles al cambiar modelo.
+  let lastFrame=0;
+  function animate(now) {
+    if (!lastFrame) lastFrame=now;
+    const elapsed=now-lastFrame;
+    if (elapsed>=FRAME_INTERVAL) {
+      lastFrame=now;
+      if (active && !document.hidden) {
+        yaw=(yaw+ROTATION_SPEED*Math.min(elapsed,100)/1000)%(2*Math.PI);
+        render();
+      }
+    }
+    requestAnimationFrame(animate);
+  }
   resize();init();
+  requestAnimationFrame(animate);
 })();
 </script>
 </body>
