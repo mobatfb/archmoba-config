@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 
 TOOL_NAME = "Reproductor MP3"
 TOOL_DESCRIPTION = "Reproductor MP3 profesional con playlist, portada, metadata ID3 y reanudacion de reproduccion."
-TOOL_VERSION = "2.0.3"
+TOOL_VERSION = "2.0.4"
 
 
 class Mp3PlayerTool(ttk.Frame):
@@ -30,6 +30,9 @@ class Mp3PlayerTool(ttk.Frame):
         self.base_position = 0.0
         self.started_ticks = 0.0
         self.paused = False
+        self.playing = False
+        self._resume_positions = {}
+        self._last_position_save = time.monotonic()
         self.dragging_progress = False
         self.finished_guard = False
         self.cover_photo = None
@@ -540,6 +543,7 @@ class Mp3PlayerTool(ttk.Frame):
         try:
             self._pygame.mixer.music.stop()
             self._pygame.mixer.music.load(path)
+            self.playing = False
         except Exception as exc:
             messagebox.showerror("No se pudo abrir el MP3", str(exc))
             return False
@@ -574,6 +578,43 @@ class Mp3PlayerTool(ttk.Frame):
         return True
 
     def _start_playback(self, position=0.0):
+        """Inicia la reproducción y activa un reloj independiente de get_busy()."""
+        if not self.ensure_audio():
+            return False
+        if not self.loaded_path:
+            if not self.playlist:
+                self.add_files()
+                return False
+            index = self.current_index if 0 <= self.current_index < len(self.playlist) else 0
+            if not self._load_track(index, autoplay=False):
+                return False
+        position = max(0.0, float(position))
+        if self.duration > 0:
+            position = min(position, self.duration)
+        try:
+            self._pygame.mixer.music.play(start=position)
+        except Exception:
+            try:
+                self._pygame.mixer.music.play()
+                if position > 0:
+                    self._pygame.mixer.music.set_pos(position)
+            except Exception as exc:
+                self.playing = False
+                self.paused = False
+                messagebox.showerror("Error de reproducción", str(exc), parent=self)
+                return False
+        self.base_position = position
+        self.started_ticks = time.monotonic()
+        self.playing = True
+        self.paused = False
+        self.finished_guard = False
+        self.play_btn.configure(text="⏸")
+        self.progress.set(self._position_to_progress(position))
+        self._update_time_label(position)
+        self.status_var.set(f"Reproduciendo · {self.title_var.get()}")
+        return True
+
+
         if not self.loaded_path and self.current_path():
             if not self._load_track(self.current_index, autoplay=False):
                 return
@@ -601,6 +642,48 @@ class Mp3PlayerTool(ttk.Frame):
         self.status_var.set(f"Reproduciendo · {self.title_var.get()}")
 
     def play_pause(self):
+        """Pausa/reanuda por estado propio, nunca por get_busy()."""
+        if not self.ensure_audio():
+            return
+        if not self.playlist:
+            self.add_files()
+            return
+        if self.current_index < 0:
+            if not self._load_track(0, autoplay=False):
+                return
+        if self.loaded_path != self.current_path():
+            if not self._load_track(self.current_index, autoplay=False):
+                return
+        if self.paused and self.playing:
+            try:
+                self._pygame.mixer.music.unpause()
+            except Exception as exc:
+                messagebox.showerror("Reanudar", str(exc), parent=self)
+                return
+            self.started_ticks = time.monotonic()
+            self.paused = False
+            self.play_btn.configure(text="⏸")
+            self.status_var.set(f"Reproduciendo · {self.title_var.get()}")
+            return
+        if self.playing:
+            position = self.current_position()
+            try:
+                self._pygame.mixer.music.pause()
+            except Exception as exc:
+                messagebox.showerror("Pausar", str(exc), parent=self)
+                return
+            self.base_position = position
+            self.paused = True
+            self.play_btn.configure(text="▶")
+            self.progress.set(self._position_to_progress(position))
+            self._update_time_label(position)
+            self.status_var.set("Pausado · posición conservada")
+            self._resume_positions[self.loaded_path] = position
+            self._schedule_save()
+            return
+        self._start_playback(self.base_position)
+
+
         if not self.playlist:
             self.add_files()
             return
@@ -638,6 +721,31 @@ class Mp3PlayerTool(ttk.Frame):
             self._start_playback(self.base_position)
 
     def stop(self, reset_ui=False):
+        self._remember_position(freeze=True)
+        if self.audio_ok:
+            try:
+                self._pygame.mixer.music.stop()
+            except Exception:
+                pass
+        self.playing = False
+        self.paused = False
+        self.finished_guard = True
+        self.play_btn.configure(text="▶")
+        if reset_ui:
+            self.loaded_path = None
+            self.duration = 0.0
+            self.base_position = 0.0
+            self.progress.set(0)
+            self.title_var.set("Sin reproducción")
+            self.artist_var.set("Selecciona o agrega canciones")
+            self.album_var.set("")
+            self.time_var.set("0:00 / 0:00")
+            self._set_cover(None)
+        else:
+            self.status_var.set("Detenido · posición guardada")
+        self._schedule_save()
+
+
         self._remember_position()
         if self.audio_ok:
             try:
@@ -677,6 +785,35 @@ class Mp3PlayerTool(ttk.Frame):
         self._load_track(idx, autoplay=True, start_position=0)
 
     def seek(self, seconds):
+        """Mover la barra conserva el estado de pausa o detención."""
+        if not self.loaded_path:
+            return
+        seconds = max(0.0, float(seconds))
+        if self.duration > 0:
+            seconds = min(seconds, self.duration)
+        was_paused = self.paused
+        was_playing = self.playing
+        if was_playing:
+            if not self._start_playback(seconds):
+                return
+            if was_paused:
+                try:
+                    self._pygame.mixer.music.pause()
+                except Exception as exc:
+                    messagebox.showerror("Pausar", str(exc), parent=self)
+                    return
+                self.base_position = seconds
+                self.paused = True
+                self.play_btn.configure(text="▶")
+                self.status_var.set("Pausado · posición conservada")
+        else:
+            self.base_position = seconds
+            self.progress.set(self._position_to_progress(seconds))
+            self._update_time_label(seconds)
+        self._resume_positions[self.loaded_path] = seconds
+        self._schedule_save()
+
+
         if not self.loaded_path:
             return
         seconds = max(0.0, min(float(seconds), self.duration if self.duration else float(seconds)))
@@ -693,6 +830,16 @@ class Mp3PlayerTool(ttk.Frame):
         self._schedule_save()
 
     def current_position(self):
+        """Reloj monotónico que no se congela si pygame reporta busy=False."""
+        if not self.loaded_path:
+            return 0.0
+        if not self.playing or self.paused:
+            return self.base_position
+        elapsed = max(0.0, time.monotonic() - self.started_ticks)
+        position = self.base_position + elapsed
+        return min(position, self.duration) if self.duration > 0 else position
+
+
         if not self.loaded_path:
             return 0.0
         if self.paused:
@@ -706,7 +853,22 @@ class Mp3PlayerTool(ttk.Frame):
         elapsed = max(0.0, time.monotonic() - self.started_ticks)
         return self.base_position + elapsed
 
-    def _remember_position(self):
+    def _remember_position(self, freeze=False):
+        """Guarda la posición sin alterar el reloj mientras suena la canción."""
+        path = self.loaded_path
+        if not path:
+            return
+        position = self.current_position()
+        if self.duration and position >= max(0.0, self.duration - 2):
+            position = 0.0
+        position = max(0.0, position)
+        if freeze or not self.playing or self.paused:
+            self.base_position = position
+        self._resume_positions[path] = position
+
+    # ---------- Progreso / volumen ----------
+
+
         path = self.loaded_path
         if not path:
             return
@@ -755,6 +917,49 @@ class Mp3PlayerTool(ttk.Frame):
 
     # ---------- Temporizador ----------
     def _tick(self):
+        """Actualiza barra/tiempo y detecta el fin sin perder el temporizador."""
+        try:
+            if self.loaded_path:
+                pos = self.current_position()
+                if not self.dragging_progress:
+                    self.progress.set(self._position_to_progress(pos))
+                    self._update_time_label(pos)
+                if self.playing and not self.paused and self.duration > 0:
+                    # get_busy sólo se consulta para detectar el final real;
+                    # nunca para avanzar el reloj ni para decidir si pausar.
+                    try:
+                        busy = bool(self._pygame.mixer.music.get_busy())
+                    except Exception:
+                        busy = True
+                    if (not busy and pos >= max(0.0, self.duration - 0.75)
+                            and not self.finished_guard
+                            and time.monotonic() - self.started_ticks > 0.5):
+                        self.finished_guard = True
+                        self.playing = False
+                        self._resume_positions[self.loaded_path] = 0.0
+                        self.base_position = 0.0
+                        self.next_track()
+                now = time.monotonic()
+                if now - self._last_position_save >= 8.0:
+                    self._last_position_save = now
+                    if self.loaded_path:
+                        self._resume_positions[self.loaded_path] = self.current_position()
+                    self._schedule_save()
+        except tk.TclError:
+            return
+        except Exception as exc:
+            # Un error puntual no debe detener para siempre la barra.
+            try:
+                self.status_var.set(f"Aviso del reproductor: {exc}")
+            except Exception:
+                pass
+        try:
+            if self.winfo_exists():
+                self.after(250, self._tick)
+        except tk.TclError:
+            pass
+
+
         try:
             if self.loaded_path:
                 pos = self.current_position()
