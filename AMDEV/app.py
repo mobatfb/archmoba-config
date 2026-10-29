@@ -16,9 +16,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.22"
+APP_VERSION = "1.0.23"
 APP_UPDATE_DATE = "29/10/2026"
-APP_UPDATE_TIME = "16:12"
+APP_UPDATE_TIME = "16:30"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-dev"
@@ -712,78 +712,68 @@ class AMDEVApp(tk.Tk):
         return base64.b64decode(encoded).decode("utf-8-sig")
 
     def load_apps(self):
+        """Recarga siempre el catalogo de GitHub, incluso en MODO_LOCAL.
+
+        MODO_LOCAL solo decide de donde se ejecutan los programas: no
+        debe limitar que aplicaciones aparecen al hacer clic derecho.
+        """
         for child in self.list_frame.winfo_children():
             child.destroy()
 
-        text = None
-        try:
-            text = self._request_repo_file_main(APPS_REPO_PATH)
-            if not MODO_LOCAL:
-                self.apps_cache.write_text(text, encoding="utf-8")
-            self.status.configure(text=(
-                "Catálogo cargado desde ./AMDEV/apps.json."
-                if MODO_LOCAL else "Catálogo actualizado desde GitHub."
-            ))
-        except Exception as exc:
-            if not MODO_LOCAL and self.apps_cache.is_file():
-                text = self.apps_cache.read_text(encoding="utf-8-sig")
-                self.status.configure(text=f"Usando catálogo local. GitHub no respondió: {exc}")
-            else:
-                self.status.configure(text=f"No se pudo cargar apps.json: {exc}")
-                return
+        payload = None
+        catalog_origin = None
+        last_error = None
+        sources = (
+            (
+                "GitHub",
+                lambda: self._request_remote_repo_file_main(
+                    APPS_REPO_PATH, timeout=5
+                ),
+            ),
+            (
+                "cache",
+                lambda: self.apps_cache.read_text(encoding="utf-8-sig"),
+            ),
+            (
+                "local",
+                lambda: _local_path(APPS_REPO_PATH).read_text(
+                    encoding="utf-8-sig"
+                ),
+            ),
+        )
 
-        try:
-            payload = json.loads(text)
-            entries = payload.get("apps", [])
-            if not isinstance(entries, list):
-                raise ValueError("El campo apps debe ser una lista.")
+        for origin, reader in sources:
+            try:
+                text = reader()
+                candidate = json.loads(text)
+                if not isinstance(candidate, dict) or not isinstance(
+                    candidate.get("apps"), list
+                ):
+                    raise ValueError("apps.json debe contener una lista apps.")
 
-            # En modo local se conservan las apps locales, pero el campo
-            # active publicado en GitHub controla su visibilidad.
-            remote_flags = None
-            if MODO_LOCAL:
-                remote_catalog = None
-                source = None
-                try:
-                    remote_text = self._request_remote_repo_file_main(
-                        APPS_REPO_PATH, timeout=4
-                    )
-                    remote_catalog = json.loads(remote_text)
-                    if not isinstance(remote_catalog.get("apps"), list):
-                        raise ValueError("Catálogo remoto inválido.")
-                    self.apps_cache.write_text(remote_text, encoding="utf-8")
-                    source = "GitHub"
-                except Exception:
-                    if self.apps_cache.is_file():
-                        try:
-                            remote_catalog = json.loads(
-                                self.apps_cache.read_text(encoding="utf-8-sig")
-                            )
-                            if not isinstance(remote_catalog.get("apps"), list):
-                                raise ValueError("Caché de aplicaciones inválida.")
-                            source = "caché"
-                        except Exception:
-                            remote_catalog = None
+                payload = candidate
+                catalog_origin = origin
+                if origin == "GitHub":
+                    try:
+                        self.apps_cache.write_text(text, encoding="utf-8")
+                    except OSError:
+                        pass
+                break
+            except Exception as exc:
+                last_error = exc
 
-                if remote_catalog is not None:
-                    remote_flags = {
-                        str(item.get("id", "")).strip(): _is_app_active(item)
-                        for item in remote_catalog["apps"]
-                        if isinstance(item, dict) and str(item.get("id", "")).strip()
-                    }
-                    self.status.configure(
-                        text="Aplicaciones locales; visibilidad desde " + source
-                    )
-                else:
-                    self.status.configure(
-                        text="Sin conexión: usando active del catálogo local."
-                    )
-
+        self._catalog_source = catalog_origin or "sin catalogo"
+        if payload is None:
+            self.apps = []
+            self.selected_app = None
+            self.status.configure(
+                text=f"No se pudo cargar apps.json: {last_error}"
+            )
+        else:
+            # 'active' = false elimina la app de toda la interfaz.
             self.apps = [
-                item for item in entries
-                if isinstance(item, dict)
-                and (remote_flags.get(str(item.get("id", "")).strip(), _is_app_active(item))
-                     if remote_flags is not None else _is_app_active(item))
+                item for item in payload["apps"]
+                if _is_app_active(item)
             ]
 
             if self.selected_app:
@@ -796,16 +786,20 @@ class AMDEVApp(tk.Tk):
                     None,
                 )
                 self.selected_app = dict(refreshed) if refreshed else None
-                if hasattr(self, "floating") and self.floating.winfo_exists():
-                    self.floating._draw()
-        except Exception as exc:
-            self.status.configure(text=f"apps.json no es válido: {exc}")
-            return
+
+            execution = "local" if MODO_LOCAL else "GitHub"
+            self.status.configure(
+                text=f"Catalogo: {catalog_origin} | Ejecucion: {execution}"
+            )
+
+        if hasattr(self, "floating") and self.floating.winfo_exists():
+            self.floating._draw()
 
         if not self.apps:
             tk.Label(
-                self.list_frame, text="No hay aplicaciones disponibles.",
-                bg=BG, fg=MUTED_FG, font=("Segoe UI", 10)
+                self.list_frame,
+                text="No hay aplicaciones disponibles.",
+                bg=BG, fg=MUTED_FG, font=("Segoe UI", 10),
             ).pack(anchor="w")
             return
 
@@ -1572,6 +1566,11 @@ class AMDEVApp(tk.Tk):
                 )
 
         menu.add_separator()
+        execution = "local" if MODO_LOCAL else "GitHub"
+        menu.add_command(
+            label=f"Fuente: {self._catalog_source} | Ejecucion: {execution}",
+            state="disabled",
+        )
         menu.add_command(label="Recargar aplicaciones", command=self.load_apps)
         menu.add_command(label="Actualizar AMDEV", command=self.update_amdev_now)
         menu.add_command(label="Abrir AMDEV", command=self.show_main)
