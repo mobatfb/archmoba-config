@@ -615,32 +615,6 @@ class Mp3PlayerTool(ttk.Frame):
         return True
 
 
-        if not self.loaded_path and self.current_path():
-            if not self._load_track(self.current_index, autoplay=False):
-                return
-        if not self.loaded_path:
-            if self.playlist:
-                self._load_track(0, autoplay=False)
-            else:
-                self.add_files()
-                return
-        try:
-            self._pygame.mixer.music.play(start=max(0.0, float(position)))
-        except Exception:
-            try:
-                self._pygame.mixer.music.play()
-                if position > 0:
-                    self._pygame.mixer.music.set_pos(float(position))
-            except Exception as exc:
-                messagebox.showerror("Error de reproduccion", str(exc))
-                return
-        self.base_position = max(0.0, float(position))
-        self.started_ticks = time.monotonic()
-        self.paused = False
-        self.finished_guard = False
-        self.play_btn.configure(text="⏸")
-        self.status_var.set(f"Reproduciendo · {self.title_var.get()}")
-
     def play_pause(self):
         """Pausa/reanuda por estado propio, nunca por get_busy()."""
         if not self.ensure_audio():
@@ -684,42 +658,6 @@ class Mp3PlayerTool(ttk.Frame):
         self._start_playback(self.base_position)
 
 
-        if not self.playlist:
-            self.add_files()
-            return
-        if self.current_index < 0:
-            self._load_track(0, autoplay=False)
-
-        if self.loaded_path != self.current_path():
-            self._load_track(self.current_index, autoplay=False)
-
-        try:
-            busy = self._pygame.mixer.music.get_busy() if self.audio_ok else False
-        except Exception:
-            busy = False
-
-        if self.paused:
-            try:
-                self._pygame.mixer.music.unpause()
-                self.started_ticks = time.monotonic()
-                self.paused = False
-                self.play_btn.configure(text="⏸")
-                self.status_var.set(f"Reproduciendo · {self.title_var.get()}")
-            except Exception as exc:
-                messagebox.showerror("Error", str(exc))
-        elif busy:
-            self._remember_position()
-            try:
-                self._pygame.mixer.music.pause()
-                self.paused = True
-                self.play_btn.configure(text="▶")
-                self.status_var.set("Pausa · posicion guardada")
-                self._schedule_save()
-            except Exception as exc:
-                messagebox.showerror("Error", str(exc))
-        else:
-            self._start_playback(self.base_position)
-
     def stop(self, reset_ui=False):
         self._remember_position(freeze=True)
         if self.audio_ok:
@@ -745,28 +683,6 @@ class Mp3PlayerTool(ttk.Frame):
             self.status_var.set("Detenido · posición guardada")
         self._schedule_save()
 
-
-        self._remember_position()
-        if self.audio_ok:
-            try:
-                self._pygame.mixer.music.stop()
-            except Exception:
-                pass
-        self.paused = False
-        self.play_btn.configure(text="▶")
-        if reset_ui:
-            self.loaded_path = None
-            self.duration = 0.0
-            self.base_position = 0.0
-            self.progress.set(0)
-            self.title_var.set("Sin reproduccion")
-            self.artist_var.set("Selecciona o agrega canciones")
-            self.album_var.set("")
-            self.time_var.set("0:00 / 0:00")
-            self._set_cover(None)
-        else:
-            self.status_var.set("Detenido · posicion guardada")
-        self._schedule_save()
 
     def previous_track(self):
         if not self.playlist:
@@ -814,21 +730,6 @@ class Mp3PlayerTool(ttk.Frame):
         self._schedule_save()
 
 
-        if not self.loaded_path:
-            return
-        seconds = max(0.0, min(float(seconds), self.duration if self.duration else float(seconds)))
-        was_paused = self.paused
-        self._start_playback(seconds)
-        if was_paused:
-            try:
-                self._pygame.mixer.music.pause()
-                self.paused = True
-                self.play_btn.configure(text="▶")
-            except Exception:
-                pass
-        self._resume_positions[self.loaded_path] = seconds
-        self._schedule_save()
-
     def current_position(self):
         """Reloj monotónico que no se congela si pygame reporta busy=False."""
         if not self.loaded_path:
@@ -839,19 +740,6 @@ class Mp3PlayerTool(ttk.Frame):
         position = self.base_position + elapsed
         return min(position, self.duration) if self.duration > 0 else position
 
-
-        if not self.loaded_path:
-            return 0.0
-        if self.paused:
-            return self.base_position
-        try:
-            busy = self._pygame.mixer.music.get_busy()
-        except Exception:
-            busy = False
-        if not busy:
-            return self.base_position
-        elapsed = max(0.0, time.monotonic() - self.started_ticks)
-        return self.base_position + elapsed
 
     def _remember_position(self, freeze=False):
         """Guarda la posición sin alterar el reloj mientras suena la canción."""
@@ -869,16 +757,6 @@ class Mp3PlayerTool(ttk.Frame):
     # ---------- Progreso / volumen ----------
 
 
-        path = self.loaded_path
-        if not path:
-            return
-        pos = self.current_position()
-        if self.duration and pos >= max(0.0, self.duration - 2):
-            pos = 0.0
-        self.base_position = max(0.0, pos)
-        self._resume_positions[path] = self.base_position
-
-    # ---------- Progreso / volumen ----------
     def _position_to_progress(self, position):
         if self.duration <= 0:
             return 0.0
@@ -959,31 +837,6 @@ class Mp3PlayerTool(ttk.Frame):
         except tk.TclError:
             pass
 
-
-        try:
-            if self.loaded_path:
-                pos = self.current_position()
-                if not self.dragging_progress:
-                    self.progress.set(self._position_to_progress(pos))
-                    self._update_time_label(pos)
-
-                if not self.paused and self.duration > 0:
-                    try:
-                        busy = self._pygame.mixer.music.get_busy() if self.audio_ok else False
-                    except Exception:
-                        busy = False
-                    if not busy and pos >= max(0.0, self.duration - 1.2) and not self.finished_guard:
-                        self.finished_guard = True
-                        self._resume_positions[self.loaded_path] = 0.0
-                        self.base_position = 0.0
-                        self.next_track()
-
-                # Persistencia periodica sin escribir cada 250 ms.
-                if int(time.monotonic()) % 8 == 0:
-                    self._resume_positions[self.loaded_path] = pos
-            self.after(250, self._tick)
-        except tk.TclError:
-            return
 
     def _update_time_label(self, position):
         self.time_var.set(f"{self._fmt_time(position)} / {self._fmt_time(self.duration)}")
