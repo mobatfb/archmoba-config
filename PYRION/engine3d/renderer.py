@@ -34,16 +34,18 @@ class SoftwareRenderer:
             raise ValueError("Invalid material base_color") from exc
         self._metallic = max(0.0, min(1.0, float(self.material.get("metallic", 0))))
         self._roughness = max(0.04, min(1.0, float(self.material.get("roughness", 0.5))))
+        self.material_mode = "mat"
         self._texels = None
         texture = self.material.get("_texture_image")
         if texture is not None:
             pixels = texture.load()
             tw, th = texture.size
             self._texels = [
-                pixels[min(th - 1, max(0, int(face.latitude / math.pi * (th - 1)))),
-                       min(tw - 1, max(0, int((face.longitude % (2 * math.pi)) / (2 * math.pi) * (tw - 1))))]
+                pixels[min(tw - 1, max(0, int((face.longitude % (2 * math.pi)) / (2 * math.pi) * (tw - 1)))),
+                       min(th - 1, max(0, int(face.latitude / math.pi * (th - 1))))]
                 for face in mesh.faces
             ]
+        self.has_image_texture = self._texels is not None
         self.camera_distance = 3.85
         self.rotation_y = 0.0
         self.rotation_x = -0.25
@@ -100,8 +102,9 @@ class SoftwareRenderer:
             ))
         metallic, rough = self._metallic, self._roughness
         base = self._base_rgb
-        if texel is not None:
-            base = tuple(base[k] * (0.30 + 0.70 * texel[k] / 255.0)
+        if self.material_mode == "img" and texel is not None:
+            # Photo texture wrapped around the rotating 3D sphere.
+            base = tuple(0.88 * texel[k] + 0.12 * base[k]
                          for k in range(3))
         half_a = _unit(tuple(self._light_a[i] + view[i] for i in range(3)))
         half_b = _unit(tuple(self._light_b[i] + view[i] for i in range(3)))

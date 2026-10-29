@@ -3,6 +3,7 @@
 The desktop has no panels, labels, orbital rings or visible UI controls.
 The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
+import base64
 import math
 import json
 import urllib.request
@@ -15,8 +16,8 @@ import tkinter as tk
 from .mesh import SphereMesh
 from .renderer import SoftwareRenderer
 
-ENGINE_VERSION = "0.2.0"
-DESKTOP_VERSION = "0.4.7"
+ENGINE_VERSION = "0.2.1"
+DESKTOP_VERSION = "0.4.8"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -33,18 +34,32 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.7"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.8"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
 
+class _TkTexture:
+    """Wrap Tk's built-in GIF decoder as a mesh RGB pixel source."""
+
+    def __init__(self, photo):
+        self._photo = photo
+        self.size = (photo.width(), photo.height())
+
+    def load(self):
+        return self
+
+    def __getitem__(self, coords):
+        pixel = self._photo.get(*coords)
+        if isinstance(pixel, str):
+            if pixel.startswith("#") and len(pixel) == 7:
+                return tuple(int(pixel[i:i + 2], 16) for i in (1, 3, 5))
+            return tuple(int(channel) for channel in pixel.split()[:3])
+        return tuple(pixel[:3])
+
+
 def _scene_texture(relative_path):
-    """Optional JPEG/PNG texture; scene remains usable without Pillow."""
-    try:
-        from PIL import Image
-        from io import BytesIO
-    except ImportError:
-        return None
+    """Load remote/local scene texture; GIF works with standard Tkinter."""
     relative = Path(relative_path)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("Invalid scene texture path")
@@ -57,15 +72,24 @@ def _scene_texture(relative_path):
         else:
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
-                url, headers={"User-Agent": "PYRION/0.4.7"})
+                url, headers={"User-Agent": "PYRION/0.4.8"})
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:
             raise ValueError("Scene texture exceeds 8 MiB")
+        if relative.suffix.lower() == ".gif":
+            # Tkinter understands GIF natively: no Pillow installation needed.
+            photo = tk.PhotoImage(data=base64.b64encode(data).decode("ascii"))
+            return _TkTexture(photo)
+        try:
+            from PIL import Image
+            from io import BytesIO
+        except ImportError:
+            return None
         with Image.open(BytesIO(data)) as image:
             image.thumbnail((512, 512))
             return image.convert("RGB")
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, ValueError, urllib.error.URLError, tk.TclError):
         return None
 
 
@@ -281,6 +305,8 @@ class Pyrion3DApp(tk.Tk):
         self.visible_triangles = 0
         self.frames = 0
         self.info_mode = "compacto"
+        self.material_mode = "mat"
+        self.material_notice = ""
         self.fps = 0.0
         self.frame_ms = 0.0
         self.render_ms = 0.0
@@ -307,9 +333,11 @@ class Pyrion3DApp(tk.Tk):
         self._height = 1
         self._orb_radius = 1
 
-        # Controls are keyboard/mouse-only; no controls are drawn on the desktop.
+        # HUD includes interactive details and material buttons.
         self.bind("<space>", lambda _event: self.toggle_animation())
         self.bind("<F3>", self._toggle_hud_mode)
+        self.bind("<m>", self._toggle_material_mode)
+        self.bind("<M>", self._toggle_material_mode)
         self.bind("<Left>", lambda _event: self._speed(-0.15))
         self.bind("<Right>", lambda _event: self._speed(+0.15))
         self.bind("<plus>", lambda _event: self._zoom(+0.10))
@@ -449,8 +477,32 @@ class Pyrion3DApp(tk.Tk):
         self._draw_hud()
 
 
+    def _material_button_bounds(self):
+        if self._width >= 480:
+            return (316, 16, 456, 40)
+        return (20, 57, 160, 81)
+
+    def _toggle_material_mode(self, _event=None):
+        target = "img" if self.material_mode == "mat" else "mat"
+        if target == "img" and not any(
+            item["renderer"].has_image_texture for item in self.objects
+        ):
+            self.material_notice = "IMG NO DISPONIBLE"
+        else:
+            self.material_mode = target
+            for item in self.objects:
+                item["renderer"].material_mode = target
+            self.material_notice = ""
+        self._request_frame()
+
     def _hud_click(self, event):
-        if self._width >= 360 and 208 <= event.x <= 306 and 16 <= event.y <= 40:
+        if self._width < 360:
+            return False
+        x1, y1, x2, y2 = self._material_button_bounds()
+        if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+            self._toggle_material_mode()
+            return True
+        if 208 <= event.x <= 306 and 16 <= event.y <= 40:
             self.info_mode = "diagnostico" if self.info_mode == "compacto" else "compacto"
             self._request_frame()
             return True
@@ -475,6 +527,23 @@ class Pyrion3DApp(tk.Tk):
                                 fill="#10243c", width=1)
         canvas.create_text(257, 28, text="COMPACTO" if full else "DETALLES",
                            fill="#d5eaff", font=("TkDefaultFont", 9))
+        bx1, by1, bx2, by2 = self._material_button_bounds()
+        canvas.create_rectangle(
+            bx1, by1, bx2, by2, outline="#547b98",
+            fill="#244057" if self.material_mode == "img" else "#10243c",
+            width=1
+        )
+        canvas.create_text(
+            (bx1 + bx2) / 2, (by1 + by2) / 2,
+            text="MATERIAL: " + self.material_mode.upper(),
+            fill="#ffd895" if self.material_mode == "img" else "#d5eaff",
+            font=("TkDefaultFont", 9, "bold")
+        )
+        if self.material_notice:
+            canvas.create_text(
+                bx1, by2 + 4, anchor="nw", text=self.material_notice,
+                fill="#ff9e82", font=("TkDefaultFont", 8)
+            )
         status = ("MEDIENDO" if self.fps <= 0 else "FLUIDO" if self.fps >= 50
                   else "ACEPTABLE" if self.fps >= 25 else "LENTO")
         if not self.running:
@@ -541,7 +610,7 @@ class Pyrion3DApp(tk.Tk):
                 ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
                 ("ESTADO", status),
             ]
-        y = 66
+        y = 66 if self._width >= 480 else 105
         for label, value in rows:
             if y + 15 >= self._height:
                 break
