@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Visor multimedia tipo VLC integrado en PTM para imagenes, videos y musica, "
     "con playlist, arrastrar y soltar, progreso, volumen, velocidad y repeticion."
 )
-TOOL_VERSION = "1.1.4"
+TOOL_VERSION = "1.1.5"
 
 CHILD_FLAG = "--ptm-media-child"
 
@@ -788,20 +788,12 @@ class MultimediaViewerTool(ttk.Frame):
             anchor="w",
         ).grid(row=1, column=0, sticky="ew", pady=(1, 5))
 
-        # Canvas exterior redondeado. El frame nativo de VLC se mantiene
-        # dentro de un margen para que no tape las esquinas redondeadas.
-        stage_bg = style.lookup("TFrame", "background") or "#F0F0F0"
-        self.stage_canvas = tk.Canvas(
-            right, bg=stage_bg, highlightthickness=0, bd=0,
-        )
-        self.stage_canvas.grid(row=2, column=0, sticky="nsew")
-        self.stage_canvas.bind("<Configure>", self._on_stage_border_resize)
-
+        # Visor rectangular a tamaño completo, sin marco redondeado.
+        # El video de VLC se incrusta directamente en este frame.
         self.stage = tk.Frame(
-            self.stage_canvas, bg="#101010", highlightthickness=0, bd=0,
+            right, bg="#101010", highlightthickness=0, bd=0,
         )
-        self.stage.place(x=10, y=10, relwidth=1, relheight=1,
-                         width=-20, height=-20)
+        self.stage.grid(row=2, column=0, sticky="nsew")
         self.stage.bind("<Configure>", self._on_stage_resize)
         self.stage.bind("<Double-Button-1>", lambda _e: self.toggle_play())
 
@@ -1154,24 +1146,6 @@ class MultimediaViewerTool(ttk.Frame):
         return self.state_path.with_name("all_multimedia_cache.json")
 
     # ---------- Visor redondeado y pantalla completa ----------
-
-    def _on_stage_border_resize(self, event):
-        """Dibuja un contenedor redondeado sin tapar el video nativo."""
-        width = max(1, int(event.width))
-        height = max(1, int(event.height))
-        self.stage_canvas.delete("rounded_stage")
-        if width < 30 or height < 30:
-            return
-        radius = min(22, width // 4, height // 4)
-        self.stage_canvas.create_polygon(
-            radius, 1, width - radius, 1,
-            width - 1, radius, width - 1, height - radius,
-            width - radius, height - 1, radius, height - 1,
-            1, height - radius, 1, radius,
-            smooth=True, splinesteps=24,
-            fill="#101010", outline="#46566E", width=2,
-            tags="rounded_stage",
-        )
 
     def _on_fullscreen_key(self, _event=None):
         self.toggle_fullscreen()
