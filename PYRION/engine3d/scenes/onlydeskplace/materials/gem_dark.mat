@@ -1,0 +1,12 @@
+{
+  "format": "pyrion.material",
+  "version": 1,
+  "name": "Dark Graphite Gem",
+  "shader": "gem",
+  "base_color": "#3A3C4B",
+  "metallic": 0.08,
+  "roughness": 0.12,
+  "texture": "../textures/gem_dark.gif",
+  "texture_status": "ready",
+  "notes": "MAT: charcoal/graphite faceted gem; IMG: dark, background-free sampled texture prepared from user reference. Highlights are software approximations."
+}

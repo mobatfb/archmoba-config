@@ -1,4 +1,4 @@
-"""PYRION OS 0.4.10 - standalone PYRION 3D Engine.
+"""PYRION OS 0.4.11 - standalone PYRION 3D Engine.
 
 Mesh geometry, perspective projection, and Tk software renderer.
 Previous desktop preserved under PYRION/release/v0.3.0.
@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.10"
+APP_VERSION = "0.4.11"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-config"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -495,7 +495,7 @@ The UV-sphere geometry and software renderer are provided by PYRION Engine.
 
 
 ENGINE_VERSION = "0.3.0"
-DESKTOP_VERSION = "0.4.10"
+DESKTOP_VERSION = "0.4.11"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-config/main/PYRION"
 
@@ -512,7 +512,7 @@ def _scene_json(relative_path):
     if local.is_file():
         return json.loads(local.read_text(encoding="utf-8"))
     url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
-    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.10"})
+    request = urllib.request.Request(url, headers={"User-Agent": "PYRION/0.4.11"})
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
@@ -550,7 +550,7 @@ def _scene_texture(relative_path):
         else:
             url = REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
             request = urllib.request.Request(
-                url, headers={"User-Agent": "PYRION/0.4.10"})
+                url, headers={"User-Agent": "PYRION/0.4.11"})
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read(8 * 1024 * 1024 + 1)
         if len(data) > 8 * 1024 * 1024:

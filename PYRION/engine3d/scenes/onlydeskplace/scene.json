@@ -87,6 +87,37 @@
         ],
         "speed_degrees_per_second": 16
       }
+    },
+    {
+      "id": "dark_gem",
+      "name": "Dark Graphite Gem",
+      "model": "models/gem.mesh",
+      "material": "materials/gem_dark.mat",
+      "position": [
+        -1.72,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.43,
+        0.46,
+        0.43
+      ],
+      "visible": true,
+      "animation": {
+        "type": "spin",
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "speed_degrees_per_second": 11
+      }
     }
   ]
 }
