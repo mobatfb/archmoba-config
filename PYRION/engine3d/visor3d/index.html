@@ -13,6 +13,9 @@
       background:#171c2d;border:1px solid #35405b;border-radius:12px 12px 0 0}
     .brand {font-size:13px;font-weight:750;letter-spacing:.04em;white-space:nowrap}
     .brand small {color:#a9b5d3;font-size:10px;font-weight:400}
+    .build-info {margin-left:auto;display:flex;align-items:center;gap:10px;white-space:nowrap;color:#b9c4df;font-size:11px}
+    #visor-version {font-weight:700;color:#d1baff}
+    #rotation-angle {font-variant-numeric:tabular-nums;color:#94e1ce}
     nav {display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
     nav button {background:#252c42;color:#dae1fa;border:1px solid #46516f;
       padding:9px 12px;border-radius:8px;cursor:pointer;font:inherit;font-size:12px}
@@ -33,6 +36,7 @@
   <header>
     <div class="brand">PYRION 3D <small>· MODELOS</small></div>
     <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
+    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.0</span><span id="rotation-angle">Giro 0°</span></div>
   </header>
   <canvas id="visor" aria-label="Visualización 3D con rotación automática de la malla seleccionada"></canvas>
   <div class="control">
@@ -60,7 +64,8 @@
   let zoom = 1, width = 1, height = 1;
   let yaw = 0.55;
   const pitch = 0.22; // Inclinación fija: el modelo gira sobre su eje Y.
-  const ROTATION_SPEED = Math.PI / 9; // 20 grados por segundo.
+  const ROTATION_SPEED = Math.PI / 6; // 30 grados por segundo (vuelta cada 12 s).
+  const rotationAngle = document.getElementById('rotation-angle');
   const FRAME_INTERVAL = 1000 / 30; // Hasta 30 FPS en el renderizador Canvas 2D.
 
   function validPath(path) {
@@ -319,8 +324,11 @@
     const elapsed=now-lastFrame;
     if (elapsed>=FRAME_INTERVAL) {
       lastFrame=now;
-      if (active && !document.hidden) {
+      if (active) {
+        // requestAnimationFrame ya reduce la frecuencia si el visor no está visible.
+        // No usar document.hidden: algunos visores integrados lo marcan oculto.
         yaw=(yaw+ROTATION_SPEED*Math.min(elapsed,100)/1000)%(2*Math.PI);
+        rotationAngle.textContent='Giro '+Math.round(((yaw*180/Math.PI)%360+360)%360)+'°';
         render();
       }
     }
