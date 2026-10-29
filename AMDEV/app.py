@@ -16,9 +16,9 @@ from tkinter import messagebox
 
 APP_NAME = "ArchMomaDEV"
 APP_SHORT = "AMDEV"
-APP_VERSION = "1.0.20"
+APP_VERSION = "1.0.21"
 APP_UPDATE_DATE = "29/10/2026"
-APP_UPDATE_TIME = "09:14"
+APP_UPDATE_TIME = "15:18"
 
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-dev"
@@ -89,6 +89,17 @@ BLACK = "#101010"
 LIGHT = "#F4F4F4"
 MID = "#D7D7D7"
 MUTED = "#666666"
+
+
+def _is_app_active(item):
+    """Visibilidad del catálogo: 'activo' tiene prioridad sobre 'active'.
+
+    Si falta el campo, la app se mantiene visible por compatibilidad.
+    Solo el valor booleano JSON true habilita una entrada definida.
+    """
+    if not isinstance(item, dict):
+        return False
+    return item.get("activo", item.get("active", True)) is True
 
 
 def _version_tuple(value):
@@ -721,7 +732,7 @@ class AMDEVApp(tk.Tk):
             payload = json.loads(text)
             self.apps = [
                 item for item in payload.get("apps", [])
-                if item.get("active", True)
+                if _is_app_active(item)
             ]
 
             if self.selected_app:
