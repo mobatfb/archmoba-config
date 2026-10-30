@@ -2,9 +2,9 @@
   "app": "PYRION",
   "name": "PYRION OS",
   "description": "Dos analogicos flotantes: caminar como tanque, orientar camara o foco, alternar controles y restablecer posiciones",
-  "version": "0.4.27",
+  "version": "0.4.28",
   "app_path": "PYRION/app.py",
-  "release_commit": "656efe287ef897c0b815ab1fb85534dcfcb26478",
+  "release_commit": "5329c7b9844e25a75f7bfe01eb11c2ef3c9ae6d5",
   "maintenance": false,
-  "engine_version": "0.4.4"
+  "engine_version": "0.4.5"
 }
