@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "PYRION OS"
-APP_VERSION = "0.4.28"
+APP_VERSION = "0.4.29"
 REPO_OWNER = "mobatfb"
 REPO_NAME = "archmoba-dev"
 REPO_RAW_ROOT = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -775,7 +775,12 @@ class SoftwareRenderer:
                 eye[t] - world_center[t] for t in range(3)
             ))
             front = _dot(normal, towards_camera)
-            if front <= 0.02:
+            if getattr(self.mesh, "double_sided", False):
+                # Doble cara: normal invertida solo para iluminacion interior.
+                if front < 0:
+                    normal = tuple(-component for component in normal)
+                    front = -front
+            elif front <= 0.02:
                 continue
             polygon = self._clip_near_plane([view[i], view[j], view[k]])
             if len(polygon) < 3:
@@ -828,8 +833,8 @@ The UV-sphere geometry and software renderer are provided by PYRION Engine.
 """
 
 
-ENGINE_VERSION = "0.4.5"
-DESKTOP_VERSION = "0.4.28"
+ENGINE_VERSION = "0.4.6"
+DESKTOP_VERSION = "0.4.29"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-dev/main/PYRION"
 
@@ -884,8 +889,11 @@ def _make_model_mesh(model, scale):
         return SphereMesh(rings=int(p["rings"]), segments=int(p["segments"]),
                           radius=radius, face_colors=model.get("face_colors"))
     if primitive == "triangle_mesh":
-        return TriangleMesh(model["vertices"], model["faces"], scale=scale,
+        mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale,
                             face_colors=model.get("face_colors"))
+        mesh.double_sided = bool(model.get("render", {}).get("double_sided", False))
+        mesh.flat_shading = bool(model.get("render", {}).get("flat_shading", getattr(mesh, "flat_shading", False)))
+        return mesh
     raise ValueError("Unsupported mesh primitive: " + str(primitive))
 
 
@@ -971,7 +979,10 @@ def _make_visible_mesh(model, scale, mirror=False):
         faces.append([indices[a], indices[c], indices[b]])
         if colors is not None:
             colors.append(base.face_colors[n])
-    return TriangleMesh(vertices, faces, face_colors=colors)
+    mirrored = TriangleMesh(vertices, faces, face_colors=colors)
+    mirrored.double_sided = getattr(base, "double_sided", False)
+    mirrored.flat_shading = getattr(base, "flat_shading", False)
+    return mirrored
 
 
 def _mirror_preferences_path():
