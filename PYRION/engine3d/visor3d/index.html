@@ -14,6 +14,8 @@
     .sidebar{min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:22px 18px;
       display:flex;flex-direction:column;gap:18px;background:#171c2d;border-right:1px solid #35405b}
     .sidebar header{display:flex;flex-direction:column;gap:7px}
+    /* Espacio para el control Refresh superpuesto solo en refresh.html. */
+    .sidebar.hosted{padding-bottom:126px}
     .brand{font-size:20px;font-weight:800;letter-spacing:.04em}
     .brand small{color:#a9b5d3;font-size:11px;font-weight:500}
     .sidebar-version{color:#a9b5d3;font-size:12px}
@@ -112,6 +114,9 @@
   const slider = document.querySelector('#zoom');
   const value = document.querySelector('#valor');
   const mirrorCheck = document.querySelector('#mirror-x');
+  if (window.parent !== window) {
+    document.querySelector('.sidebar').classList.add('hosted');
+  }
   // Comunica la carga al contenedor refresh.html si existe.
   function report(type, detail) {
     if (window.parent !== window) {
