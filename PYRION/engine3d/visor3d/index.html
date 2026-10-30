@@ -68,7 +68,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.6</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.7</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -122,7 +122,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.6';
+  const APP_VERSION = 'v1.3.7';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -220,7 +220,7 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 9000);
     try {
-      const response = await fetch(url, {mode:'cors',cache:'no-store',headers:{'Cache-Control':'no-cache, no-store, max-age=0','Pragma':'no-cache'},signal:controller.signal});
+      const response = await fetch(url, {mode:'cors',cache:'no-store',signal:controller.signal});
       if (!response.ok) throw new Error('HTTP ' + response.status);
       return await response.json();
     } finally {clearTimeout(timer);}
