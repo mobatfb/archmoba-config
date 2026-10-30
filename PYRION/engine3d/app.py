@@ -123,9 +123,11 @@ def load_selected_scene():
             # Preserve the original sphere geometry and rendering scale.
             radius = float(params["radius"]) * sum(map(float, scale)) / 3
             mesh = SphereMesh(rings=int(params["rings"]),
-                              segments=int(params["segments"]), radius=radius)
+                              segments=int(params["segments"]), radius=radius,
+                              face_colors=model.get("face_colors"))
         elif primitive == "triangle_mesh":
-            mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale)
+            mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale,
+                                face_colors=model.get("face_colors"))
             radius = mesh.radius
         else:
             raise ValueError("Unsupported mesh primitive: " + str(primitive))
