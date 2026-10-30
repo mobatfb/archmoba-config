@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": 1,
+  "version": "1.0.0",
   "name": "sphere",
   "primitive": "uv_sphere",
   "parameters": {
