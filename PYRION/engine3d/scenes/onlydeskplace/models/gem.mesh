@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": 2,
+  "version": "1.0.0",
   "name": "Dark Graphite Gem - Radial Symmetry",
   "primitive": "triangle_mesh",
   "topology": "triangles",
