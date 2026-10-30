@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.2.1</title>
+  <title>PYRION 3D - Refresh r1.2.2</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: #0c101d; }
@@ -25,7 +25,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.2.0</span>
+    <span id="wrapper-version">Refresh r1.2.2</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
@@ -46,11 +46,20 @@
       let fetching = false;
       let refreshId = 0;
       const storageKey = 'pyrion3d.selectedModel.' + repo;
+      const mirrorStorageKey = 'pyrion3d.mirrorX.' + repo;
       let lastModel = null;
-      try { lastModel = localStorage.getItem(storageKey); } catch (_) {}
+      let lastMirrorEnabled = false;
+      try {
+        lastModel = localStorage.getItem(storageKey);
+        lastMirrorEnabled = localStorage.getItem(mirrorStorageKey) === '1';
+      } catch (_) {}
       function saveModel(id) {
         lastModel = id;
         try { localStorage.setItem(storageKey, id); } catch (_) {}
+      }
+      function saveMirror(enabled) {
+        lastMirrorEnabled = enabled;
+        try { localStorage.setItem(mirrorStorageKey, enabled ? '1' : '0'); } catch (_) {}
       }
 
       function show(message, type='loading') {
@@ -66,11 +75,18 @@
         const data = event.data;
         if (!data || data.source !== 'pyrion3d') return;
         if (data.type === 'request-model') {
-          event.source.postMessage({source:'pyrion3d-host',type:'stored-model',id:lastModel}, '*');
+          event.source.postMessage({
+            source:'pyrion3d-host',type:'stored-model',id:lastModel,
+            mirrorEnabled:lastMirrorEnabled
+          }, '*');
           return;
         }
         if (data.type === 'selected-model') {
           if (typeof data.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(data.id)) saveModel(data.id);
+          return;
+        }
+        if (data.type === 'mirror-changed') {
+          if (typeof data.enabled === 'boolean') saveMirror(data.enabled);
           return;
         }
         if (!['html','loading','ready','error'].includes(data.type)) return;
