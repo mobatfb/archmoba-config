@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.4.0</title>
+  <title>PYRION 3D - Refresh r1.4.1</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0c101d; }
@@ -34,7 +34,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.4.0</span>
+    <span id="wrapper-version">Refresh r1.4.1</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
@@ -59,6 +59,7 @@
       const wireStorageKey = 'pyrion3d.showWire.' + repo;
       const materialStorageKey = 'pyrion3d.withMaterial.' + repo;
       const surfaceStorageKey = 'pyrion3d.showSurface.' + repo;
+      const preferencesKey = 'pyrion3d.viewerPreferences.' + repo;
       let lastModel = null;
       let lastMirrorEnabled = false;
       let lastWireEnabled = true;
@@ -71,14 +72,36 @@
         lastWireEnabled=wireStored===null ? true : wireStored==='1';
         lastMaterialEnabled=localStorage.getItem(materialStorageKey)==='1';
         lastSurfaceEnabled=localStorage.getItem(surfaceStorageKey)==='1';
+        const rawPrefs=localStorage.getItem(preferencesKey);
+        if (rawPrefs) {
+          const prefs=JSON.parse(rawPrefs);
+          if (prefs && ['mirror','wire','material','surface'].every(
+              k=>typeof prefs[k]==='boolean')) {
+            lastMirrorEnabled=prefs.mirror;
+            lastWireEnabled=prefs.wire;
+            lastMaterialEnabled=prefs.material;
+            lastSurfaceEnabled=prefs.surface;
+          }
+        }
       } catch (_) {}
+      function persistPreferences() {
+        const prefs={mirror:lastMirrorEnabled,wire:lastWireEnabled,
+          material:lastMaterialEnabled,surface:lastSurfaceEnabled};
+        try {
+          localStorage.setItem(preferencesKey,JSON.stringify(prefs));
+          localStorage.setItem(mirrorStorageKey,prefs.mirror?'1':'0');
+          localStorage.setItem(wireStorageKey,prefs.wire?'1':'0');
+          localStorage.setItem(materialStorageKey,prefs.material?'1':'0');
+          localStorage.setItem(surfaceStorageKey,prefs.surface?'1':'0');
+        } catch (_) {}
+      }
       function saveModel(id) {
         lastModel = id;
         try { localStorage.setItem(storageKey, id); } catch (_) {}
       }
       function saveMirror(enabled) {
         lastMirrorEnabled = enabled;
-        try { localStorage.setItem(mirrorStorageKey, enabled ? '1' : '0'); } catch (_) {}
+        persistPreferences();
       }
 
       function saveViewerOption(option, enabled) {
@@ -87,7 +110,7 @@
         if (option==='wire') lastWireEnabled=enabled;
         if (option==='material') lastMaterialEnabled=enabled;
         if (option==='surface') lastSurfaceEnabled=enabled;
-        try {localStorage.setItem(keys[option],enabled ? '1':'0');} catch (_) {}
+        persistPreferences();
       }
 
       function show(message, type='loading') {
@@ -109,6 +132,18 @@
             wireEnabled:lastWireEnabled,materialEnabled:lastMaterialEnabled,
             surfaceEnabled:lastSurfaceEnabled
           }, '*');
+          return;
+        }
+        if (data.type === 'preferences-changed') {
+          const prefs=data.preferences;
+          if (prefs && ['mirror','wire','material','surface'].every(
+              k=>typeof prefs[k]==='boolean')) {
+            lastMirrorEnabled=prefs.mirror;
+            lastWireEnabled=prefs.wire;
+            lastMaterialEnabled=prefs.material;
+            lastSurfaceEnabled=prefs.surface;
+            persistPreferences();
+          }
           return;
         }
         if (data.type === 'selected-model') {
