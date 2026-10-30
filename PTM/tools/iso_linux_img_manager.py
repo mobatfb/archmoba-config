@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Administra imagenes IMG en ISO Linux: ver, subir, editar, reemplazar, eliminar y extraer archivos; "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver, editar y guardar archivos TXT/HEX en ISO, FAT e INITRD, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.1"
+TOOL_VERSION = "1.0.2"
 
 
 def human_size(n):
@@ -696,6 +696,7 @@ class InitrdEditor(ttk.Frame):
         ttk.Button(bar, text="Volver", command=self.owner._close_container_editor).pack(side="left", padx=(0, 12))
         ttk.Button(bar, text="Anadir archivo", command=self.upload_file).pack(side="left", padx=3)
         ttk.Button(bar, text="Reemplazar", command=self.replace).pack(side="left", padx=3)
+        ttk.Button(bar, text="Renombrar", command=self.rename_selected).pack(side="left", padx=3)
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
         ttk.Button(bar, text="Ver como TXT", command=self.view_selected).pack(side="left", padx=3)
@@ -827,6 +828,36 @@ class InitrdEditor(ttk.Frame):
         e["mode"] = (e.get("mode",0) & ~stat.S_IFMT(e.get("mode",0))) | stat.S_IFREG
         self.refresh()
 
+    def rename_selected(self):
+        i = self.selected_index()
+        if i is None:
+            return
+        old = self.entries[i]["name"]
+        proposal = simpledialog.askstring("Renombrar en INITRD", "Nueva ruta/nombre:",
+                                         initialvalue=old, parent=self)
+        if proposal is None or proposal == old:
+            return
+        proposal = proposal.replace("\\", "/").strip("/")
+        parts = proposal.split("/")
+        if not proposal or any(part in ("", ".", "..") for part in parts):
+            messagebox.showerror("Ruta invalida", "Nombre o ruta invalida.", parent=self)
+            return
+        prefix = old.rstrip("/") + "/"
+        new_prefix = proposal.rstrip("/") + "/"
+        affected = {old if e["name"] == old else e["name"]: 
+                    (proposal if e["name"] == old else new_prefix + e["name"][len(prefix):])
+                    for e in self.entries if e["name"] == old or e["name"].startswith(prefix)}
+        if not affected:
+            return
+        existing = {e["name"] for e in self.entries if e["name"] not in affected}
+        if existing.intersection(affected.values()) or len(affected.values()) != len(set(affected.values())):
+            messagebox.showerror("Duplicado", "El destino ya existe.", parent=self)
+            return
+        for e in self.entries:
+            if e["name"] in affected:
+                e["name"] = affected[e["name"]]
+        self.refresh()
+
     def delete(self):
         i = self.selected_index()
         if i is None: return
@@ -901,6 +932,7 @@ class FatEditor(ttk.Frame):
         ttk.Button(bar, text="Subir", command=self.up).pack(side="left", padx=3)
         ttk.Button(bar, text="Anadir archivo", command=self.upload_file).pack(side="left", padx=3)
         ttk.Button(bar, text="Reemplazar", command=self.replace).pack(side="left", padx=3)
+        ttk.Button(bar, text="Renombrar", command=self.rename_selected).pack(side="left", padx=3)
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
         ttk.Button(bar, text="Ver como TXT", command=self.view_selected).pack(side="left", padx=3)
@@ -1155,6 +1187,28 @@ class FatEditor(ttk.Frame):
         except Exception as exc:
             messagebox.showerror("FAT", str(exc), parent=self)
 
+    def rename_selected(self):
+        p = self.selected()
+        if not p or self.fs is None:
+            return
+        old_name = p.rsplit("/", 1)[-1]
+        new_name = simpledialog.askstring("Renombrar en FAT", "Nuevo nombre:",
+                                          initialvalue=old_name, parent=self)
+        if new_name is None or new_name == old_name:
+            return
+        if not new_name or new_name in (".", "..") or "/" in new_name or "\\" in new_name:
+            messagebox.showerror("Nombre invalido", "Introduce solo un nombre valido.", parent=self)
+            return
+        destination = p.rsplit("/", 1)[0] + "/" + new_name
+        try:
+            if self.fs.exists(destination):
+                raise FileExistsError("El destino ya existe.")
+            self.fs.move(p, destination)
+            self._search_index = None
+            self.refresh()
+        except Exception as exc:
+            messagebox.showerror("Renombrar FAT", str(exc), parent=self)
+
     def delete(self):
         p = self.selected()
         if not p: return
@@ -1219,6 +1273,7 @@ class ISOEditor(ttk.Frame):
         ttk.Button(top, text="Abrir ISO", command=self.open_iso).pack(side="left", padx=3)
         ttk.Button(top, text="Anadir archivo", command=self.upload_iso_file).pack(side="left", padx=3)
         ttk.Button(top, text="Reemplazar", command=self.replace_selected).pack(side="left", padx=3)
+        ttk.Button(top, text="Renombrar", command=self.rename_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Eliminar", command=self.delete_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Extraer", command=self.extract_selected).pack(side="left", padx=3)
         ttk.Button(top, text="Ver como TXT", command=self.view_selected).pack(side="left", padx=3)
@@ -1598,6 +1653,36 @@ class ISOEditor(ttk.Frame):
             self.refresh_tree(); self.set_status(f"Reemplazado: {p.name}")
         except Exception as exc:
             messagebox.showerror("Reemplazar", str(exc), parent=self)
+
+    def rename_selected(self):
+        p = self.selected_path()
+        if p is None or self.work_dir is None or p == self.work_dir:
+            return
+        new_name = simpledialog.askstring("Renombrar en ISO", "Nuevo nombre:",
+                                          initialvalue=p.name, parent=self)
+        if new_name is None or new_name == p.name:
+            return
+        if not new_name or new_name in (".", "..") or "/" in new_name or "\\" in new_name:
+            messagebox.showerror("Nombre invalido", "Introduce solo un nombre valido.", parent=self)
+            return
+        # No relocamos archivos de arranque en el ISO personalizado.
+        if p.is_relative_to(self.work_dir / "BOOT"):
+            messagebox.showwarning("ISO de arranque", 
+                "No se permite renombrar directamente archivos BOOT del ISO. "
+                "Podria romper el arranque BIOS/UEFI.", parent=self)
+            return
+        destination = p.with_name(new_name)
+        if destination.exists():
+            messagebox.showerror("Duplicado", "El destino ya existe.", parent=self)
+            return
+        try:
+            p.rename(destination)
+            self._search_index = None
+            self.refresh_tree()
+            self.set_status("Renombrado en copia de trabajo. El guardado final "
+                            "puede rechazar cambios de nombres en el ISO de arranque.")
+        except Exception as exc:
+            messagebox.showerror("Renombrar", str(exc), parent=self)
 
     def delete_selected(self):
         p = self.selected_path()
