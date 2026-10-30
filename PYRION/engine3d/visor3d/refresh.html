@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.2.0</title>
+  <title>PYRION 3D - Refresh r1.2.1</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: #0c101d; }
@@ -45,6 +45,13 @@
         && !/^(raw\.githubusercontent\.com|github\.com)$/.test(location.hostname);
       let fetching = false;
       let refreshId = 0;
+      const storageKey = 'pyrion3d.selectedModel.' + repo;
+      let lastModel = null;
+      try { lastModel = localStorage.getItem(storageKey); } catch (_) {}
+      function saveModel(id) {
+        lastModel = id;
+        try { localStorage.setItem(storageKey, id); } catch (_) {}
+      }
 
       function show(message, type='loading') {
         estado.textContent = message;
@@ -57,7 +64,16 @@
       window.addEventListener('message', (event) => {
         if (event.source !== visor.contentWindow) return;
         const data = event.data;
-        if (!data || data.source !== 'pyrion3d' || !['html','loading','ready','error'].includes(data.type)) return;
+        if (!data || data.source !== 'pyrion3d') return;
+        if (data.type === 'request-model') {
+          event.source.postMessage({source:'pyrion3d-host',type:'stored-model',id:lastModel}, '*');
+          return;
+        }
+        if (data.type === 'selected-model') {
+          if (typeof data.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(data.id)) saveModel(data.id);
+          return;
+        }
+        if (!['html','loading','ready','error'].includes(data.type)) return;
         if (typeof data.version === 'string' && data.version.length < 30) {
           version.textContent = 'Visor: ' + data.version;
         }
