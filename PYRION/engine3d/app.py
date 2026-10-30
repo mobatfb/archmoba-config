@@ -16,8 +16,8 @@ import tkinter as tk
 from .mesh import SphereMesh, TriangleMesh
 from .renderer import SoftwareRenderer
 
-ENGINE_VERSION = "0.4.3"
-DESKTOP_VERSION = "0.4.26"
+ENGINE_VERSION = "0.4.4"
+DESKTOP_VERSION = "0.4.27"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-dev/main/PYRION"
 
@@ -40,6 +40,77 @@ def _scene_json(relative_path):
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
+
+
+# Comprobacion de .mesh del repositorio: una version local antigua no debe
+# ocultar los colores nuevos del mismo modelo. El acceso a red es opcional.
+MESH_REFRESH_SECONDS = 3.0
+
+
+def _mesh_version_key(model):
+    """El antiguo version numerico era formato, NO version del modelo."""
+    version = model.get("version", "") if isinstance(model, dict) else ""
+    if not isinstance(version, str):
+        return (0, 0, 0)
+    parts = version.split(".")
+    if len(parts) != 3 or not all(part.isdecimal() for part in parts):
+        return (0, 0, 0)
+    return tuple(int(part) for part in parts)
+
+
+def _make_model_mesh(model, scale):
+    if model.get("format") != "pyrion.mesh":
+        raise ValueError("Unsupported model format")
+    if len(scale) != 3 or any(
+        not math.isfinite(float(v)) or float(v) <= 0 for v in scale
+    ):
+        raise ValueError("Invalid model scale")
+    primitive = model.get("primitive")
+    if primitive == "uv_sphere":
+        p = model["parameters"]
+        radius = float(p["radius"]) * sum(map(float, scale)) / 3
+        return SphereMesh(rings=int(p["rings"]), segments=int(p["segments"]),
+                          radius=radius, face_colors=model.get("face_colors"))
+    if primitive == "triangle_mesh":
+        return TriangleMesh(model["vertices"], model["faces"], scale=scale,
+                            face_colors=model.get("face_colors"))
+    raise ValueError("Unsupported mesh primitive: " + str(primitive))
+
+
+def _fetch_updated_mesh(relative_path, loaded_model, scale):
+    """Recuperar una malla modificada; nunca degradar su version ni bloquear Tk."""
+    relative = Path(relative_path)
+    if (relative.is_absolute() or ".." in relative.parts
+            or relative.suffix != ".mesh"):
+        raise ValueError("Invalid mesh path")
+    if os.environ.get("PYRION_MESH_OFFLINE") == "1":
+        return None
+    request = urllib.request.Request(
+        REPO_RAW_BASE + "/engine3d/" + relative.as_posix()
+        + "?pyrion_refresh=" + str(time.time_ns()),
+        headers={"User-Agent": "PYRION/" + DESKTOP_VERSION,
+                 "Cache-Control": "no-cache", "Pragma": "no-cache"})
+    with urllib.request.urlopen(request, timeout=6) as response:
+        payload = response.read(2 * 1024 * 1024 + 1)
+    if len(payload) > 2 * 1024 * 1024:
+        raise ValueError("Mesh exceeds 2 MiB")
+    remote = json.loads(payload.decode("utf-8-sig"))
+    if remote == loaded_model or _mesh_version_key(remote) < _mesh_version_key(loaded_model):
+        return None
+    # Validar geometria y colores ANTES de escribir en el disco.
+    _make_model_mesh(remote, scale)
+    root = Path(__file__).resolve().parent
+    engine = root if root.name == "engine3d" else root / "engine3d"
+    local = engine / relative
+    try:
+        local.parent.mkdir(parents=True, exist_ok=True)
+        temporary = local.with_name(local.name + ".pyrion.tmp")
+        temporary.write_bytes(payload)
+        os.replace(temporary, local)
+    except OSError:
+        # Instalaciones de solo lectura siguen pudiendo usar la copia en RAM.
+        pass
+    return remote
 
 class _TkTexture:
     """Wrap Tk's built-in GIF decoder as a mesh RGB pixel source."""
@@ -113,24 +184,8 @@ def load_selected_scene():
         if model.get("format") != "pyrion.mesh":
             raise ValueError("Unsupported model: " + model_path)
         scale = obj.get("scale", [1, 1, 1])
-        if len(scale) != 3 or any(
-            not math.isfinite(float(value)) or float(value) <= 0 for value in scale
-        ):
-            raise ValueError("Invalid model scale")
-        primitive = model.get("primitive")
-        if primitive == "uv_sphere":
-            params = model["parameters"]
-            # Preserve the original sphere geometry and rendering scale.
-            radius = float(params["radius"]) * sum(map(float, scale)) / 3
-            mesh = SphereMesh(rings=int(params["rings"]),
-                              segments=int(params["segments"]), radius=radius,
-                              face_colors=model.get("face_colors"))
-        elif primitive == "triangle_mesh":
-            mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale,
-                                face_colors=model.get("face_colors"))
-            radius = mesh.radius
-        else:
-            raise ValueError("Unsupported mesh primitive: " + str(primitive))
+        mesh = _make_model_mesh(model, scale)
+        radius = mesh.radius
         position = tuple(float(v) for v in obj.get("position", [0, 0, 0]))
         if len(position) != 3:
             raise ValueError("Invalid model position")
@@ -152,6 +207,8 @@ def load_selected_scene():
                 if image is not None:
                     material["_texture_image"] = image
         objects.append({"id": str(obj.get("id", model_path)),
+                        "_mesh_path": model_path, "_mesh_source": model,
+                        "_mesh_scale": scale,
                         "renderer": SoftwareRenderer(mesh, material=material),
                         "position": position,
                         "render_layer": int(obj.get("render_layer", 0)),
@@ -347,6 +404,9 @@ class Pyrion3DApp(tk.Tk):
         import queue
         self._update_events = queue.Queue()
         self._update_running = False
+        self._mesh_update_events = queue.Queue()
+        self._mesh_check_running = False
+        self._next_mesh_check = time.monotonic() + 0.1
         self.fps = 0.0
         self.frame_ms = 0.0
         self.render_ms = 0.0
@@ -781,6 +841,74 @@ class Pyrion3DApp(tk.Tk):
     def _request_frame(self):
         if self.pending_frame is None:
             self.pending_frame = self._schedule_engine("idle", self._draw)
+
+    def _begin_mesh_check(self):
+        """Consulta GitHub en un hilo, sin congelar el motor ni el giro."""
+        if self._mesh_check_running:
+            return
+        pending = [
+            (index, item["_mesh_path"], item["_mesh_source"], item["_mesh_scale"])
+            for index, item in enumerate(self.objects)
+            if "_mesh_path" in item
+        ]
+        if not pending:
+            return
+        import threading
+        self._mesh_check_running = True
+        queue_ref = self._mesh_update_events
+
+        def worker():
+            updates = []
+            for index, path, old, scale in pending:
+                try:
+                    model = _fetch_updated_mesh(path, old, scale)
+                    if model is not None:
+                        updates.append((index, path, old, model))
+                except (OSError, ValueError, KeyError, TypeError,
+                        urllib.error.URLError, TimeoutError):
+                    # Sin conexion o malla no valida: mantener la version visible.
+                    continue
+            queue_ref.put(updates)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_mesh_updates(self):
+        """Cambiar solo renderer/mesh en hilo Tk; conservar camara y rotacion."""
+        import queue
+        try:
+            updates = self._mesh_update_events.get_nowait()
+        except queue.Empty:
+            return
+        self._mesh_check_running = False
+        changed = False
+        for index, path, previous, model in updates:
+            if index >= len(self.objects):
+                continue
+            item = self.objects[index]
+            if item.get("_mesh_path") != path or item.get("_mesh_source") != previous:
+                continue
+            try:
+                mesh = _make_model_mesh(model, item["_mesh_scale"])
+                original = item["renderer"]
+                replacement = SoftwareRenderer(mesh, material=original.material)
+                for key in ("rotation_x", "rotation_y", "zoom", "wireframe",
+                            "camera_distance", "material_mode", "spotlight_enabled"):
+                    setattr(replacement, key, getattr(original, key))
+                replacement.set_lights(
+                    self.scene.get("lights", []),
+                    ambient=self.scene.get("ambient_light", 0.56))
+                replacement.set_atmosphere(self.scene.get("fog"))
+                item["renderer"] = replacement
+                item["radius"] = mesh.radius
+                item["_mesh_source"] = model
+                if self.renderer is original:
+                    self.renderer = replacement
+                changed = True
+            except (ValueError, TypeError, KeyError, AttributeError):
+                continue
+        if changed:
+            self._shadow_cache = None
+            self._request_frame()
 
     def _draw_background(self, width, height):
         source = self.background_image
@@ -1228,6 +1356,11 @@ class Pyrion3DApp(tk.Tk):
     def _frame(self):
         try:
             now = time.perf_counter()
+            self._apply_mesh_updates()
+            mesh_now = time.monotonic()
+            if mesh_now >= self._next_mesh_check:
+                self._next_mesh_check = mesh_now + MESH_REFRESH_SECONDS
+                self._begin_mesh_check()
             raw_elapsed = max(0.0, now - self.last_time)
             self.last_time = now
             elapsed = min(0.1, raw_elapsed)  # Cap animation delta, not FPS measurements.
