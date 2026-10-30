@@ -64,7 +64,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.2.0</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.2.1</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -80,6 +80,14 @@
         <label class="mirror-option" for="mirror-x" title="Reflejar la mitad del modelo sobre el eje X">
           <input id="mirror-x" type="checkbox" autocomplete="off">
           Espejo X
+        </label>
+        <label class="mirror-option" for="show-wire" title="Mostrar las aristas de todos los triángulos">
+          <input id="show-wire" type="checkbox" autocomplete="off">
+          Ver malla
+        </label>
+        <label class="mirror-option" for="no-material" title="Ocultar colores y material; ver geometría gris">
+          <input id="no-material" type="checkbox" autocomplete="off">
+          Sin material
         </label>
       </div>
     </section>
@@ -102,7 +110,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.2.0';
+  const APP_VERSION = 'v1.2.1';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -114,6 +122,8 @@
   const slider = document.querySelector('#zoom');
   const value = document.querySelector('#valor');
   const mirrorCheck = document.querySelector('#mirror-x');
+  const wireCheck = document.querySelector('#show-wire');
+  const materialCheck = document.querySelector('#no-material');
   if (window.parent !== window) {
     document.querySelector('.sidebar').classList.add('hosted');
   }
@@ -136,7 +146,11 @@
   const meshVersionLabel = document.getElementById('mesh-version');
   const STORAGE_KEY = 'pyrion3d.selectedModel.' + REPO;
   const MIRROR_KEY = 'pyrion3d.mirrorX.' + REPO;
+  const WIRE_KEY = 'pyrion3d.showWire.' + REPO;
+  const MATERIAL_KEY = 'pyrion3d.noMaterial.' + REPO;
   let mirrorEnabled = false;
+  let wireEnabled = false;
+  let noMaterialEnabled = false;
   const MESH_POLL_INTERVAL = 3000;
   let selectedModel = null;
   let meshSha = null;
@@ -208,6 +222,15 @@
       mirrorCheck.checked = mirrorEnabled;
       applyMirrorGeometry();
     }
+    if (typeof event.data.wireEnabled === 'boolean') {
+      wireEnabled = event.data.wireEnabled;
+      wireCheck.checked = wireEnabled;
+    }
+    if (typeof event.data.noMaterialEnabled === 'boolean') {
+      noMaterialEnabled = event.data.noMaterialEnabled;
+      materialCheck.checked = noMaterialEnabled;
+    }
+    render();
     if (resolveParentSelection) {
       const finish = resolveParentSelection;
       resolveParentSelection = null;
@@ -229,6 +252,23 @@
   function rememberedMirror() {
     try { return window.localStorage.getItem(MIRROR_KEY) === '1'; }
     catch (_) { return false; }
+  }
+
+  function saveViewerOption(option, enabled) {
+    const wire = option === 'wire';
+    if (wire) {
+      wireEnabled = !!enabled;
+      wireCheck.checked = wireEnabled;
+    } else {
+      noMaterialEnabled = !!enabled;
+      materialCheck.checked = noMaterialEnabled;
+    }
+    try { window.localStorage.setItem(wire ? WIRE_KEY : MATERIAL_KEY, enabled ? '1' : '0'); } catch (_) {}
+    if (window.parent !== window) {
+      window.parent.postMessage({source:'pyrion3d',type:'viewer-option-changed',
+        option,enabled:!!enabled}, '*');
+    }
+    render();
   }
 
   function saveMirror(enabled) {
@@ -512,14 +552,14 @@
       if (normal[2]<=0) continue;
       const brightness=.33+.71*Math.max(0,dot(normal,light))+.20*Math.max(0,dot(normal,light2));
       const shine=Math.pow(Math.max(0,dot(normal,unit([.1,.62,1]))),9+43*(1-rough))*(metal>.5?100:70);
-      const col=faceColors?.[index] || active.color;
+      const col=noMaterialEnabled ? [176,185,201] : (faceColors?.[index] || active.color);
       const color=col.map(v=>Math.min(255,Math.round(v*brightness+shine*(.6+metal*.4))));
       triangles.push({f,depth:(a[2]+b[2]+c[2])/3,fill:'rgb('+color.join(',')+')'});
     }
     triangles.sort((a,b)=>a.depth-b.depth);
     ctx.lineJoin='round';
-    ctx.lineWidth=.65;
-    ctx.strokeStyle=active.edge;
+    ctx.lineWidth=wireEnabled ? 1 : .65;
+    ctx.strokeStyle=wireEnabled ? 'rgba(18,24,40,.95)' : active.edge;
     for (const t of triangles) {
       const [a,b,c]=t.f.map(i=>screen[i]);
       ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.lineTo(...c);ctx.closePath();
@@ -616,6 +656,14 @@
     }
   }
 
+  try {
+    wireEnabled = window.localStorage.getItem(WIRE_KEY) === '1';
+    noMaterialEnabled = window.localStorage.getItem(MATERIAL_KEY) === '1';
+  } catch (_) {}
+  wireCheck.checked = wireEnabled;
+  materialCheck.checked = noMaterialEnabled;
+  wireCheck.addEventListener('change', () => saveViewerOption('wire',wireCheck.checked));
+  materialCheck.addEventListener('change', () => saveViewerOption('material',materialCheck.checked));
   mirrorEnabled = rememberedMirror();
   mirrorCheck.checked = mirrorEnabled;
   mirrorCheck.disabled = true;
