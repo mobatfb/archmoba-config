@@ -36,7 +36,7 @@
   <header>
     <div class="brand">PYRION 3D <small>· MODELOS</small></div>
     <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
-    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.3</span><span id="rotation-angle">Giro 0°</span></div>
+    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.4</span><span id="rotation-angle">Giro 0°</span></div>
   </header>
   <canvas id="visor" aria-label="Visualización 3D con rotación automática de la malla seleccionada"></canvas>
   <div class="control">
@@ -49,7 +49,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.1.3';
+  const APP_VERSION = 'v1.1.4';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -133,12 +133,48 @@
       ' desde GitHub (' + errors.join('; ') + ')');
   }
 
+  let parentSelection = null;
+  let resolveParentSelection = null;
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent || !event.data ||
+        event.data.source !== 'pyrion3d-host' ||
+        event.data.type !== 'stored-model') return;
+    parentSelection = typeof event.data.id === 'string' ? event.data.id : null;
+    if (resolveParentSelection) {
+      const finish = resolveParentSelection;
+      resolveParentSelection = null;
+      finish(parentSelection);
+    }
+  });
+
   function rememberModel(id) {
     try { window.localStorage.setItem(STORAGE_KEY, id); } catch (_) {}
+    if (window.parent !== window) {
+      window.parent.postMessage({source:'pyrion3d',type:'selected-model',id}, '*');
+    }
   }
 
   function rememberedModel() {
     try { return window.localStorage.getItem(STORAGE_KEY); } catch (_) { return null; }
+  }
+
+  function restoreModel() {
+    const local = rememberedModel();
+    if (window.parent === window) return Promise.resolve(local);
+    // El iframe sandbox de refresh.html tiene origen opaco y no puede leer
+    // localStorage. Se consulta al contenedor para restaurar su selección.
+    return new Promise(resolve => {
+      const timer = setTimeout(() => {
+        if (resolveParentSelection === finish) resolveParentSelection = null;
+        resolve(parentSelection || local);
+      }, 1200);
+      function finish(id) {
+        clearTimeout(timer);
+        resolve(id || local);
+      }
+      resolveParentSelection = finish;
+      window.parent.postMessage({source:'pyrion3d',type:'request-model'}, '*');
+    });
   }
 
   // GitHub Contents proporciona el SHA de contenido y la malla en una petición.
@@ -384,7 +420,8 @@
         (!m.material || validPath(m.material)));
       if (!models.length) throw new Error('models.json no contiene rutas válidas');
       buildMenu(models);
-      await selectModel(models.find(m => m.id === rememberedModel()) || models[0]);
+      const previous = await restoreModel();
+      await selectModel(models.find(m => m.id === previous) || models[0]);
     } catch (e) {
       status.textContent=e.message;
       report('error',e.message);
