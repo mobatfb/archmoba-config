@@ -64,7 +64,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.4</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.5</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -118,7 +118,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.4';
+  const APP_VERSION = 'v1.3.5';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -627,16 +627,50 @@
       const color=col.map(v=>Math.min(255,Math.round(v*brightness+shine*(.6+metal*.4))));
       triangles.push({f,depth:(a[2]+b[2]+c[2])/3,fill:'rgb('+color.join(',')+')'});
     }
-    triangles.sort((a,b)=>a.depth-b.depth);
-    ctx.lineJoin='round';
-    ctx.lineWidth=wireEnabled ? 1 : .65;
-    ctx.strokeStyle=wireEnabled ? 'rgba(18,24,40,.95)' : active.edge;
+    // Z-buffer real: evita que caras interiores o del piso atraviesen otras
+    // por ordenar triangulos segun su profundidad PROMEDIO.
+    const rw=Math.max(1,Math.round(width)),rh=Math.max(1,Math.round(height));
+    const image=ctx.createImageData(rw,rh);
+    const pixels=image.data;
+    const depthBuffer=new Float32Array(rw*rh);
+    depthBuffer.fill(-Infinity);
+    const edgeBuffer=wireEnabled ? new Uint8Array(rw*rh) : null;
     for (const t of triangles) {
-      const [a,b,c]=t.f.map(i=>screen[i]);
-      ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.lineTo(...c);ctx.closePath();
-      ctx.fillStyle=t.fill;ctx.fill();
-      if (wireEnabled) ctx.stroke();
+      const f=t.f;
+      const a=screen[f[0]],b=screen[f[1]],c=screen[f[2]];
+      const area=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+      if (Math.abs(area)<1e-8) continue;
+      const x0=Math.max(0,Math.floor(Math.min(a[0],b[0],c[0])));
+      const x1=Math.min(rw-1,Math.ceil(Math.max(a[0],b[0],c[0])));
+      const y0=Math.max(0,Math.floor(Math.min(a[1],b[1],c[1])));
+      const y1=Math.min(rh-1,Math.ceil(Math.max(a[1],b[1],c[1])));
+      const invArea=1/area;
+      const za=1/(4.8-points[f[0]][2]),zb=1/(4.8-points[f[1]][2]),zc=1/(4.8-points[f[2]][2]);
+      const rgb=t.fill.match(/\d+/g).map(Number);
+      for(let y=y0;y<=y1;y++){
+        for(let x=x0;x<=x1;x++){
+          const px=x+.5,py=y+.5;
+          const u=((b[0]-px)*(c[1]-py)-(b[1]-py)*(c[0]-px))*invArea;
+          const v=((c[0]-px)*(a[1]-py)-(c[1]-py)*(a[0]-px))*invArea;
+          const w=1-u-v;
+          if(u < -1e-6 || v < -1e-6 || w < -1e-6)continue;
+          const z=u*za+v*zb+w*zc;
+          const pos=y*rw+x;
+          if(z<=depthBuffer[pos])continue;
+          depthBuffer[pos]=z;
+          const off=pos*4;
+          pixels[off]=rgb[0];pixels[off+1]=rgb[1];pixels[off+2]=rgb[2];pixels[off+3]=255;
+          if(edgeBuffer)edgeBuffer[pos]=Math.min(u,v,w)<.012 ? 1:0;
+        }
+      }
     }
+    if(edgeBuffer)for(let p=0;p<edgeBuffer.length;p++)if(edgeBuffer[p]){
+      const off=p*4;pixels[off]=18;pixels[off+1]=24;pixels[off+2]=40;
+    }
+    // Composicion sobre el fondo sin rectangulo opaco.
+    const layer=document.createElement('canvas');layer.width=rw;layer.height=rh;
+    layer.getContext('2d').putImageData(image,0,0);
+    ctx.drawImage(layer,0,0,width,height);
   }
 
   function resize() {
