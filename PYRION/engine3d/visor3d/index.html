@@ -27,6 +27,10 @@
     .control {display:flex;gap:12px;align-items:center;justify-content:center;
       padding:16px;background:#171c2d;border:1px solid #35405b;border-top:0;border-radius:0 0 12px 12px}
     #zoom {width:min(270px,55vw);accent-color:#ab8ce4}
+    .mirror-option {display:flex;align-items:center;gap:7px;white-space:nowrap;cursor:pointer;font-size:13px}
+    .mirror-option input {width:17px;height:17px;accent-color:#ab8ce4;cursor:pointer}
+    .mirror-option input:disabled {cursor:not-allowed;opacity:.55}
+    .mirror-option:has(input:disabled) {opacity:.55;cursor:not-allowed}
     output {min-width:45px;text-align:right;font-variant-numeric:tabular-nums}
     #status {min-height:2em;color:#adb6ce;text-align:center;font-size:12px;line-height:1.6;margin:12px 0 0}
     @media(max-width:560px) {main{padding:8px}header{gap:9px;padding:10px}nav button{padding:8px 9px}#visor{height:400px}}
@@ -37,20 +41,24 @@
   <header>
     <div class="brand">PYRION 3D <small>· MODELOS</small></div>
     <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
-    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.5</span><span id="mesh-version" aria-live="polite">Modelo: —</span><span id="rotation-angle">Giro 0°</span></div>
+    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.6</span><span id="mesh-version" aria-live="polite">Modelo: —</span><span id="rotation-angle">Giro 0°</span></div>
   </header>
   <canvas id="visor" aria-label="Visualización 3D con rotación automática de la malla seleccionada"></canvas>
   <div class="control">
     <label for="zoom">Zoom</label>
     <input id="zoom" type="range" min="50" max="220" value="100">
     <output id="valor" for="zoom">100%</output>
+    <label class="mirror-option" for="mirror-x" title="Refleja la mitad del modelo sobre el eje X">
+      <input id="mirror-x" type="checkbox" autocomplete="off">
+      Espejo X
+    </label>
   </div>
   <p id="status" role="status" aria-live="polite">Cargando lista de modelos desde GitHub…</p>
 </main>
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.1.5';
+  const APP_VERSION = 'v1.1.6';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -61,6 +69,7 @@
   const status = document.querySelector('#status');
   const slider = document.querySelector('#zoom');
   const value = document.querySelector('#valor');
+  const mirrorCheck = document.querySelector('#mirror-x');
   // Comunica la carga al contenedor refresh.html si existe.
   function report(type, detail) {
     if (window.parent !== window) {
@@ -77,6 +86,8 @@
   const rotationAngle = document.getElementById('rotation-angle');
   const meshVersionLabel = document.getElementById('mesh-version');
   const STORAGE_KEY = 'pyrion3d.selectedModel.' + REPO;
+  const MIRROR_KEY = 'pyrion3d.mirrorX.' + REPO;
+  let mirrorEnabled = false;
   const MESH_POLL_INTERVAL = 3000;
   let selectedModel = null;
   let meshSha = null;
@@ -142,6 +153,12 @@
         event.data.source !== 'pyrion3d-host' ||
         event.data.type !== 'stored-model') return;
     parentSelection = typeof event.data.id === 'string' ? event.data.id : null;
+    if (typeof event.data.mirrorEnabled === 'boolean') {
+      // El contenedor conserva el estado para el iframe sandbox (sin localStorage).
+      mirrorEnabled = event.data.mirrorEnabled;
+      mirrorCheck.checked = mirrorEnabled;
+      applyMirrorGeometry();
+    }
     if (resolveParentSelection) {
       const finish = resolveParentSelection;
       resolveParentSelection = null;
@@ -158,6 +175,21 @@
 
   function rememberedModel() {
     try { return window.localStorage.getItem(STORAGE_KEY); } catch (_) { return null; }
+  }
+
+  function rememberedMirror() {
+    try { return window.localStorage.getItem(MIRROR_KEY) === '1'; }
+    catch (_) { return false; }
+  }
+
+  function saveMirror(enabled) {
+    mirrorEnabled = !!enabled;
+    mirrorCheck.checked = mirrorEnabled;
+    try { window.localStorage.setItem(MIRROR_KEY, mirrorEnabled ? '1' : '0'); } catch (_) {}
+    if (window.parent !== window) {
+      window.parent.postMessage({source:'pyrion3d',type:'mirror-changed',enabled:mirrorEnabled}, '*');
+    }
+    applyMirrorGeometry();
   }
 
   function restoreModel() {
@@ -191,14 +223,14 @@
   }
 
   function decodeMeshResponse(response) {
-    const binary = atob(response.content.replace(/\\s+/g, ''));
+    const binary = atob(response.content.replace(/\s+/g, ''));
     return JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, c => c.charCodeAt(0))));
   }
 
   function meshVersion(source) {
     // Un unico atributo version en cada .mesh: version del modelo, no del formato.
     if (!source || typeof source.version !== 'string' ||
-        !/^\\d+\\.\\d+\\.\\d+$/.test(source.version)) {
+        !/^\d+\.\d+\.\d+$/.test(source.version)) {
       throw new Error('El archivo .mesh debe tener "version": "1.0.0" (formato X.Y.Z)');
     }
     return source.version;
@@ -212,6 +244,54 @@
 
   function showMeshVersion(model, version) {
     meshVersionLabel.textContent = model.name + ' · v' + version;
+  }
+
+  // El espejo es una copia virtual: el archivo .mesh original no cambia.
+  // Sólo las mallas modeladas como una mitad (con borde en X=0) admiten espejo.
+  function canMirrorGeometry(geometry) {
+    if (!geometry || !geometry.vertices || !geometry.faces ||
+        geometry.vertices.length * 2 > 12000 || geometry.faces.length * 2 > 20000) return false;
+    let left = false, right = false, seam = false;
+    for (const v of geometry.vertices) {
+      if (v[0] < -1e-5) left = true;
+      else if (v[0] > 1e-5) right = true;
+      else seam = true;
+      if (left && right) return false;
+    }
+    return seam && (left || right);
+  }
+
+  function createMirroredGeometry(base) {
+    const vertices = base.vertices.map(v => v.slice());
+    const mirrorIndices = base.vertices.map((v, i) => {
+      if (Math.abs(v[0]) <= 1e-5) return i; // Vértice compartido sobre la costura.
+      const mirrored = vertices.length;
+      vertices.push([-v[0],v[1],v[2]]);
+      return mirrored;
+    });
+    const faces = base.faces.map(f => f.slice());
+    for (const f of base.faces) {
+      if (f.every(i => Math.abs(base.vertices[i][0]) <= 1e-5)) continue;
+      // La reflexión invierte la orientación; revertimos el orden de los índices.
+      faces.push([mirrorIndices[f[0]],mirrorIndices[f[2]],mirrorIndices[f[1]]]);
+    }
+    return {vertices,faces};
+  }
+
+  function applyMirrorGeometry() {
+    if (!active) {
+      mirrorCheck.disabled = true;
+      return;
+    }
+    const compatible = canMirrorGeometry(active.baseGeometry);
+    mirrorCheck.disabled = !compatible;
+    mirrorCheck.title = compatible
+      ? 'Reflejar la mitad del modelo sobre el eje X'
+      : 'El espejo se habilita únicamente para modelos construidos por mitades';
+    active.geometry = mirrorEnabled && compatible
+      ? createMirroredGeometry(active.baseGeometry)
+      : active.baseGeometry;
+    render();
   }
 
   async function pollSelectedMesh() {
@@ -233,8 +313,9 @@
       if (request !== serial || selectedModel !== model || !active) return;
       const versionIncreased = compareMeshVersions(nextVersion, active.meshVersion) > 0;
       // Sólo intercambiamos geometría y versión. El giro y la cámara permanecen intactos.
-      active.geometry = geometry;
+      active.baseGeometry = geometry;
       active.meshVersion = nextVersion;
+      applyMirrorGeometry();
       meshSha = response.sha;
       meshSnapshot = snapshot;
       showMeshVersion(model, nextVersion);
@@ -245,7 +326,7 @@
         report('ready', model.name + ' · ' + warning);
       } else {
         status.textContent = model.name + ' · v' + nextVersion + ' · ' +
-          geometry.vertices.length + ' vértices · ' + geometry.faces.length +
+          active.geometry.vertices.length + ' vértices · ' + active.geometry.faces.length +
           ' triángulos · Malla actualizada';
         report('ready', 'Malla ' + model.name + ' · v' + nextVersion + ' actualizada en vivo');
       }
@@ -395,7 +476,9 @@
     meshVersionLabel.textContent = model.name + ' · cargando…';
     meshSha = null;
     meshSnapshot = null;
-    active=null;render();
+    active=null;
+    mirrorCheck.disabled = true;
+    render();
     status.textContent='Cargando '+model.name+' desde GitHub…';
     report('loading', 'Cargando malla de '+model.name+'...');
     try {
@@ -416,14 +499,15 @@
       const roughness=Math.max(.04,Math.min(1,Number(material?.roughness)||.45));
       const edge=metallic>.6?'rgba(250,226,173,.22)':
                  (model.id==='dark_gem'?'rgba(183,192,214,.33)':'rgba(222,206,245,.28)');
-      active={geometry,color,metallic,roughness,edge,meshVersion:loadedVersion};
+      active={baseGeometry:geometry,geometry,color,metallic,roughness,edge,meshVersion:loadedVersion};
+      applyMirrorGeometry();
       showMeshVersion(model, loadedVersion);
       meshSha = loaded.sha;
       meshSnapshot = JSON.stringify(source);
       rememberModel(model.id);
-      status.textContent=model.name+' · v'+loadedVersion+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos';
+      status.textContent=model.name+' · v'+loadedVersion+' · '+active.geometry.vertices.length+' vértices · '+active.geometry.faces.length+' triángulos';
       render();
-      report('ready', model.name+' · v'+loadedVersion+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos');
+      report('ready', model.name+' · v'+loadedVersion+' · '+active.geometry.vertices.length+' vértices · '+active.geometry.faces.length+' triángulos');
     } catch (e) {
       if (request!==serial) return;
       status.textContent=e.message+' · Abre el HTML en un navegador con acceso a GitHub.';
@@ -462,6 +546,19 @@
       report('error',e.message);
     }
   }
+
+  mirrorEnabled = rememberedMirror();
+  mirrorCheck.checked = mirrorEnabled;
+  mirrorCheck.disabled = true;
+  mirrorCheck.addEventListener('change', () => {
+    saveMirror(mirrorCheck.checked);
+    if (active && selectedModel) {
+      status.textContent = selectedModel.name + ' · v' + active.meshVersion + ' · ' +
+        active.geometry.vertices.length + ' vértices · ' +
+        active.geometry.faces.length + ' triángulos' +
+        (mirrorEnabled && !mirrorCheck.disabled ? ' · Espejo X' : '');
+    }
+  });
 
   slider.addEventListener('input',()=>{
     zoom=Number(slider.value)/100;
