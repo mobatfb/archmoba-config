@@ -7,7 +7,7 @@
 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.4.4</title>
+  <title>PYRION 3D - Refresh r1.4.5</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0c101d; }
@@ -38,7 +38,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.4.4</span>
+    <span id="wrapper-version">Refresh r1.4.5</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
@@ -198,7 +198,7 @@
         const control = new AbortController();
         const limite = setTimeout(() => control.abort(), 6000);
         try {
-          const respuesta = await fetch(url, {cache:'no-store', mode:'cors', headers:{'Cache-Control':'no-cache, no-store, max-age=0','Pragma':'no-cache'}, signal:control.signal});
+          const respuesta = await fetch(url, {cache:'no-store', mode:'cors',  signal:control.signal});
           if (!respuesta.ok) throw Error('HTTP ' + respuesta.status);
           return respuesta;
         } finally {
