@@ -16,8 +16,8 @@ import tkinter as tk
 from .mesh import SphereMesh, TriangleMesh
 from .renderer import SoftwareRenderer
 
-ENGINE_VERSION = "0.4.4"
-DESKTOP_VERSION = "0.4.27"
+ENGINE_VERSION = "0.4.5"
+DESKTOP_VERSION = "0.4.28"
 BACKGROUND = "#050917"
 REPO_RAW_BASE = "https://raw.githubusercontent.com/mobatfb/archmoba-dev/main/PYRION"
 
@@ -111,6 +111,86 @@ def _fetch_updated_mesh(relative_path, loaded_model, scale):
         # Instalaciones de solo lectura siguen pudiendo usar la copia en RAM.
         pass
     return remote
+
+
+def _mesh_can_mirror(model):
+    """Detecta una media malla sobre X=0 sin reflejar un modelo ya completo."""
+    if not isinstance(model, dict) or model.get("primitive") != "triangle_mesh":
+        return False
+    vertices = model.get("vertices")
+    faces = model.get("faces")
+    if (not isinstance(vertices, list) or not isinstance(faces, list)
+            or len(vertices) * 2 > 12000 or len(faces) * 2 > 20000):
+        return False
+    left = right = seam = False
+    for vertex in vertices:
+        x = float(vertex[0])
+        if x < -1e-5:
+            left = True
+        elif x > 1e-5:
+            right = True
+        else:
+            seam = True
+        if left and right:
+            return False
+    return seam and (left or right)
+
+
+def _make_visible_mesh(model, scale, mirror=False):
+    """Construye la mitad opuesta de modo virtual y con colores por cara."""
+    base = _make_model_mesh(model, scale)
+    if not mirror or not _mesh_can_mirror(model):
+        return base
+    vertices = list(base.vertices)
+    indices = []
+    for x, y, z in base.vertices:
+        if abs(x) <= 1e-5:
+            indices.append(len(indices))  # Costura compartida del eje X=0.
+        else:
+            indices.append(len(vertices))
+            vertices.append((-x, y, z))
+    faces = [list(face.indices) for face in base.faces]
+    colors = list(base.face_colors) if model.get("face_colors") is not None else None
+    for n, face in enumerate(base.faces):
+        a, b, c = face.indices
+        if all(abs(base.vertices[i][0]) <= 1e-5 for i in (a, b, c)):
+            continue
+        # Reflejar invierte las normales; invertir el orden de los vertices.
+        faces.append([indices[a], indices[c], indices[b]])
+        if colors is not None:
+            colors.append(base.face_colors[n])
+    return TriangleMesh(vertices, faces, face_colors=colors)
+
+
+def _mirror_preferences_path():
+    return Path.home() / ".pyrion" / "preferences.json"
+
+
+def _load_mirror_preference():
+    try:
+        data = json.loads(_mirror_preferences_path().read_text(encoding="utf-8"))
+        return data.get("mirror_x") is True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _save_mirror_preference(enabled):
+    try:
+        path = _mirror_preferences_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError, TypeError):
+            data = {}
+        data["mirror_x"] = bool(enabled)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        os.replace(temp, path)
+    except OSError:
+        pass
+
 
 class _TkTexture:
     """Wrap Tk's built-in GIF decoder as a mesh RGB pixel source."""
@@ -452,6 +532,12 @@ class Pyrion3DApp(tk.Tk):
         self.control_mode = "camara"
         self._sticks = {"move": (0.0, 0.0), "look": (0.0, 0.0)}
         self._active_stick = None
+        # Preferencia local independiente del archivo .mesh y del repositorio.
+        self.mirror_enabled = _load_mirror_preference()
+        if self.mirror_enabled:
+            for item in self.objects:
+                if _mesh_can_mirror(item.get("_mesh_source")):
+                    self._replace_item_mesh(item, item["_mesh_source"])
 
 
     def _schedule_engine(self, delay, callback):
@@ -518,6 +604,7 @@ class Pyrion3DApp(tk.Tk):
         bind(self, "<F3>", self._toggle_hud_mode)
         bind(self, "<m>", self._toggle_material_mode)
         bind(self, "<M>", self._toggle_material_mode)
+        bind(self, "<Control-m>", self._toggle_mirror)
         bind(self, "<l>", self._toggle_spotlight)
         bind(self, "<L>", self._toggle_spotlight)
         bind(self, "<Tab>", self._toggle_control_mode)
@@ -842,6 +929,53 @@ class Pyrion3DApp(tk.Tk):
         if self.pending_frame is None:
             self.pending_frame = self._schedule_engine("idle", self._draw)
 
+    def _replace_item_mesh(self, item, source):
+        """Renueva solo la geometría; mantiene giro, material y cámara."""
+        geometry = _make_visible_mesh(
+            source, item["_mesh_scale"], self.mirror_enabled)
+        original = item["renderer"]
+        replacement = SoftwareRenderer(geometry, material=original.material)
+        for name in ("rotation_x", "rotation_y", "zoom", "wireframe",
+                     "camera_distance", "material_mode", "spotlight_enabled"):
+            setattr(replacement, name, getattr(original, name))
+        replacement.set_lights(
+            self._lights, ambient=self.scene.get("ambient_light", 0.56))
+        replacement.set_atmosphere(self.scene.get("fog"))
+        item["renderer"] = replacement
+        item["radius"] = geometry.radius
+        if self.renderer is original:
+            self.renderer = replacement
+
+    def _mirror_button_bounds(self):
+        if self._width >= 760:
+            return (590, 16, 732, 40)
+        if self._width >= 620:
+            return (20, 57, 162, 81)
+        if self._width >= 520:
+            return (290, 57, 432, 81)
+        return (20, 90, 162, 114)
+
+    def _toggle_mirror(self, _event=None):
+        available = any(
+            _mesh_can_mirror(item.get("_mesh_source")) for item in self.objects)
+        if not available:
+            return
+        self.mirror_enabled = not self.mirror_enabled
+        try:
+            for item in self.objects:
+                if _mesh_can_mirror(item.get("_mesh_source")):
+                    self._replace_item_mesh(item, item["_mesh_source"])
+        except (ValueError, TypeError, KeyError, AttributeError):
+            # No perder el estado anterior si una geometría es inválida.
+            self.mirror_enabled = not self.mirror_enabled
+            for item in self.objects:
+                if _mesh_can_mirror(item.get("_mesh_source")):
+                    self._replace_item_mesh(item, item["_mesh_source"])
+            return
+        _save_mirror_preference(self.mirror_enabled)
+        self._shadow_cache = None
+        self._request_frame()
+
     def _begin_mesh_check(self):
         """Consulta GitHub en un hilo, sin congelar el motor ni el giro."""
         if self._mesh_check_running:
@@ -888,21 +1022,8 @@ class Pyrion3DApp(tk.Tk):
             if item.get("_mesh_path") != path or item.get("_mesh_source") != previous:
                 continue
             try:
-                mesh = _make_model_mesh(model, item["_mesh_scale"])
-                original = item["renderer"]
-                replacement = SoftwareRenderer(mesh, material=original.material)
-                for key in ("rotation_x", "rotation_y", "zoom", "wireframe",
-                            "camera_distance", "material_mode", "spotlight_enabled"):
-                    setattr(replacement, key, getattr(original, key))
-                replacement.set_lights(
-                    self.scene.get("lights", []),
-                    ambient=self.scene.get("ambient_light", 0.56))
-                replacement.set_atmosphere(self.scene.get("fog"))
-                item["renderer"] = replacement
-                item["radius"] = mesh.radius
+                self._replace_item_mesh(item, model)
                 item["_mesh_source"] = model
-                if self.renderer is original:
-                    self.renderer = replacement
                 changed = True
             except (ValueError, TypeError, KeyError, AttributeError):
                 continue
@@ -1066,6 +1187,10 @@ class Pyrion3DApp(tk.Tk):
     def _hud_click(self, event):
         if self._width < 360:
             return False
+        mx1, my1, mx2, my2 = self._mirror_button_bounds()
+        if mx1 <= event.x <= mx2 and my1 <= event.y <= my2:
+            self._toggle_mirror()
+            return True
         if 16 <= event.x <= 40 and 14 <= event.y <= 38:
             self._check_updates_now()
             return True
@@ -1254,6 +1379,22 @@ class Pyrion3DApp(tk.Tk):
                 bx1, by2 + 4, anchor="nw", text=self.material_notice,
                 fill="#ff9e82", font=("TkDefaultFont", 8)
             )
+        mx1, my1, mx2, my2 = self._mirror_button_bounds()
+        can_mirror = any(
+            _mesh_can_mirror(item.get("_mesh_source")) for item in self.objects)
+        canvas.create_rectangle(mx1, my1, mx2, my2,
+                                outline="#6b81ae" if can_mirror else "#3a4356",
+                                fill="#233656" if can_mirror and self.mirror_enabled else "#10243c",
+                                width=1)
+        canvas.create_rectangle(mx1 + 8, my1 + 6, mx1 + 20, my1 + 18,
+                                outline="#9ab6df" if can_mirror else "#556178",
+                                fill="#18253d", width=1)
+        if self.mirror_enabled and can_mirror:
+            canvas.create_line(mx1 + 10, my1 + 12, mx1 + 13, my1 + 15,
+                               mx1 + 18, my1 + 8, fill="#7ff1c9", width=2)
+        canvas.create_text(mx1 + 27, (my1 + my2) / 2, text="ESPEJO X",
+                           anchor="w", fill="#e3edff" if can_mirror else "#697b9b",
+                           font=("TkDefaultFont", 9, "bold"))
         sx1, sy1, sx2, sy2 = self._spotlight_button_bounds()
         canvas.create_rectangle(
             sx1, sy1, sx2, sy2, outline="#826e49",
@@ -1337,7 +1478,9 @@ class Pyrion3DApp(tk.Tk):
                 ("ANIMACION", "ACTIVA" if self.running else "PAUSADA"),
                 ("ESTADO", status),
             ]
-        y = 66 if self._width >= 620 else 105
+        y = (104 if 620 <= self._width < 760 else
+             135 if self._width < 520 else
+             66 if self._width >= 620 else 105)
         for label, value in rows:
             if y + 15 >= self._height:
                 break
