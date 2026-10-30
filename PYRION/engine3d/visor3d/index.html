@@ -64,7 +64,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.3</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.4</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -93,6 +93,10 @@
           <input id="show-surface" type="checkbox" autocomplete="off">
           Ver superficie
         </label>
+        <label class="mirror-option" for="auto-rotate" title="Activar o pausar el giro automatico del modelo">
+          <input id="auto-rotate" type="checkbox" autocomplete="off" checked>
+          Girar
+        </label>
       </div>
     </section>
     <section class="section">
@@ -114,7 +118,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.3';
+  const APP_VERSION = 'v1.3.4';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -129,6 +133,7 @@
   const wireCheck = document.querySelector('#show-wire');
   const materialCheck = document.querySelector('#with-material');
   const surfaceCheck = document.querySelector('#show-surface');
+  const rotateCheck = document.querySelector('#auto-rotate');
   if (window.parent !== window) {
     document.querySelector('.sidebar').classList.add('hosted');
   }
@@ -154,6 +159,7 @@
   const WIRE_KEY = 'pyrion3d.showWire.' + REPO;
   const MATERIAL_KEY = 'pyrion3d.withMaterial.' + REPO;
   const SURFACE_KEY = 'pyrion3d.showSurface.' + REPO;
+  const ROTATE_KEY = 'pyrion3d.autoRotate.' + REPO;
   const ZOOM_KEY = 'pyrion3d.zoom.' + REPO;
   function validZoom(v) {
     const n=Number(v);
@@ -169,11 +175,12 @@
   let wireEnabled = true;
   let materialEnabled = false;
   let surfaceEnabled = false;
+  let rotateEnabled = true;
   // Estado completo persistido además de las claves individuales.
   const PREFS_KEY = 'pyrion3d.viewerPreferences.' + REPO;
   function viewerPreferences() {
     return {mirror:mirrorEnabled,wire:wireEnabled,material:materialEnabled,
-      surface:surfaceEnabled,zoom:Number(slider.value)};
+      surface:surfaceEnabled,rotate:rotateEnabled,zoom:Number(slider.value)};
   }
   function storePreferences() {
     const prefs=viewerPreferences();
@@ -183,6 +190,7 @@
       window.localStorage.setItem(WIRE_KEY,prefs.wire?'1':'0');
       window.localStorage.setItem(MATERIAL_KEY,prefs.material?'1':'0');
       window.localStorage.setItem(SURFACE_KEY,prefs.surface?'1':'0');
+      window.localStorage.setItem(ROTATE_KEY,prefs.rotate?'1':'0');
       window.localStorage.setItem(ZOOM_KEY,String(prefs.zoom));
     } catch (_) {}
     if (window.parent !== window) {
@@ -272,6 +280,10 @@
       surfaceEnabled = event.data.surfaceEnabled;
       surfaceCheck.checked = surfaceEnabled;
     }
+    if (typeof event.data.rotateEnabled === 'boolean') {
+      rotateEnabled=event.data.rotateEnabled;
+      rotateCheck.checked=rotateEnabled;
+    }
     if (validZoom(event.data.zoom)) applyZoom(event.data.zoom);
     // Tras restaurar desde el host, mantener el mismo snapshot en el iframe.
     try {window.localStorage.setItem(PREFS_KEY,JSON.stringify(viewerPreferences()));} catch (_) {}
@@ -300,11 +312,12 @@
   }
 
   function saveViewerOption(option, enabled) {
-    const keys={wire:WIRE_KEY,material:MATERIAL_KEY,surface:SURFACE_KEY};
+    const keys={wire:WIRE_KEY,material:MATERIAL_KEY,surface:SURFACE_KEY,rotate:ROTATE_KEY};
     if (!Object.prototype.hasOwnProperty.call(keys,option)) return;
     if (option === 'wire') {wireEnabled=!!enabled;wireCheck.checked=wireEnabled;}
     if (option === 'material') {materialEnabled=!!enabled;materialCheck.checked=materialEnabled;}
     if (option === 'surface') {surfaceEnabled=!!enabled;surfaceCheck.checked=surfaceEnabled;}
+    if (option === 'rotate') {rotateEnabled=!!enabled;rotateCheck.checked=rotateEnabled;}
     storePreferences();
     render();
   }
@@ -724,12 +737,15 @@
       wireEnabled=prefs.wire;
       materialEnabled=prefs.material;
       surfaceEnabled=prefs.surface;
+      if (typeof prefs.rotate==='boolean') rotateEnabled=prefs.rotate;
       if (validZoom(prefs.zoom)) applyZoom(prefs.zoom);
     } else {
       const storedWire=window.localStorage.getItem(WIRE_KEY);
       wireEnabled=storedWire===null ? true : storedWire==='1';
       materialEnabled=window.localStorage.getItem(MATERIAL_KEY)==='1';
       surfaceEnabled=window.localStorage.getItem(SURFACE_KEY)==='1';
+      const storedRotate=window.localStorage.getItem(ROTATE_KEY);
+      rotateEnabled=storedRotate===null ? true : storedRotate==='1';
       mirrorEnabled=window.localStorage.getItem(MIRROR_KEY)==='1';
       applyZoom(window.localStorage.getItem(ZOOM_KEY));
     }
@@ -737,9 +753,11 @@
   wireCheck.checked=wireEnabled;
   materialCheck.checked=materialEnabled;
   surfaceCheck.checked=surfaceEnabled;
+  rotateCheck.checked=rotateEnabled;
   wireCheck.addEventListener('change', () => saveViewerOption('wire',wireCheck.checked));
   materialCheck.addEventListener('change', () => saveViewerOption('material',materialCheck.checked));
   surfaceCheck.addEventListener('change', () => saveViewerOption('surface',surfaceCheck.checked));
+  rotateCheck.addEventListener('change', () => saveViewerOption('rotate',rotateCheck.checked));
   mirrorCheck.checked = mirrorEnabled;
   mirrorCheck.disabled = true;
   mirrorCheck.addEventListener('change', () => {
@@ -818,7 +836,7 @@
       if (active) {
         // requestAnimationFrame ya reduce la frecuencia si el visor no está visible.
         // No usar document.hidden: algunos visores integrados lo marcan oculto.
-        yaw=(yaw+ROTATION_SPEED*Math.min(elapsed,100)/1000)%(2*Math.PI);
+        if (rotateEnabled) yaw=(yaw+ROTATION_SPEED*Math.min(elapsed,100)/1000)%(2*Math.PI);
         rotationAngle.textContent='Giro '+Math.round(((yaw*180/Math.PI)%360+360)%360)+'°';
         render();
       }
