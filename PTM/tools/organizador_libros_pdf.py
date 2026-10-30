@@ -630,7 +630,7 @@ def ejecutar_consola(args: argparse.Namespace) -> int:
     return 0 if resultado.pdf and resultado.motivo_fin == "completado" else 1
 
 
-def iniciar_gui(parent=None):
+def iniciar_gui() -> None:
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -645,9 +645,12 @@ def iniciar_gui(parent=None):
     ACENTO = "#38D9CA"
     ENTRADA = "#F3F6FB"
 
-    class Ventana(tk.Frame):
+    class Ventana(tk.Tk):
         def __init__(self):
-            super().__init__(parent, bg=FONDO)
+            super().__init__()
+            self.title("Organizador de Libros a PDF")
+            self.geometry("900x810")
+            self.minsize(790, 700)
             self.configure(bg=FONDO)
             self.cola: queue.Queue[tuple[str, Any]] = queue.Queue()
             self.cancelar = threading.Event()
@@ -675,7 +678,7 @@ def iniciar_gui(parent=None):
             self.prefijo.trace_add("write", self._cuando_cambie_enlace)
             self._cuando_cambie_enlace()
             self.after(100, self._procesar_cola)
-            # PTM administra el cierre de la pestaña.
+            self.protocol("WM_DELETE_WINDOW", self._cerrar)
 
         def _crear_estilos(self, ttk):
             estilos = ttk.Style(self)
@@ -1018,9 +1021,6 @@ def iniciar_gui(parent=None):
                 pass
             self.after(100, self._procesar_cola)
 
-        def on_close(self):
-            self.cancelar.set()
-
         def _cerrar(self):
             if self.ocupado and not messagebox.askyesno(
                 "Salir", "Hay un proceso en curso. Si sales puede quedar incompleto. ¿Salir?",
@@ -1030,23 +1030,8 @@ def iniciar_gui(parent=None):
             self.cancelar.set()
             self.destroy()
 
-    if parent is not None:
-        return Ventana()
-    root = tk.Tk()
-    root.title("Organizador de Libros a PDF")
-    root.geometry("900x810")
-    root.minsize(790, 700)
-    parent = root
-    panel = Ventana()
-    panel.pack(fill="both", expand=True)
-    root.protocol("WM_DELETE_WINDOW", lambda: (panel.on_close(), root.destroy()))
-    root.mainloop()
-    return panel
-
-
-def create_tool(parent, app=None):
-    """PTM inserta este panel dentro de su propia pestaña."""
-    return iniciar_gui(parent)
+    app = Ventana()
+    app.mainloop()
 
 
 def main() -> int:
