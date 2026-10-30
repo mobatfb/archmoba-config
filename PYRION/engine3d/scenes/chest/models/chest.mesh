@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": 2,
+  "version": "1.0.0",
   "name": "chest",
   "primitive": "triangle_mesh",
   "topology": "triangles",
