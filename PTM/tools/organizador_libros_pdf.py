@@ -650,7 +650,7 @@ def iniciar_gui() -> None:
             super().__init__()
             self.title("Organizador de Libros a PDF")
             self.geometry("1180x660")
-            self.minsize(1000, 600")
+            self.minsize(1000, 600)
             self.configure(bg=FONDO)
             self.cola: queue.Queue[tuple[str, Any]] = queue.Queue()
             self.cancelar = threading.Event()
