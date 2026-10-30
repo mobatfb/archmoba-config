@@ -113,3 +113,36 @@ los triángulos se proyecten detrás del observador.
 
 **Límites técnicos:** no se calculan colisiones al caminar ni sombras
 proyectadas físicas; el renderizador sigue siendo CPU/Tk Canvas.
+
+
+## Colores individuales por triangulo (.mesh)
+
+Los archivos `pyrion.mesh` aceptan el campo opcional `face_colors`. Cada
+entrada corresponde **por indice** a un triangulo de `faces` y puede ser un
+color hexadecimal `#RRGGBB` o `null` para usar el material del modelo.
+
+```json
+{
+  "format": "pyrion.mesh",
+  "version": "1.0.2",
+  "name": "ejemplo",
+  "primitive": "triangle_mesh",
+  "vertices": [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]],
+  "faces": [[0, 1, 2], [0, 2, 3]],
+  "face_colors": ["#FFFF00", "#00FF00"]
+}
+```
+
+- No es necesario definir `face_colors` en modelos antiguos: todos los
+  triangulos conservan su apariencia anterior.
+- Si el campo existe, su longitud **debe coincidir exactamente** con el total
+  de `faces`. Se rechazan colores invalidos y longitudes distintas.
+- La iluminacion, los focos y la niebla siguen actuando sobre los colores.
+  En modo IMG, una cara con color propio se pinta solida y las demas mantienen
+  su textura.
+- Funciona en `TriangleMesh`, `SphereMesh`, el motor modular, el `app.py`
+  autocontenido y el visor web `visor3d/index.html`.
+- En el visor, **Espejo X** refleja los colores junto con las caras, sin
+  duplicar el archivo de origen. La recarga en vivo conserva la camara y el giro.
+- Cada cambio a un `.mesh` debe incrementar su atributo `version` en formato
+  `X.Y.Z`. El visor muestra la version individual del modelo.
