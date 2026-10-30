@@ -3,21 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.2.2</title>
+  <title>PYRION 3D - Refresh r1.3.0</title>
   <style>
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; background: #0c101d; }
-    body { display: flex; flex-direction: column; font-family: system-ui, Arial, sans-serif; color: #dce4fa; }
-    header { padding: 10px 14px; background: #171d30; border-bottom: 1px solid #36405b; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0c101d; }
+    body { position: relative; font-family: system-ui, Arial, sans-serif; color: #dce4fa; }
+    /* Los controles Refresh pertenecen a la columna izquierda, no al ancho superior. */
+    header { position: absolute; z-index: 2; left: 0; bottom: 0; width: clamp(250px,25vw,330px);
+      padding: 10px 14px; background: #171d30; border-top: 1px solid #36405b;
+      border-right: 1px solid #36405b; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
     button { padding: 9px 20px; color: #fff; background: #365b94; border: 0; border-radius: 6px; cursor: pointer; font-weight: 700; }
     button:hover { background: #4971af; }
     button:disabled { opacity: .6; cursor: wait; }
-    #estado { flex: 1; min-width: 160px; font-size: 12px; color: #aebfe6; }
+    #estado { flex: 1; min-width: 100%; font-size: 11px; color: #aebfe6;
+      overflow-wrap: anywhere; }
     #estado[data-type="ready"] { color: #8edac0; }
     #estado[data-type="error"] { color: #ffaaa9; }
     #version { font-size: 12px; color: #d3b7ff; white-space: nowrap; }
     #wrapper-version { font-size: 10px; color: #8e9bb9; white-space: nowrap; }
-    iframe { display: block; flex: 1; min-height: 0; width: 100%; border: 0; background: #0c101d; }
+    iframe { display: block; position: absolute; inset: 0; width: 100%; height: 100%;
+      border: 0; background: #0c101d; }
+    @media(max-width:640px) {
+      header { width: 100%; padding: 7px 10px; }
+      #estado { flex-basis: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -25,7 +34,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.2.2</span>
+    <span id="wrapper-version">Refresh r1.3.0</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
