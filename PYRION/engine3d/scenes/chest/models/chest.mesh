@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "name": "chest",
   "primitive": "triangle_mesh",
   "topology": "triangles",
@@ -187,14 +187,14 @@
       0.55971
     ],
     [
-      -0.78277,
+      -0.76477,
       -0.472,
-      0.58631
+      0.57767
     ],
     [
-      -0.82984,
+      -0.80184,
       -0.472,
-      0.56687
+      0.55343
     ],
     [
       -0.83802,
@@ -212,14 +212,14 @@
       -0.54231
     ],
     [
-      -0.82984,
+      -0.80184,
       -0.472,
-      -0.56687
+      -0.55343
     ],
     [
-      -0.78277,
+      -0.76477,
       -0.472,
-      -0.58631
+      -0.57767
     ],
     [
       -0.57301,
@@ -242,14 +242,14 @@
       0.55997
     ],
     [
-      -0.78498,
+      -0.76698,
       -0.446,
-      0.58797
+      0.57933
     ],
     [
-      -0.83219,
+      -0.80419,
       -0.446,
-      0.56847
+      0.55503
     ],
     [
       -0.84039,
@@ -267,14 +267,14 @@
       -0.54385
     ],
     [
-      -0.83219,
+      -0.80419,
       -0.446,
-      -0.56847
+      -0.55503
     ],
     [
-      -0.78498,
+      -0.76698,
       -0.446,
-      -0.58797
+      -0.57933
     ],
     [
       -0.57463,
@@ -297,14 +297,14 @@
       0.58521
     ],
     [
-      -0.81868,
+      -0.80068,
       -0.05,
-      0.61321
+      0.60457
     ],
     [
-      -0.86792,
+      -0.83992,
       -0.05,
-      0.59287
+      0.57943
     ],
     [
       -0.87647,
@@ -322,14 +322,14 @@
       -0.56719
     ],
     [
-      -0.86792,
+      -0.83992,
       -0.05,
-      -0.59287
+      -0.57943
     ],
     [
-      -0.81868,
+      -0.80068,
       -0.05,
-      -0.61321
+      -0.60457
     ],
     [
       -0.5993,
@@ -352,14 +352,14 @@
       0.62011
     ],
     [
-      -0.83238,
+      -0.81438,
       0.111,
-      0.62347
+      0.61483
     ],
     [
-      -0.88244,
+      -0.85444,
       0.111,
-      0.60279
+      0.58935
     ],
     [
       -0.89114,
@@ -377,14 +377,14 @@
       -0.57668
     ],
     [
-      -0.88244,
+      -0.85444,
       0.111,
-      -0.60279
+      -0.58935
     ],
     [
-      -0.83238,
+      -0.81438,
       0.111,
-      -0.62347
+      -0.61483
     ],
     [
       -0.60933,
@@ -1076,7 +1076,7 @@
       "face_count": 10
     }
   ],
-  "notes": "CHEST v1.0.7: recupera la profundidad del relieve verde, los divisores de paneles y los bordes inclinados usando cinco tramos verticales seleccionados de v1.0.5. Reduce de 140 a 100 triangulos verdes; franja amarilla y piso conservados sin cambios. La malla continua comparte vertices y Espejo X es virtual.",
+  "notes": "CHEST v1.0.8: en esquinas verdes se acentuan dos pliegues verticales hundidos hacia el interior sobre columnas laterales de los paneles; se conservan las mismas caras y vertices, la franja amarilla y el piso intactos. Espejo X virtual.",
   "face_colors": [
     "#FFFF00",
     "#FFFF00",
