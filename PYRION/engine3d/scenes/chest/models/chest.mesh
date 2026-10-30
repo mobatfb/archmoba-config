@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "name": "chest",
   "primitive": "triangle_mesh",
   "topology": "triangles",
@@ -500,6 +500,11 @@
       0,
       0.148,
       -0.62583
+    ],
+    [
+      0,
+      -0.643,
+      0
     ]
   ],
   "faces": [
@@ -1302,6 +1307,56 @@
       86,
       98,
       87
+    ],
+    [
+      0,
+      1,
+      99
+    ],
+    [
+      1,
+      2,
+      99
+    ],
+    [
+      2,
+      3,
+      99
+    ],
+    [
+      3,
+      4,
+      99
+    ],
+    [
+      4,
+      5,
+      99
+    ],
+    [
+      5,
+      6,
+      99
+    ],
+    [
+      6,
+      7,
+      99
+    ],
+    [
+      7,
+      8,
+      99
+    ],
+    [
+      8,
+      9,
+      99
+    ],
+    [
+      9,
+      10,
+      99
     ]
   ],
   "render": {
@@ -1322,9 +1377,16 @@
       "vertex_count": 77,
       "face_start": 20,
       "face_count": 140
+    },
+    {
+      "name": "piso_inferior_liso_media_malla",
+      "vertex_start": 99,
+      "vertex_count": 1,
+      "face_start": 160,
+      "face_count": 10
     }
   ],
-  "notes": "CHEST v1.0.4: solo se simplifica la franja amarilla inferior a una unica banda continua desde y=-0.643 hasta y=-0.537; conserva 11 estaciones de pliegue (10 segmentos, 20 triangulos) y la union de vertices con la pared verde. Geometria verde exactamente igual a v1.0.3. Espejo X virtual; sin tapa, rojo ni apliques.",
+  "notes": "CHEST v1.0.5: se agrega un piso inferior liso, horizontal y amarillo en y=-0.643. Es un abanico de 10 triangulos desde un unico vertice central situado en la costura X=0; comparte las 10 aristas del contorno inferior existente. Sin cubos ni superficies superpuestas; cuerpo verde y franja amarilla conservados exactamente, espejo virtual para completar el fondo.",
   "face_colors": [
     "#FFFF00",
     "#FFFF00",
@@ -1485,6 +1547,16 @@
     "#00FF00",
     "#00FF00",
     "#00FF00",
-    "#00FF00"
+    "#00FF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00"
   ]
 }
