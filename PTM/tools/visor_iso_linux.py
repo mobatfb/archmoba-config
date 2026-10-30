@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver, editar y guardar archivos TXT/HEX en ISO, FAT e INITRD, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.1.2"
+TOOL_VERSION = "1.1.3"
 
 
 def human_size(n):
@@ -1125,6 +1125,7 @@ class ISOEditor(ttk.Frame):
         self.temp_dir = None
         self.status_var = tk.StringVar(value="Abra un ISO para comenzar")
         self._paths = {}
+        self._expandable_containers = {}
         self._container_host = None
         self.search_var = tk.StringVar(value="")
         self.search_info = tk.StringVar(value="")
@@ -1185,7 +1186,7 @@ class ISOEditor(ttk.Frame):
         self.tree.column("size", width=100, anchor="e")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.preview())
-        self.tree.bind("<ButtonRelease-1>", self._open_img_on_click, add="+")
+        self.tree.bind("<<TreeviewOpen>>", self._expand_container_node, add="+")
         self.tree.bind("<Double-Button-1>", lambda _e: self.open_container())
 
         ttk.Label(right, text="Vista previa / informacion").pack(anchor="w", pady=(0,4))
@@ -1313,6 +1314,7 @@ class ISOEditor(ttk.Frame):
     def refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
         self._paths.clear()
+        self._expandable_containers.clear()
         if not self.work_dir or not self.work_dir.exists():
             self.search_info.set("")
             return
@@ -1340,6 +1342,7 @@ class ISOEditor(ttk.Frame):
                     values=(path.name, typ, size),
                 )
                 self._paths[iid] = path
+                self._mark_container_node(iid, path)
             self.search_info.set(f"{found} coincidencias")
             return
 
@@ -1360,6 +1363,8 @@ class ISOEditor(ttk.Frame):
                     values=(path.name, typ, size),
                 )
                 self._paths[iid] = path
+                if not is_dir:
+                    self._mark_container_node(iid, path)
                 if is_dir:
                     add(iid, path)
         add(root_id, self.work_dir)
@@ -1463,15 +1468,43 @@ class ISOEditor(ttk.Frame):
             dst = filedialog.asksaveasfilename(initialfile=p.name)
             if dst: shutil.copy2(p, dst)
 
-    def _open_img_on_click(self, event):
-        """Un clic en cualquier columna de un .img abre su contenedor interno."""
-        item = self.tree.identify_row(event.y)
-        if not item:
+    def _mark_container_node(self, item_id, path):
+        """Agrega el desplegable + solo para imagenes con contenido reconocido."""
+        name = path.name.lower()
+        if not (
+            name.endswith((".img", ".cpio", ".cpio.gz", ".cpio.xz",
+                           ".initrd", ".initramfs", ".gz", ".xz", ".lz4"))
+            or "initrd" in name or "initramfs" in name
+        ):
+            return
+        try:
+            kind = detect_container_type(path)
+        except (OSError, ValueError):
+            return
+        if kind not in ("fat", "initrd"):
+            return
+        self._expandable_containers[item_id] = kind
+        # Un hijo marcador activa el control + nativo del Treeview.
+        self.tree.insert(item_id, "end", text="Contenido del contenedor",
+                         values=("Abrir " + kind.upper(), "Contenedor", ""))
+
+    def _expand_container_node(self, _event=None):
+        """El + abre el editor FAT/INITRD en el mismo visor ISO."""
+        item = self.tree.focus()
+        if item not in self._expandable_containers:
+            return
+        path = self._paths.get(item)
+        if path is None:
             return
         self.tree.selection_set(item)
-        p = self.selected_path()
-        if p is not None and p.is_file() and p.suffix.lower() == ".img":
-            self.open_container()
+        # Dejar el signo + disponible al regresar al arbol ISO.
+        self.after_idle(lambda: self._launch_expanded_container(item, path))
+
+    def _launch_expanded_container(self, item, path):
+        if not self.tree.exists(item):
+            return
+        self.tree.item(item, open=False)
+        self.open_container()
 
     def open_container(self):
         p = self.selected_path()
