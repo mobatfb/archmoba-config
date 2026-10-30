@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver, editar y guardar archivos TXT/HEX en ISO, FAT e INITRD, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.1.1"
+TOOL_VERSION = "1.1.2"
 
 
 def human_size(n):
@@ -1185,6 +1185,7 @@ class ISOEditor(ttk.Frame):
         self.tree.column("size", width=100, anchor="e")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.preview())
+        self.tree.bind("<ButtonRelease-1>", self._open_img_on_click, add="+")
         self.tree.bind("<Double-Button-1>", lambda _e: self.open_container())
 
         ttk.Label(right, text="Vista previa / informacion").pack(anchor="w", pady=(0,4))
@@ -1462,6 +1463,16 @@ class ISOEditor(ttk.Frame):
             dst = filedialog.asksaveasfilename(initialfile=p.name)
             if dst: shutil.copy2(p, dst)
 
+    def _open_img_on_click(self, event):
+        """Un clic en cualquier columna de un .img abre su contenedor interno."""
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        self.tree.selection_set(item)
+        p = self.selected_path()
+        if p is not None and p.is_file() and p.suffix.lower() == ".img":
+            self.open_container()
+
     def open_container(self):
         p = self.selected_path()
         if not p or p.is_dir(): return
@@ -1472,8 +1483,15 @@ class ISOEditor(ttk.Frame):
                 self._open_container_editor(InitrdEditor, p)
             elif kind == "fat":
                 self._open_container_editor(FatEditor, p)
+            elif p.suffix.lower() == ".img":
+                messagebox.showwarning(
+                    "IMG no compatible",
+                    f"{p.name} no contiene un sistema FAT ni un INITRD reconocido. "
+                    "No se puede abrir como contenedor con este motor.",
+                    parent=self,
+                )
             else:
-                # Doble clic en cualquier archivo no contenedor: visor TXT/HEX.
+                # Doble clic en archivos que no son contenedores: visor TXT/HEX.
                 self.view_selected()
         except Exception as exc:
             messagebox.showerror(
