@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.4.2</title>
+  <title>PYRION 3D - Refresh r1.4.3</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0c101d; }
@@ -34,7 +34,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.4.2</span>
+    <span id="wrapper-version">Refresh r1.4.3</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
@@ -59,6 +59,7 @@
       const wireStorageKey = 'pyrion3d.showWire.' + repo;
       const materialStorageKey = 'pyrion3d.withMaterial.' + repo;
       const surfaceStorageKey = 'pyrion3d.showSurface.' + repo;
+      const rotateStorageKey = 'pyrion3d.autoRotate.' + repo;
       const preferencesKey = 'pyrion3d.viewerPreferences.' + repo;
       const zoomStorageKey = 'pyrion3d.zoom.' + repo;
       function validZoom(v) {
@@ -70,6 +71,7 @@
       let lastWireEnabled = true;
       let lastMaterialEnabled = false;
       let lastSurfaceEnabled = false;
+      let lastRotateEnabled = true;
       let lastZoom = 100;
       try {
         lastModel = localStorage.getItem(storageKey);
@@ -78,6 +80,8 @@
         lastWireEnabled=wireStored===null ? true : wireStored==='1';
         lastMaterialEnabled=localStorage.getItem(materialStorageKey)==='1';
         lastSurfaceEnabled=localStorage.getItem(surfaceStorageKey)==='1';
+        const storedRotate=localStorage.getItem(rotateStorageKey);
+        lastRotateEnabled=storedRotate===null ? true : storedRotate==='1';
         const storedZoom=localStorage.getItem(zoomStorageKey);
         if (storedZoom!==null && validZoom(storedZoom)) lastZoom=Number(storedZoom);
         const rawPrefs=localStorage.getItem(preferencesKey);
@@ -89,19 +93,22 @@
             lastWireEnabled=prefs.wire;
             lastMaterialEnabled=prefs.material;
             lastSurfaceEnabled=prefs.surface;
+            if (typeof prefs.rotate==='boolean') lastRotateEnabled=prefs.rotate;
             if (validZoom(prefs.zoom)) lastZoom=Number(prefs.zoom);
           }
         }
       } catch (_) {}
       function persistPreferences() {
         const prefs={mirror:lastMirrorEnabled,wire:lastWireEnabled,
-          material:lastMaterialEnabled,surface:lastSurfaceEnabled,zoom:lastZoom};
+          material:lastMaterialEnabled,surface:lastSurfaceEnabled,
+          rotate:lastRotateEnabled,zoom:lastZoom};
         try {
           localStorage.setItem(preferencesKey,JSON.stringify(prefs));
           localStorage.setItem(mirrorStorageKey,prefs.mirror?'1':'0');
           localStorage.setItem(wireStorageKey,prefs.wire?'1':'0');
           localStorage.setItem(materialStorageKey,prefs.material?'1':'0');
           localStorage.setItem(surfaceStorageKey,prefs.surface?'1':'0');
+          localStorage.setItem(rotateStorageKey,prefs.rotate?'1':'0');
           localStorage.setItem(zoomStorageKey,String(prefs.zoom));
         } catch (_) {}
       }
@@ -115,11 +122,12 @@
       }
 
       function saveViewerOption(option, enabled) {
-        const keys={wire:wireStorageKey,material:materialStorageKey,surface:surfaceStorageKey};
+        const keys={wire:wireStorageKey,material:materialStorageKey,surface:surfaceStorageKey,rotate:rotateStorageKey};
         if (!Object.prototype.hasOwnProperty.call(keys,option)) return;
         if (option==='wire') lastWireEnabled=enabled;
         if (option==='material') lastMaterialEnabled=enabled;
         if (option==='surface') lastSurfaceEnabled=enabled;
+        if (option==='rotate') lastRotateEnabled=enabled;
         persistPreferences();
       }
 
@@ -140,7 +148,7 @@
             source:'pyrion3d-host',type:'stored-model',id:lastModel,
             mirrorEnabled:lastMirrorEnabled,
             wireEnabled:lastWireEnabled,materialEnabled:lastMaterialEnabled,
-            surfaceEnabled:lastSurfaceEnabled,zoom:lastZoom
+            surfaceEnabled:lastSurfaceEnabled,rotateEnabled:lastRotateEnabled,zoom:lastZoom
           }, '*');
           return;
         }
@@ -152,6 +160,7 @@
             lastWireEnabled=prefs.wire;
             lastMaterialEnabled=prefs.material;
             lastSurfaceEnabled=prefs.surface;
+            if (typeof prefs.rotate==='boolean') lastRotateEnabled=prefs.rotate;
             if (validZoom(prefs.zoom)) lastZoom=Number(prefs.zoom);
             persistPreferences();
           }
@@ -166,7 +175,7 @@
           return;
         }
         if (data.type === 'viewer-option-changed') {
-          if (['wire','material','surface'].includes(data.option) &&
+          if (['wire','material','surface','rotate'].includes(data.option) &&
               typeof data.enabled === 'boolean') saveViewerOption(data.option, data.enabled);
           return;
         }
