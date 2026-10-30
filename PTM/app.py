@@ -29,7 +29,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.78"
+APP_VERSION = "1.0.79"
 APP_UPDATE_DATE = "30/10/2026"
 APP_UPDATE_TIME = "15:27"
 SEARCH_MAX_LENGTH = 40
@@ -3818,6 +3818,8 @@ class PTMApp(tk.Tk):
 
     def _start_tool_download(self, tool, key, force_remote=False):
         """Primer ciclo de descarga de la pestaña."""
+        if str(tool.get("slug", "")).strip() == "organizador_libros_pdf":
+            force_remote = True  # Evita una copia obsoleta del CDN RAW.
         meta = self.open_tabs.get(key)
         if not meta:
             return
