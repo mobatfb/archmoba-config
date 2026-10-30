@@ -649,8 +649,8 @@ def iniciar_gui() -> None:
         def __init__(self):
             super().__init__()
             self.title("Organizador de Libros a PDF")
-            self.geometry("900x810")
-            self.minsize(790, 700)
+            self.geometry("1180x660")
+            self.minsize(1000, 600")
             self.configure(bg=FONDO)
             self.cola: queue.Queue[tuple[str, Any]] = queue.Queue()
             self.cancelar = threading.Event()
@@ -731,8 +731,10 @@ def iniciar_gui() -> None:
 
             contenedor = tk.Frame(self, bg=FONDO, padx=24)
             contenedor.pack(fill="both", expand=True)
-            tarjeta_enlace = self._tarjeta(contenedor)
-            tarjeta_enlace.pack(fill="x", pady=(0, 7))
+            fila_superior = tk.Frame(contenedor, bg=FONDO)
+            fila_superior.pack(fill="x", pady=(0, 7))
+            tarjeta_enlace = self._tarjeta(fila_superior)
+            tarjeta_enlace.pack(side="left", fill="both", expand=True, padx=(0, 5))
             self._etiqueta(tarjeta_enlace, "1. ENLACE DEL LIBRO", color=ACENTO,
                            tam=10, negrita=True).pack(anchor="w")
             self._entrada(tarjeta_enlace, self.enlace).pack(fill="x", pady=(6, 5))
@@ -744,8 +746,8 @@ def iniciar_gui() -> None:
                      font=("Segoe UI", 9), anchor="w", wraplength=800,
                      justify="left").pack(fill="x", pady=(5, 0))
 
-            tarjeta_pag = self._tarjeta(contenedor)
-            tarjeta_pag.pack(fill="x", pady=(0, 7))
+            tarjeta_pag = self._tarjeta(fila_superior)
+            tarjeta_pag.pack(side="left", fill="both", expand=True, padx=(5, 0))
             self._etiqueta(tarjeta_pag, "2. INTERVALO Y PAGINAS VACIAS", color=ACENTO,
                            tam=10, negrita=True).pack(anchor="w", pady=(0, 7))
             fila = tk.Frame(tarjeta_pag, bg=TARJETA)
@@ -787,8 +789,10 @@ def iniciar_gui() -> None:
                 selectcolor="#203756", font=("Segoe UI", 10),
             ).pack(anchor="w", pady=(8, 0))
 
-            tarjeta_dest = self._tarjeta(contenedor)
-            tarjeta_dest.pack(fill="x", pady=(0, 7))
+            fila_inferior = tk.Frame(contenedor, bg=FONDO)
+            fila_inferior.pack(fill="x", pady=(0, 7))
+            tarjeta_dest = self._tarjeta(fila_inferior)
+            tarjeta_dest.pack(side="left", fill="both", expand=True, padx=(0, 6))
             self._etiqueta(tarjeta_dest, "3. DESTINO Y AJUSTES", color=ACENTO,
                            tam=10, negrita=True).pack(anchor="w", pady=(0, 6))
             fila_dest = tk.Frame(tarjeta_dest, bg=TARJETA)
@@ -802,15 +806,15 @@ def iniciar_gui() -> None:
             self._etiqueta(avanzado, "Max. paginas por ejecucion").pack(side="left")
             self._entrada(avanzado, self.max_paginas, 7).pack(side="left", padx=(9, 0))
 
-            acciones = tk.Frame(contenedor, bg=FONDO)
-            acciones.pack(fill="x", pady=(1, 7))
+            acciones = tk.Frame(fila_inferior, bg=FONDO)
+            acciones.pack(side="right", fill="y", padx=(4, 0))
             self.generar_btn = self._boton(acciones, "CREAR PDF", self._iniciar, principal=True)
-            self.generar_btn.pack(side="left")
+            self.generar_btn.pack(side="top", fill="x", pady=(0, 4))
             self.cancelar_btn = self._boton(acciones, "Cancelar", self._cancelar, peligro=True)
-            self.cancelar_btn.pack(side="left", padx=10)
+            self.cancelar_btn.pack(side="top", fill="x", pady=(0, 4))
             self.cancelar_btn.config(state="disabled")
             self.abrir_btn = self._boton(acciones, "Abrir carpeta", self._abrir_carpeta)
-            self.abrir_btn.pack(side="right")
+            self.abrir_btn.pack(side="top", fill="x")
 
             tarjeta_log = self._tarjeta(contenedor)
             tarjeta_log.pack(fill="both", expand=True, pady=(0, 9))
