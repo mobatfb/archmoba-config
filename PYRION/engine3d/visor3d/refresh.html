@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.4.1</title>
+  <title>PYRION 3D - Refresh r1.4.2</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0c101d; }
@@ -34,7 +34,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.4.1</span>
+    <span id="wrapper-version">Refresh r1.4.2</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
@@ -60,11 +60,17 @@
       const materialStorageKey = 'pyrion3d.withMaterial.' + repo;
       const surfaceStorageKey = 'pyrion3d.showSurface.' + repo;
       const preferencesKey = 'pyrion3d.viewerPreferences.' + repo;
+      const zoomStorageKey = 'pyrion3d.zoom.' + repo;
+      function validZoom(v) {
+        const n=Number(v);
+        return Number.isInteger(n) && n>=50 && n<=220;
+      }
       let lastModel = null;
       let lastMirrorEnabled = false;
       let lastWireEnabled = true;
       let lastMaterialEnabled = false;
       let lastSurfaceEnabled = false;
+      let lastZoom = 100;
       try {
         lastModel = localStorage.getItem(storageKey);
         lastMirrorEnabled = localStorage.getItem(mirrorStorageKey) === '1';
@@ -72,6 +78,8 @@
         lastWireEnabled=wireStored===null ? true : wireStored==='1';
         lastMaterialEnabled=localStorage.getItem(materialStorageKey)==='1';
         lastSurfaceEnabled=localStorage.getItem(surfaceStorageKey)==='1';
+        const storedZoom=localStorage.getItem(zoomStorageKey);
+        if (storedZoom!==null && validZoom(storedZoom)) lastZoom=Number(storedZoom);
         const rawPrefs=localStorage.getItem(preferencesKey);
         if (rawPrefs) {
           const prefs=JSON.parse(rawPrefs);
@@ -81,18 +89,20 @@
             lastWireEnabled=prefs.wire;
             lastMaterialEnabled=prefs.material;
             lastSurfaceEnabled=prefs.surface;
+            if (validZoom(prefs.zoom)) lastZoom=Number(prefs.zoom);
           }
         }
       } catch (_) {}
       function persistPreferences() {
         const prefs={mirror:lastMirrorEnabled,wire:lastWireEnabled,
-          material:lastMaterialEnabled,surface:lastSurfaceEnabled};
+          material:lastMaterialEnabled,surface:lastSurfaceEnabled,zoom:lastZoom};
         try {
           localStorage.setItem(preferencesKey,JSON.stringify(prefs));
           localStorage.setItem(mirrorStorageKey,prefs.mirror?'1':'0');
           localStorage.setItem(wireStorageKey,prefs.wire?'1':'0');
           localStorage.setItem(materialStorageKey,prefs.material?'1':'0');
           localStorage.setItem(surfaceStorageKey,prefs.surface?'1':'0');
+          localStorage.setItem(zoomStorageKey,String(prefs.zoom));
         } catch (_) {}
       }
       function saveModel(id) {
@@ -130,7 +140,7 @@
             source:'pyrion3d-host',type:'stored-model',id:lastModel,
             mirrorEnabled:lastMirrorEnabled,
             wireEnabled:lastWireEnabled,materialEnabled:lastMaterialEnabled,
-            surfaceEnabled:lastSurfaceEnabled
+            surfaceEnabled:lastSurfaceEnabled,zoom:lastZoom
           }, '*');
           return;
         }
@@ -142,6 +152,7 @@
             lastWireEnabled=prefs.wire;
             lastMaterialEnabled=prefs.material;
             lastSurfaceEnabled=prefs.surface;
+            if (validZoom(prefs.zoom)) lastZoom=Number(prefs.zoom);
             persistPreferences();
           }
           return;
