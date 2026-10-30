@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Administra imagenes IMG en ISO Linux: ver, subir, editar, reemplazar, eliminar y extraer archivos; "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver, editar y guardar archivos TXT/HEX en ISO, FAT e INITRD, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.0.1"
 
 
 def human_size(n):
@@ -1705,52 +1705,163 @@ class ISOEditor(ttk.Frame):
                 self.after(0, lambda: self.set_status("No se pudo reconstruir el ISO"))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _rebuild_iso(self, dst):
-        if which("xorriso"):
-            args = [
-                "xorriso", "-indev", str(self.iso_path),
-                "-outdev", str(dst),
-                "-boot_image", "any", "replay",
-                "-update_r", str(self.work_dir), "/",
-                "-commit"
-            ]
-            r = run_cmd(args)
-            if r.returncode == 0 and dst.exists() and dst.stat().st_size > 0:
-                return
-            raise RuntimeError("xorriso no pudo reconstruir el ISO:\n" + (r.stderr or r.stdout)[-2500:])
+    @staticmethod
+    def _iso9660_files(src):
+        """Mapa de registros ISO9660 del PVD, con offsets físicos verificables."""
+        entries = {}
+        sector = 2048
+        with open(src, "rb") as fp:
+            fp.seek(16 * sector)
+            pvd = fp.read(sector)
+            if len(pvd) != sector or pvd[0] != 1 or pvd[1:6] != b"CD001":
+                raise RuntimeError("El origen no es ISO9660 estándar.")
+            root = pvd[156:190]
+            root_extent = struct.unpack_from("<I", root, 2)[0]
+            root_size = struct.unpack_from("<I", root, 10)[0]
+            visited = set()
 
-        try:
-            import pycdlib
-        except Exception as exc:
+            def visit(folder, extent, size):
+                if (extent, size) in visited:
+                    return
+                visited.add((extent, size))
+                if size > 10 * 1024 * 1024:
+                    raise RuntimeError("Directorio ISO demasiado grande.")
+                fp.seek(extent * sector)
+                buf = fp.read(size)
+                pos = 0
+                while pos < len(buf):
+                    if not buf[pos]:
+                        pos = (pos // sector + 1) * sector
+                        continue
+                    count = buf[pos]
+                    rec = buf[pos:pos + count]
+                    if len(rec) < 34 or rec[0] != count:
+                        raise RuntimeError("Registro ISO9660 inválido.")
+                    name = rec[33:33 + rec[32]]
+                    rec_position = extent * sector + pos
+                    pos += count
+                    if name in (b"\x00", b"\x01"):
+                        continue
+                    name = name.decode("ascii", "replace").split(";", 1)[0]
+                    full = (folder + "/" + name).lstrip("/")
+                    child_extent = struct.unpack_from("<I", rec, 2)[0]
+                    child_size = struct.unpack_from("<I", rec, 10)[0]
+                    if rec[25] & 2:
+                        visit(full, child_extent, child_size)
+                    else:
+                        if full.casefold() in entries:
+                            raise RuntimeError("Archivo ISO repetido: " + full)
+                        entries[full.casefold()] = (full, child_extent, child_size, rec_position)
+            visit("", root_extent, root_size)
+        return entries
+
+    def _rebuild_iso(self, dst):
+        """
+        PYRION BIOS/UEFI: nunca reconstruir el catálogo ni recolocar archivos
+        del bootloader. Parchear en el ISO original los bytes de archivos editados.
+        Solo permite archivos de igual o menor tamaño que el espacio físico
+        original, manteniendo extents, orden y encabezados de arranque.
+        """
+        catalog = self._iso9660_files(self.iso_path)
+        work = {}
+        for p in self.work_dir.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(self.work_dir).as_posix()
+                work[rel.casefold()] = (rel, p)
+        original_names = set(catalog)
+        if set(work) != original_names:
+            missing = sorted(original_names - set(work))
+            added = sorted(set(work) - original_names)
             raise RuntimeError(
-                "Para guardar una copia arrancable instala xorriso.\n"
-                "Sin xorriso solo puedo crear un ISO de datos si instalas pycdlib."
-            ) from exc
-        iso = pycdlib.PyCdlib()
-        iso.new(interchange_level=3, joliet=3, rock_ridge="1.09")
+                "Este ISO usa un arranque personalizado. No es seguro añadir "
+                "o eliminar archivos del nivel ISO porque cambiaría el "
+                "catálogo de arranque. Puedes añadir/eliminar archivos "
+                "DENTRO del INITRD o la imagen FAT.\n"
+                f"Eliminados: {missing[:5]}\nAñadidos: {added[:5]}"
+            )
+        sector = 2048
+        original_size = self.iso_path.stat().st_size
+        changed = []
+        with open(self.iso_path, "rb") as origin:
+            for key, (name, extent, old_size, rec_offset) in catalog.items():
+                path = work[key][1]
+                new_size = path.stat().st_size
+                origin.seek(extent * sector)
+                with open(path, "rb") as stream:
+                    same = True
+                    while True:
+                        block = stream.read(1024 * 1024)
+                        if not block:
+                            break
+                        if origin.read(len(block)) != block:
+                            same = False
+                            break
+                    if new_size != old_size:
+                        same = False
+                if not same:
+                    changed.append((name, extent, old_size, rec_offset, path, new_size))
+        if not changed:
+            shutil.copyfile(self.iso_path, dst)
+            return
+
+        sorted_extents = sorted(set(entry[1] for entry in catalog.values()))
+        for name, extent, old_size, rec_offset, path, new_size in changed:
+            next_extents = [x for x in sorted_extents if x > extent]
+            physical_limit = min((next_extents[0] * sector if next_extents
+                                  else original_size), original_size)
+            capacity = physical_limit - extent * sector
+            # Never touch beyond the original file's allocated ISO sectors:
+            # custom boot loaders may rely on adjacent raw sectors.
+            capacity = min(capacity, ((old_size + sector - 1) // sector) * sector)
+            if new_size > capacity:
+                raise RuntimeError(
+                    f"{name} ahora pesa {new_size:,} bytes; su espacio seguro "
+                    f"en el ISO es {capacity:,} bytes. Guardado cancelado "
+                    "para NO generar un ISO que no arranque. "
+                    "Hay que reconstruir el cargador o reservar más espacio "
+                    "para este archivo en el ISO base."
+                )
+
+        temporary = None
         try:
-            dirs = [p for p in self.work_dir.rglob("*") if p.is_dir()]
-            for d in sorted(dirs, key=lambda p: len(p.parts)):
-                rel = d.relative_to(self.work_dir).as_posix()
-                rr = "/" + rel
-                iso_name = "/" + "/".join((part[:8].upper().replace(" ","_") or "DIR") for part in rel.split("/"))
-                try: iso.add_directory(iso_path=iso_name, rr_name=d.name, joliet_path=rr)
-                except Exception: pass
-            for f in [p for p in self.work_dir.rglob("*") if p.is_file()]:
-                rel = f.relative_to(self.work_dir).as_posix()
-                parts = rel.split("/")
-                iso_parts = []
-                for part in parts[:-1]: iso_parts.append((part[:8].upper().replace(" ","_") or "DIR"))
-                stem = Path(parts[-1]).stem[:8].upper().replace(" ","_") or "FILE"
-                ext = Path(parts[-1]).suffix[1:4].upper()
-                iso_file = stem + ("." + ext if ext else "") + ";1"
-                iso_path = "/" + "/".join(iso_parts + [iso_file])
-                try: iso.add_file(str(f), iso_path=iso_path, rr_name=f.name, joliet_path="/"+rel)
-                except Exception as exc: raise RuntimeError(f"No se pudo agregar {rel}: {exc}")
-            iso.write(str(dst))
+            with tempfile.NamedTemporaryFile(
+                dir=dst.parent, prefix=".pyrion_iso_", suffix=".tmp",
+                delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+            shutil.copyfile(self.iso_path, temporary)
+            with open(temporary, "r+b") as out:
+                for name, extent, old_size, rec_offset, path, new_size in changed:
+                    out.seek(extent * sector)
+                    with open(path, "rb") as stream:
+                        shutil.copyfileobj(stream, out)
+                    # Update ISO9660 record size in both endiannesses;
+                    # keep extent untouched for BIOS and EFI.
+                    out.seek(rec_offset + 10)
+                    out.write(struct.pack("<I", new_size))
+                    out.write(struct.pack(">I", new_size))
+                out.flush()
+                os.fsync(out.fileno())
+            # Verify each edited file and its actual ISO metadata.
+            result = self._iso9660_files(temporary)
+            with open(temporary, "rb") as fp:
+                for name, extent, old_size, rec_offset, path, new_size in changed:
+                    row = result.get(name.casefold())
+                    if row is None or row[1] != extent or row[2] != new_size:
+                        raise RuntimeError("Verificación ISO9660 fallida: " + name)
+                    fp.seek(extent * sector)
+                    with open(path, "rb") as stream:
+                        while True:
+                            chunk = stream.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            if fp.read(len(chunk)) != chunk:
+                                raise RuntimeError("Diferencia al verificar " + name)
+            os.replace(temporary, dst)
+            temporary = None
         finally:
-            iso.close()
-        if not dst.exists(): raise RuntimeError("No se genero el ISO")
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 # Entrada explicita para PTM. Se utiliza el editor principal, no los auxiliares.
