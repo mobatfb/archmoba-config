@@ -15,6 +15,7 @@
     .brand small {color:#a9b5d3;font-size:10px;font-weight:400}
     .build-info {margin-left:auto;display:flex;align-items:center;gap:10px;white-space:nowrap;color:#b9c4df;font-size:11px}
     #visor-version {font-weight:700;color:#d1baff}
+    #mesh-version {font-weight:650;color:#f0cea3}
     #rotation-angle {font-variant-numeric:tabular-nums;color:#94e1ce}
     nav {display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
     nav button {background:#252c42;color:#dae1fa;border:1px solid #46516f;
@@ -36,7 +37,7 @@
   <header>
     <div class="brand">PYRION 3D <small>· MODELOS</small></div>
     <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
-    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.4</span><span id="rotation-angle">Giro 0°</span></div>
+    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.5</span><span id="mesh-version" aria-live="polite">Modelo: —</span><span id="rotation-angle">Giro 0°</span></div>
   </header>
   <canvas id="visor" aria-label="Visualización 3D con rotación automática de la malla seleccionada"></canvas>
   <div class="control">
@@ -49,7 +50,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.1.4';
+  const APP_VERSION = 'v1.1.5';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -74,6 +75,7 @@
   const pitch = 0.22; // Inclinación fija: el modelo gira sobre su eje Y.
   const ROTATION_SPEED = Math.PI / 6; // 30 grados por segundo (vuelta cada 12 s).
   const rotationAngle = document.getElementById('rotation-angle');
+  const meshVersionLabel = document.getElementById('mesh-version');
   const STORAGE_KEY = 'pyrion3d.selectedModel.' + REPO;
   const MESH_POLL_INTERVAL = 3000;
   let selectedModel = null;
@@ -193,6 +195,25 @@
     return JSON.parse(new TextDecoder().decode(Uint8Array.from(binary, c => c.charCodeAt(0))));
   }
 
+  function meshVersion(source) {
+    // Un unico atributo version en cada .mesh: version del modelo, no del formato.
+    if (!source || typeof source.version !== 'string' ||
+        !/^\\d+\\.\\d+\\.\\d+$/.test(source.version)) {
+      throw new Error('El archivo .mesh debe tener "version": "1.0.0" (formato X.Y.Z)');
+    }
+    return source.version;
+  }
+
+  function compareMeshVersions(next, current) {
+    const a=next.split('.').map(Number),b=current.split('.').map(Number);
+    for (let i=0;i<3;i++) if (a[i]!==b[i]) return a[i]>b[i]?1:-1;
+    return 0;
+  }
+
+  function showMeshVersion(model, version) {
+    meshVersionLabel.textContent = model.name + ' · v' + version;
+  }
+
   async function pollSelectedMesh() {
     if (polling || !selectedModel || !active || Date.now() < pollNotBefore) return;
     const model = selectedModel, request = serial;
@@ -207,16 +228,27 @@
         meshSha = response.sha;
         return;
       }
+      const nextVersion = meshVersion(source);
       const geometry = checkMesh(source, model.scale);
       if (request !== serial || selectedModel !== model || !active) return;
-      // Sólo intercambiamos geometría. yaw, zoom, estado del canvas y bucle
-      // requestAnimationFrame permanecen intactos.
+      const versionIncreased = compareMeshVersions(nextVersion, active.meshVersion) > 0;
+      // Sólo intercambiamos geometría y versión. El giro y la cámara permanecen intactos.
       active.geometry = geometry;
+      active.meshVersion = nextVersion;
       meshSha = response.sha;
       meshSnapshot = snapshot;
-      status.textContent = model.name + ' · ' + geometry.vertices.length +
-        ' vértices · ' + geometry.faces.length + ' triángulos · Malla actualizada';
-      report('ready', 'Malla de ' + model.name + ' actualizada en vivo');
+      showMeshVersion(model, nextVersion);
+      if (!versionIncreased) {
+        const warning = 'El archivo .mesh cambió sin incrementar su versión (' + nextVersion + ')';
+        console.warn('[PYRION]', warning, model.mesh);
+        status.textContent = model.name + ' · ' + warning;
+        report('ready', model.name + ' · ' + warning);
+      } else {
+        status.textContent = model.name + ' · v' + nextVersion + ' · ' +
+          geometry.vertices.length + ' vértices · ' + geometry.faces.length +
+          ' triángulos · Malla actualizada';
+        report('ready', 'Malla ' + model.name + ' · v' + nextVersion + ' actualizada en vivo');
+      }
     } catch (error) {
       // Ante límites de API o desconexión, el visor sigue girando.
       if (/HTTP (403|429)/.test(error.message)) pollNotBefore = Date.now() + 60000;
@@ -360,6 +392,7 @@
       button.setAttribute('aria-pressed',String(button.dataset.id===model.id));
     }
     selectedModel = model;
+    meshVersionLabel.textContent = model.name + ' · cargando…';
     meshSha = null;
     meshSnapshot = null;
     active=null;render();
@@ -374,6 +407,7 @@
       ]);
       const source = loaded.source;
       if (request!==serial) return;
+      const loadedVersion = meshVersion(source);
       const geometry=checkMesh(source,model.scale);
       const colorText=material?.base_color || source.material?.base_color || '#8D55C2';
       const hex=/^#[0-9a-f]{6}$/i.test(colorText)?colorText:'#8D55C2';
@@ -382,13 +416,14 @@
       const roughness=Math.max(.04,Math.min(1,Number(material?.roughness)||.45));
       const edge=metallic>.6?'rgba(250,226,173,.22)':
                  (model.id==='dark_gem'?'rgba(183,192,214,.33)':'rgba(222,206,245,.28)');
-      active={geometry,color,metallic,roughness,edge};
+      active={geometry,color,metallic,roughness,edge,meshVersion:loadedVersion};
+      showMeshVersion(model, loadedVersion);
       meshSha = loaded.sha;
       meshSnapshot = JSON.stringify(source);
       rememberModel(model.id);
-      status.textContent=model.name+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos';
+      status.textContent=model.name+' · v'+loadedVersion+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos';
       render();
-      report('ready', model.name+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos');
+      report('ready', model.name+' · v'+loadedVersion+' · '+geometry.vertices.length+' vértices · '+geometry.faces.length+' triángulos');
     } catch (e) {
       if (request!==serial) return;
       status.textContent=e.message+' · Abre el HTML en un navegador con acceso a GitHub.';
