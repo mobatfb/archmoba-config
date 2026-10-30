@@ -185,10 +185,28 @@ class Face:
     band: int
 
 
+def normalize_face_colors(colors, count):
+    """Color #RRGGBB o None por triangulo; None usa el material existente."""
+    if colors is None:
+        return (None,) * count
+    if not isinstance(colors, list) or len(colors) != count:
+        raise ValueError("face_colors must have exactly one item per triangle")
+    result = []
+    for index, color in enumerate(colors):
+        if color is None:
+            result.append(None)
+        elif (isinstance(color, str) and len(color) == 7 and color.startswith("#")
+              and all(ch in "0123456789abcdefABCDEF" for ch in color[1:])):
+            result.append(color.upper())
+        else:
+            raise ValueError("Invalid face_colors[%d]: expected #RRGGBB or null" % index)
+    return tuple(result)
+
+
 class SphereMesh:
     """UV sphere with a single north/south pole and manifold triangle topology."""
 
-    def __init__(self, rings=24, segments=48, radius=1.0):
+    def __init__(self, rings=24, segments=48, radius=1.0, face_colors=None):
         if rings < 4 or segments < 6:
             raise ValueError("Sphere needs rings>=4 and segments>=6")
         self.rings = int(rings)
@@ -236,6 +254,8 @@ class SphereMesh:
                                    math.pi * (self.rings - 0.55) / self.rings,
                                    self.rings - 1))
 
+        self.face_colors = normalize_face_colors(face_colors, len(self.faces))
+
     @property
     def vertex_count(self):
         return len(self.vertices)
@@ -270,7 +290,7 @@ class TriangleMesh:
 
     flat_shading = True
 
-    def __init__(self, vertices, faces, scale=(1.0, 1.0, 1.0)):
+    def __init__(self, vertices, faces, scale=(1.0, 1.0, 1.0), face_colors=None):
         if not (3 <= len(vertices) <= 12000 and 1 <= len(faces) <= 20000):
             raise ValueError("Invalid triangle mesh size")
         if len(scale) != 3 or any(
@@ -301,6 +321,7 @@ class TriangleMesh:
             lon = math.atan2(centroid[2], centroid[0]) % (2 * math.pi)
             lat = math.pi * (1.0 - (centroid[1] - low) / height)
             self.faces.append(Face(tuple(face), lon, lat, 0))
+        self.face_colors = normalize_face_colors(face_colors, len(self.faces))
 
     @property
     def vertex_count(self):
@@ -351,6 +372,11 @@ class SoftwareRenderer:
             raise ValueError("Invalid material base_color") from exc
         self._metallic = max(0.0, min(1.0, float(self.material.get("metallic", 0))))
         self._roughness = max(0.04, min(1.0, float(self.material.get("roughness", 0.5))))
+        # Cada indice corresponde al triangulo en mesh.faces, sin alterar su topologia.
+        self._face_rgbs = [
+            tuple(int(color[k:k + 2], 16) for k in (1, 3, 5)) if color else None
+            for color in getattr(mesh, "face_colors", (None,) * len(mesh.faces))
+        ]
         self.material_mode = "mat"
         self._texels = None
         texture = self.material.get("_texture_image")
@@ -544,13 +570,13 @@ class SoftwareRenderer:
         veining += 0.38 * math.cos(7.4 * lon - lat * 4.7)
         return max(0.0, min(1.0, (veining + 0.12) * 0.60))
 
-    def _color(self, normal, accent, front, view, texel=None):
+    def _color(self, normal, accent, front, view, texel=None, face_rgb=None):
         """CPU approximation of metallic PBR with environment-like highlights."""
         a = max(0.0, _dot(normal, self._light_a))
         b = max(0.0, _dot(normal, self._light_b))
         if self._gem:
-            base = self._base_rgb
-            if self.material_mode == "img" and texel is not None:
+            base = face_rgb if face_rgb is not None else self._base_rgb
+            if face_rgb is None and self.material_mode == "img" and texel is not None:
                 base = tuple(0.12 * base[k] + 0.88 * texel[k] for k in range(3))
             facet = 0.30 + 0.65 * a + 0.24 * b + 0.21 * accent
             glint = max(0.0, _dot(normal, _unit((-0.28, 0.74, 0.62)))) ** 13
@@ -564,6 +590,13 @@ class SoftwareRenderer:
                 exposure*(base[2] * (facet + 0.12) + strength*(135 * glint + 125 * white + 44 * rim)),
             ))
         if not self._pbr:
+            if face_rgb is not None:
+                # Material procedimental simple: respeta el color explicito con luz.
+                diffuse = 0.33 + 0.61 * a + 0.16 * b
+                highlight = 19.0 * max(0.0, _dot(
+                    normal, _unit((-0.13, 0.62, 0.78))
+                )) ** 24
+                return _rgb(tuple(channel * diffuse + highlight for channel in face_rgb))
             edge = (1.0 - front) ** 1.9
             spec = max(0.0, _dot(normal, _unit((-0.13, 0.62, 0.78)))) ** 24
             return _rgb((
@@ -572,8 +605,8 @@ class SoftwareRenderer:
                 69 + 112 * a + 71 * b + 46 * accent + 48 * spec + 36 * edge,
             ))
         metallic, rough = self._metallic, self._roughness
-        base = self._base_rgb
-        if self.material_mode == "img" and texel is not None:
+        base = face_rgb if face_rgb is not None else self._base_rgb
+        if face_rgb is None and self.material_mode == "img" and texel is not None:
             # Photo texture wrapped around the rotating 3D sphere.
             base = tuple(0.88 * texel[k] + 0.12 * base[k]
                          for k in range(3))
@@ -751,9 +784,11 @@ class SoftwareRenderer:
             for vx, vy, depth in polygon:
                 factor = focal / depth
                 projected.extend((cx + vx * factor, cy - vy * factor))
+            face_rgb = self._face_rgbs[face_index]
             color = self._color(
                 normal, accent, front, towards_camera,
-                self._texels[face_index] if self._texels is not None else None
+                self._texels[face_index] if self._texels is not None else None,
+                face_rgb=face_rgb
             )
             if self._spotlights and self.spotlight_enabled:
                 color = self._shade_spotlights(
@@ -761,7 +796,8 @@ class SoftwareRenderer:
                 )
             depth = sum(v[2] for v in polygon) / len(polygon)
             color = self._apply_fog(color, depth)
-            uv = [(point[0], point[1], view[index][2]) for point, index in zip(self._surface_uv[face_index], (i, j, k))] if surface and len(polygon) == 3 and all(view[t][2] >= 0.32 for t in (i, j, k)) else None
+            # Las caras con color propio se pintan solidas, incluso en modo IMG.
+            uv = [(point[0], point[1], view[index][2]) for point, index in zip(self._surface_uv[face_index], (i, j, k))] if surface and face_rgb is None and len(polygon) == 3 and all(view[t][2] >= 0.32 for t in (i, j, k)) else None
             visible_faces.append((depth, projected, color, uv))
         visible_faces.sort(key=lambda item: item[0], reverse=True)
         if surface:
@@ -899,9 +935,11 @@ def load_selected_scene():
             # Preserve the original sphere geometry and rendering scale.
             radius = float(params["radius"]) * sum(map(float, scale)) / 3
             mesh = SphereMesh(rings=int(params["rings"]),
-                              segments=int(params["segments"]), radius=radius)
+                              segments=int(params["segments"]), radius=radius,
+                              face_colors=model.get("face_colors"))
         elif primitive == "triangle_mesh":
-            mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale)
+            mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale,
+                                face_colors=model.get("face_colors"))
             radius = mesh.radius
         else:
             raise ValueError("Unsupported mesh primitive: " + str(primitive))
