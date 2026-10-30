@@ -11,10 +11,28 @@ class Face:
     band: int
 
 
+def normalize_face_colors(colors, count):
+    """Color #RRGGBB o None por triangulo; None usa el material existente."""
+    if colors is None:
+        return (None,) * count
+    if not isinstance(colors, list) or len(colors) != count:
+        raise ValueError("face_colors must have exactly one item per triangle")
+    result = []
+    for index, color in enumerate(colors):
+        if color is None:
+            result.append(None)
+        elif (isinstance(color, str) and len(color) == 7 and color.startswith("#")
+              and all(ch in "0123456789abcdefABCDEF" for ch in color[1:])):
+            result.append(color.upper())
+        else:
+            raise ValueError("Invalid face_colors[%d]: expected #RRGGBB or null" % index)
+    return tuple(result)
+
+
 class SphereMesh:
     """UV sphere with a single north/south pole and manifold triangle topology."""
 
-    def __init__(self, rings=24, segments=48, radius=1.0):
+    def __init__(self, rings=24, segments=48, radius=1.0, face_colors=None):
         if rings < 4 or segments < 6:
             raise ValueError("Sphere needs rings>=4 and segments>=6")
         self.rings = int(rings)
@@ -62,6 +80,8 @@ class SphereMesh:
                                    math.pi * (self.rings - 0.55) / self.rings,
                                    self.rings - 1))
 
+        self.face_colors = normalize_face_colors(face_colors, len(self.faces))
+
     @property
     def vertex_count(self):
         return len(self.vertices)
@@ -96,7 +116,7 @@ class TriangleMesh:
 
     flat_shading = True
 
-    def __init__(self, vertices, faces, scale=(1.0, 1.0, 1.0)):
+    def __init__(self, vertices, faces, scale=(1.0, 1.0, 1.0), face_colors=None):
         if not (3 <= len(vertices) <= 12000 and 1 <= len(faces) <= 20000):
             raise ValueError("Invalid triangle mesh size")
         if len(scale) != 3 or any(
@@ -127,6 +147,7 @@ class TriangleMesh:
             lon = math.atan2(centroid[2], centroid[0]) % (2 * math.pi)
             lat = math.pi * (1.0 - (centroid[1] - low) / height)
             self.faces.append(Face(tuple(face), lon, lat, 0))
+        self.face_colors = normalize_face_colors(face_colors, len(self.faces))
 
     @property
     def vertex_count(self):
