@@ -1,6 +1,10 @@
 <!doctype html>
 <html lang="es">
 <head>
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PYRION 3D - Visor de modelos</title>
@@ -64,7 +68,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.5</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.6</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -118,7 +122,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.5';
+  const APP_VERSION = 'v1.3.6';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -197,7 +201,7 @@
       window.parent.postMessage({source:'pyrion3d',type:'preferences-changed',preferences:prefs},'*');
     }
   }
-  const MESH_POLL_INTERVAL = 3000;
+  const MESH_POLL_INTERVAL = 1500;
   let selectedModel = null;
   let meshSha = null;
   let meshSnapshot = null;
@@ -216,7 +220,7 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 9000);
     try {
-      const response = await fetch(url, {mode:'cors',cache:'no-store',signal:controller.signal});
+      const response = await fetch(url, {mode:'cors',cache:'no-store',headers:{'Cache-Control':'no-cache, no-store, max-age=0','Pragma':'no-cache'},signal:controller.signal});
       if (!response.ok) throw new Error('HTTP ' + response.status);
       return await response.json();
     } finally {clearTimeout(timer);}
@@ -351,7 +355,7 @@
   // GitHub Contents proporciona el SHA de contenido y la malla en una petición.
   // Sólo se decodifica y valida cuando el SHA cambia.
   async function meshFromApi(path) {
-    const response = await fetchJson(API + path + '?ref=main&_=' + Date.now());
+    const response = await fetchJson(API + path + '?ref=main&_=' + Date.now() + '-' + Math.random().toString(36).slice(2));
     if (!response || typeof response.sha !== 'string' ||
         response.encoding !== 'base64' || typeof response.content !== 'string') {
       throw new Error('Respuesta de malla inválida desde GitHub');
