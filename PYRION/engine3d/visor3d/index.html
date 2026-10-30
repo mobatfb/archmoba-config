@@ -64,7 +64,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.1</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.2</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -114,7 +114,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.1';
+  const APP_VERSION = 'v1.3.2';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -154,6 +154,17 @@
   const WIRE_KEY = 'pyrion3d.showWire.' + REPO;
   const MATERIAL_KEY = 'pyrion3d.withMaterial.' + REPO;
   const SURFACE_KEY = 'pyrion3d.showSurface.' + REPO;
+  const ZOOM_KEY = 'pyrion3d.zoom.' + REPO;
+  function validZoom(v) {
+    const n=Number(v);
+    return Number.isFinite(n) && n>=50 && n<=220 && Number.isInteger(n);
+  }
+  function applyZoom(value) {
+    if (!validZoom(value)) return;
+    slider.value=String(value);
+    zoom=Number(value)/100;
+    document.querySelector('#valor').textContent=String(value)+'%';
+  }
   let mirrorEnabled = false;
   let wireEnabled = true;
   let materialEnabled = false;
@@ -161,7 +172,8 @@
   // Estado completo persistido además de las claves individuales.
   const PREFS_KEY = 'pyrion3d.viewerPreferences.' + REPO;
   function viewerPreferences() {
-    return {mirror:mirrorEnabled,wire:wireEnabled,material:materialEnabled,surface:surfaceEnabled};
+    return {mirror:mirrorEnabled,wire:wireEnabled,material:materialEnabled,
+      surface:surfaceEnabled,zoom:Number(slider.value)};
   }
   function storePreferences() {
     const prefs=viewerPreferences();
@@ -171,6 +183,7 @@
       window.localStorage.setItem(WIRE_KEY,prefs.wire?'1':'0');
       window.localStorage.setItem(MATERIAL_KEY,prefs.material?'1':'0');
       window.localStorage.setItem(SURFACE_KEY,prefs.surface?'1':'0');
+      window.localStorage.setItem(ZOOM_KEY,String(prefs.zoom));
     } catch (_) {}
     if (window.parent !== window) {
       window.parent.postMessage({source:'pyrion3d',type:'preferences-changed',preferences:prefs},'*');
@@ -259,6 +272,7 @@
       surfaceEnabled = event.data.surfaceEnabled;
       surfaceCheck.checked = surfaceEnabled;
     }
+    if (validZoom(event.data.zoom)) applyZoom(event.data.zoom);
     // Tras restaurar desde el host, mantener el mismo snapshot en el iframe.
     try {window.localStorage.setItem(PREFS_KEY,JSON.stringify(viewerPreferences()));} catch (_) {}
     render();
@@ -708,12 +722,14 @@
       wireEnabled=prefs.wire;
       materialEnabled=prefs.material;
       surfaceEnabled=prefs.surface;
+      if (validZoom(prefs.zoom)) applyZoom(prefs.zoom);
     } else {
       const storedWire=window.localStorage.getItem(WIRE_KEY);
       wireEnabled=storedWire===null ? true : storedWire==='1';
       materialEnabled=window.localStorage.getItem(MATERIAL_KEY)==='1';
       surfaceEnabled=window.localStorage.getItem(SURFACE_KEY)==='1';
       mirrorEnabled=window.localStorage.getItem(MIRROR_KEY)==='1';
+      applyZoom(window.localStorage.getItem(ZOOM_KEY));
     }
   } catch (_) {}
   wireCheck.checked=wireEnabled;
@@ -736,7 +752,9 @@
 
   slider.addEventListener('input',()=>{
     zoom=Number(slider.value)/100;
-    value.textContent=slider.value+'%';render();
+    value.textContent=slider.value+'%';
+    storePreferences();
+    render();
   });
   canvas.addEventListener('wheel',e=>{
     e.preventDefault();
