@@ -29,7 +29,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.75"
+APP_VERSION = "1.0.76"
 APP_UPDATE_DATE = "29/10/2026"
 APP_UPDATE_TIME = "10:21"
 SEARCH_MAX_LENGTH = 40
@@ -5276,13 +5276,36 @@ class PTMApp(tk.Tk):
         frame = meta["frame"]
 
         if str(tool.get("mode", "")).strip().lower() == "externo":
-            self._show_tool_unavailable(
-                tool,
-                key,
-                RuntimeError(
-                    "PTM solo admite herramientas integradas dentro de una pestaña."
-                ),
-            )
+            try:
+                script = Path(tool["path"]).resolve()
+                if not script.is_file():
+                    raise FileNotFoundError(str(script))
+                executable = sys.executable
+                if os.name == "nt" and executable.lower().endswith("python.exe"):
+                    windowless = executable[:-10] + "pythonw.exe"
+                    if os.path.isfile(windowless):
+                        executable = windowless
+                process = subprocess.Popen(
+                    [executable, str(script)],
+                    cwd=str(script.parent),
+                    env=os.environ.copy(),
+                )
+                meta["external_process"] = process
+                meta["failure_stage"] = None
+                meta["state"] = "ready"
+                meta["loading_status"] = None
+                host = self._prepare_tool_viewport(key)
+                if host is not None:
+                    tk.Label(
+                        host,
+                        text="Aplicacion abierta en una ventana independiente.\\n"
+                             "Puedes regresar a PTM mientras grabas.",
+                        font=("Segoe UI", 12),
+                        justify="center",
+                    ).pack(expand=True)
+                self._activate_tool_if_foreground(key)
+            except Exception as exc:
+                self._show_tool_unavailable(tool, key, exc)
             return
 
         host = self._prepare_tool_viewport(key)
