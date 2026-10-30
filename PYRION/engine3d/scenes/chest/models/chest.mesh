@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "name": "chest",
   "primitive": "triangle_mesh",
   "topology": "triangles",
@@ -395,6 +395,61 @@
       0,
       0.111,
       -0.62011
+    ],
+    [
+      0,
+      0.288,
+      0.62583
+    ],
+    [
+      -0.61163,
+      0.288,
+      0.62583
+    ],
+    [
+      -0.83553,
+      0.288,
+      0.62583
+    ],
+    [
+      -0.88578,
+      0.288,
+      0.60507
+    ],
+    [
+      -0.89451,
+      0.288,
+      0.57887
+    ],
+    [
+      -0.89451,
+      0.288,
+      0
+    ],
+    [
+      -0.89451,
+      0.288,
+      -0.57887
+    ],
+    [
+      -0.88578,
+      0.288,
+      -0.60507
+    ],
+    [
+      -0.83553,
+      0.288,
+      -0.62583
+    ],
+    [
+      -0.61163,
+      0.288,
+      -0.62583
+    ],
+    [
+      0,
+      0.288,
+      -0.62583
     ]
   ],
   "faces": [
@@ -1047,6 +1102,106 @@
       9,
       10,
       33
+    ],
+    [
+      22,
+      23,
+      79
+    ],
+    [
+      22,
+      79,
+      78
+    ],
+    [
+      23,
+      24,
+      80
+    ],
+    [
+      23,
+      80,
+      79
+    ],
+    [
+      24,
+      25,
+      81
+    ],
+    [
+      24,
+      81,
+      80
+    ],
+    [
+      25,
+      26,
+      82
+    ],
+    [
+      25,
+      82,
+      81
+    ],
+    [
+      26,
+      27,
+      83
+    ],
+    [
+      26,
+      83,
+      82
+    ],
+    [
+      27,
+      28,
+      84
+    ],
+    [
+      27,
+      84,
+      83
+    ],
+    [
+      28,
+      29,
+      85
+    ],
+    [
+      28,
+      85,
+      84
+    ],
+    [
+      29,
+      30,
+      86
+    ],
+    [
+      29,
+      86,
+      85
+    ],
+    [
+      30,
+      31,
+      87
+    ],
+    [
+      30,
+      87,
+      86
+    ],
+    [
+      31,
+      32,
+      88
+    ],
+    [
+      31,
+      88,
+      87
     ]
   ],
   "render": {
@@ -1074,9 +1229,16 @@
       "vertex_count": 1,
       "face_start": 120,
       "face_count": 10
+    },
+    {
+      "name": "franja_roja_superior_continua",
+      "vertex_start": 78,
+      "vertex_count": 11,
+      "face_start": 130,
+      "face_count": 20
     }
   ],
-  "notes": "CHEST v1.0.8: en esquinas verdes se acentuan dos pliegues verticales hundidos hacia el interior sobre columnas laterales de los paneles; se conservan las mismas caras y vertices, la franja amarilla y el piso intactos. Espejo X virtual.",
+  "notes": "CHEST v1.0.9: franja superior roja continua, altura 0.14, biseles y divisiones correspondientes al borde verde. Nuevas caras comparten vertices con el borde verde; sin tapa ni herrajes. Base amarilla, piso y paneles verdes conservados exactamente. Espejo X virtual.",
   "face_colors": [
     "#FFFF00",
     "#FFFF00",
@@ -1207,6 +1369,26 @@
     "#FFFF00",
     "#FFFF00",
     "#FFFF00",
-    "#FFFF00"
+    "#FFFF00",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000",
+    "#FF0000"
   ]
 }
