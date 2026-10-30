@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "name": "chest",
   "primitive": "triangle_mesh",
   "topology": "triangles",
@@ -560,6 +560,11 @@
       0,
       -0.12,
       -0.55583
+    ],
+    [
+      0,
+      -0.12,
+      0
     ]
   ],
   "faces": [
@@ -1512,6 +1517,56 @@
       98,
       110,
       109
+    ],
+    [
+      100,
+      101,
+      111
+    ],
+    [
+      101,
+      102,
+      111
+    ],
+    [
+      102,
+      103,
+      111
+    ],
+    [
+      103,
+      104,
+      111
+    ],
+    [
+      104,
+      105,
+      111
+    ],
+    [
+      105,
+      106,
+      111
+    ],
+    [
+      106,
+      107,
+      111
+    ],
+    [
+      107,
+      108,
+      111
+    ],
+    [
+      108,
+      109,
+      111
+    ],
+    [
+      109,
+      110,
+      111
     ]
   ],
   "render": {
@@ -1560,9 +1615,16 @@
       "vertex_count": 11,
       "face_start": 170,
       "face_count": 20
+    },
+    {
+      "name": "piso_amarillo_interior_plano",
+      "vertex_start": 111,
+      "vertex_count": 1,
+      "face_start": 190,
+      "face_count": 10
     }
   ],
-  "notes": "CHEST v1.0.11: se extiende el pliegue azul superior hacia adentro de 0.035 a 0.070, y se agrega pared interior cian vertical hasta y=-0.12, conectada y recta. Exterior original sin cambios. Media malla continua y espejo X virtual.",
+  "notes": "CHEST v1.0.12: piso amarillo interior plano en y=-0.12 conectado directamente al borde inferior de la pared celeste, compartiendo vertices. Un solo centro en costura X=0, 10 triangulos sin relieves, mitad original para Espejo X; exterior intacto.",
   "face_colors": [
     "#FFFF00",
     "#FFFF00",
@@ -1753,6 +1815,16 @@
     "#00FFFF",
     "#00FFFF",
     "#00FFFF",
-    "#00FFFF"
+    "#00FFFF",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00",
+    "#FFFF00"
   ]
 }
