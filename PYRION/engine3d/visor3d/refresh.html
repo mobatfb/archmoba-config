@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.3.1</title>
+  <title>PYRION 3D - Refresh r1.4.0</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0c101d; }
@@ -34,7 +34,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.3.1</span>
+    <span id="wrapper-version">Refresh r1.4.0</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
@@ -57,16 +57,20 @@
       const storageKey = 'pyrion3d.selectedModel.' + repo;
       const mirrorStorageKey = 'pyrion3d.mirrorX.' + repo;
       const wireStorageKey = 'pyrion3d.showWire.' + repo;
-      const materialStorageKey = 'pyrion3d.noMaterial.' + repo;
+      const materialStorageKey = 'pyrion3d.withMaterial.' + repo;
+      const surfaceStorageKey = 'pyrion3d.showSurface.' + repo;
       let lastModel = null;
       let lastMirrorEnabled = false;
-      let lastWireEnabled = false;
-      let lastNoMaterialEnabled = false;
+      let lastWireEnabled = true;
+      let lastMaterialEnabled = false;
+      let lastSurfaceEnabled = false;
       try {
         lastModel = localStorage.getItem(storageKey);
         lastMirrorEnabled = localStorage.getItem(mirrorStorageKey) === '1';
-        lastWireEnabled = localStorage.getItem(wireStorageKey) === '1';
-        lastNoMaterialEnabled = localStorage.getItem(materialStorageKey) === '1';
+        const wireStored=localStorage.getItem(wireStorageKey);
+        lastWireEnabled=wireStored===null ? true : wireStored==='1';
+        lastMaterialEnabled=localStorage.getItem(materialStorageKey)==='1';
+        lastSurfaceEnabled=localStorage.getItem(surfaceStorageKey)==='1';
       } catch (_) {}
       function saveModel(id) {
         lastModel = id;
@@ -78,10 +82,12 @@
       }
 
       function saveViewerOption(option, enabled) {
-        const key = option === 'wire' ? wireStorageKey : materialStorageKey;
-        if (option === 'wire') lastWireEnabled = enabled;
-        else lastNoMaterialEnabled = enabled;
-        try { localStorage.setItem(key, enabled ? '1' : '0'); } catch (_) {}
+        const keys={wire:wireStorageKey,material:materialStorageKey,surface:surfaceStorageKey};
+        if (!Object.prototype.hasOwnProperty.call(keys,option)) return;
+        if (option==='wire') lastWireEnabled=enabled;
+        if (option==='material') lastMaterialEnabled=enabled;
+        if (option==='surface') lastSurfaceEnabled=enabled;
+        try {localStorage.setItem(keys[option],enabled ? '1':'0');} catch (_) {}
       }
 
       function show(message, type='loading') {
@@ -100,7 +106,8 @@
           event.source.postMessage({
             source:'pyrion3d-host',type:'stored-model',id:lastModel,
             mirrorEnabled:lastMirrorEnabled,
-            wireEnabled:lastWireEnabled,noMaterialEnabled:lastNoMaterialEnabled
+            wireEnabled:lastWireEnabled,materialEnabled:lastMaterialEnabled,
+            surfaceEnabled:lastSurfaceEnabled
           }, '*');
           return;
         }
@@ -113,7 +120,7 @@
           return;
         }
         if (data.type === 'viewer-option-changed') {
-          if ((data.option === 'wire' || data.option === 'material') &&
+          if (['wire','material','surface'].includes(data.option) &&
               typeof data.enabled === 'boolean') saveViewerOption(data.option, data.enabled);
           return;
         }
