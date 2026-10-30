@@ -20,7 +20,7 @@ TOOL_DESCRIPTION = (
     "Explora ISOs Linux, permite modificar/eliminar/reemplazar archivos en una copia de trabajo, "
     "abre imagenes FAT como EFIBOOT.IMG y archivos INITRD CPIO, permite ver, editar y guardar archivos TXT/HEX en ISO, FAT e INITRD, y genera una copia ISO modificada."
 )
-TOOL_VERSION = "1.1.3"
+TOOL_VERSION = "1.1.4"
 
 
 def human_size(n):
@@ -693,7 +693,7 @@ class InitrdEditor(ttk.Frame):
 
     def _build(self):
         bar = ttk.Frame(self, padding=8); bar.pack(fill="x")
-        ttk.Button(bar, text="Volver al ISO", command=self.owner._close_container_editor).pack(side="left", padx=(0, 12))
+        ttk.Button(bar, text="Volver", command=self.owner._close_container_editor).pack(side="left", padx=(0, 12))
         ttk.Button(bar, text="Reemplazar", command=self.replace).pack(side="left", padx=3)
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
@@ -879,6 +879,7 @@ class FatEditor(ttk.Frame):
         ttk.Button(bar, text="Eliminar", command=self.delete).pack(side="left", padx=3)
         ttk.Button(bar, text="Extraer", command=self.extract).pack(side="left", padx=3)
         ttk.Button(bar, text="Ver como TXT", command=self.view_selected).pack(side="left", padx=3)
+        ttk.Button(bar, text="Explorar IMG", command=self.open_nested_selected).pack(side="left", padx=3)
         self.path_var = tk.StringVar(value="/")
         ttk.Label(bar, textvariable=self.path_var).pack(side="left", padx=12)
         search_bar = ttk.Frame(self, padding=(8, 0, 8, 6))
@@ -1023,7 +1024,23 @@ class FatEditor(ttk.Frame):
             self.search_var.set("")
             self.refresh()
         else:
-            self.view_selected()
+            if not self.open_nested_selected(silent=True):
+                self.view_selected()
+
+    def open_nested_selected(self, silent=False):
+        path = self.selected()
+        if not path or self.fs is None or self.fs.isdir(path):
+            return False
+        name = path.lower()
+        if not (name.endswith((".img", ".cpio", ".gz", ".xz", ".lz4"))
+                or "initrd" in name or "initramfs" in name):
+            return False
+        try:
+            return self.owner._open_nested_fat_file(self.fs, path)
+        except Exception as exc:
+            if not silent:
+                messagebox.showerror("Contenedor anidado", str(exc), parent=self)
+            return False
 
     def view_selected(self):
         path = self.selected()
@@ -1127,6 +1144,8 @@ class ISOEditor(ttk.Frame):
         self._paths = {}
         self._expandable_containers = {}
         self._container_host = None
+        self._nested_stack = []
+        self._nested_files = []
         self.search_var = tk.StringVar(value="")
         self.search_info = tk.StringVar(value="")
         self._search_job = None
@@ -1201,11 +1220,74 @@ class ISOEditor(ttk.Frame):
 
     def _close_container_editor(self):
         host = self._container_host
+        if self._nested_stack:
+            previous = self._nested_stack.pop()
+            if host is not None:
+                host.destroy()
+            self._container_host = previous
+            previous.place(relx=0, rely=0, relwidth=1, relheight=1)
+            previous.lift()
+            if self._nested_files:
+                tmp = self._nested_files.pop()
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.set_status("Regresaste al contenedor anterior.")
+            return
         self._container_host = None
         if host is not None:
             host.destroy()
             if self.work_dir is not None and self.work_dir.exists():
                 self.refresh_tree()
+
+    def _open_nested_fat_file(self, fs, path):
+        """Extrae un IMG interno a una copia temporal y lo explora sin modificar el original."""
+        from tempfile import NamedTemporaryFile
+        name = Path(path).name.lower()
+        limit = 512 * 1024 * 1024
+        temp_path = None
+        try:
+            with NamedTemporaryFile(prefix="ptm_nested_", suffix=Path(name).suffix or ".img",
+                                    delete=False) as out:
+                temp_path = Path(out.name)
+                count = 0
+                with fs.openbin(path, "r") as inp:
+                    while True:
+                        chunk = inp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        count += len(chunk)
+                        if count > limit:
+                            raise RuntimeError("La imagen anidada supera 512 MB.")
+                        out.write(chunk)
+            kind = detect_container_type(temp_path)
+            if kind not in ("fat", "initrd"):
+                return False
+            previous = self._container_host
+            if previous is None:
+                raise RuntimeError("No hay contenedor principal abierto.")
+            previous.place_forget()
+            host = ttk.Frame(self)
+            host.place(relx=0, rely=0, relwidth=1, relheight=1)
+            host.lift()
+            self._container_host = host
+            self._nested_stack.append(previous)
+            self._nested_files.append(temp_path)
+            try:
+                editor = FatEditor(self, temp_path, parent=host) if kind == "fat" else InitrdEditor(self, temp_path, parent=host)
+                editor.pack(fill="both", expand=True)
+            except Exception:
+                self._close_container_editor()
+                raise
+            self.set_status(f"Explorando {Path(path).name} dentro del contenedor ({kind.upper()}); copia temporal.")
+            return True
+        finally:
+            if temp_path is not None and temp_path not in self._nested_files:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _open_container_editor(self, editor_type, path):
         self._close_container_editor()
@@ -1221,6 +1303,8 @@ class ISOEditor(ttk.Frame):
             raise
 
     def cleanup(self):
+        while self._nested_stack:
+            self._close_container_editor()
         self._close_container_editor()
         self._search_index = None
         if self.temp_dir:
