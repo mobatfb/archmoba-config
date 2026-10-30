@@ -438,7 +438,12 @@ class SoftwareRenderer:
                 eye[t] - world_center[t] for t in range(3)
             ))
             front = _dot(normal, towards_camera)
-            if front <= 0.02:
+            if getattr(self.mesh, "double_sided", False):
+                # Doble cara: normal invertida solo para iluminacion interior.
+                if front < 0:
+                    normal = tuple(-component for component in normal)
+                    front = -front
+            elif front <= 0.02:
                 continue
             polygon = self._clip_near_plane([view[i], view[j], view[k]])
             if len(polygon) < 3:
