@@ -5,60 +5,102 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PYRION 3D - Visor de modelos</title>
   <style>
-    :root {color-scheme:dark; font-family:system-ui,Arial,sans-serif}
-    * {box-sizing:border-box}
-    body {margin:0; background:#0b0f1c; color:#f0eefa; min-height:100vh; display:flex;justify-content:center}
-    main {width:min(100%,900px); padding:18px}
-    header {display:flex;align-items:center;flex-wrap:wrap;gap:12px; padding:12px 15px;
-      background:#171c2d;border:1px solid #35405b;border-radius:12px 12px 0 0}
-    .brand {font-size:13px;font-weight:750;letter-spacing:.04em;white-space:nowrap}
-    .brand small {color:#a9b5d3;font-size:10px;font-weight:400}
-    .build-info {margin-left:auto;display:flex;align-items:center;gap:10px;white-space:nowrap;color:#b9c4df;font-size:11px}
-    #visor-version {font-weight:700;color:#d1baff}
-    #mesh-version {font-weight:650;color:#f0cea3}
-    #rotation-angle {font-variant-numeric:tabular-nums;color:#94e1ce}
-    nav {display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
-    nav button {background:#252c42;color:#dae1fa;border:1px solid #46516f;
-      padding:9px 12px;border-radius:8px;cursor:pointer;font:inherit;font-size:12px}
-    nav button[aria-pressed="true"] {background:#6147a1;border-color:#bc9cff;color:white}
-    nav button:focus-visible {outline:2px solid #d8c5ff;outline-offset:2px}
-    #visor {display:block;width:100%;height:min(65vh,540px);min-height:280px;
-      background:#13172a;border:1px solid #35405b;border-top:0;touch-action:pan-y}
-    .control {display:flex;gap:12px;align-items:center;justify-content:center;
-      padding:16px;background:#171c2d;border:1px solid #35405b;border-top:0;border-radius:0 0 12px 12px}
-    #zoom {width:min(270px,55vw);accent-color:#ab8ce4}
-    .mirror-option {display:flex;align-items:center;gap:7px;white-space:nowrap;cursor:pointer;font-size:13px}
-    .mirror-option input {width:17px;height:17px;accent-color:#ab8ce4;cursor:pointer}
-    .mirror-option input:disabled {cursor:not-allowed;opacity:.55}
-    .mirror-option:has(input:disabled) {opacity:.55;cursor:not-allowed}
-    output {min-width:45px;text-align:right;font-variant-numeric:tabular-nums}
-    #status {min-height:2em;color:#adb6ce;text-align:center;font-size:12px;line-height:1.6;margin:12px 0 0}
-    @media(max-width:560px) {main{padding:8px}header{gap:9px;padding:10px}nav button{padding:8px 9px}#visor{height:400px}}
+    :root{color-scheme:dark;font-family:system-ui,Arial,sans-serif}
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;overflow:hidden}
+    body{background:#0b0f1c;color:#f0eefa}
+    main{display:grid;grid-template-columns:clamp(250px,25vw,330px) minmax(0,1fr);
+      width:100%;height:100vh;height:100dvh;overflow:hidden}
+    .sidebar{min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:22px 18px;
+      display:flex;flex-direction:column;gap:18px;background:#171c2d;border-right:1px solid #35405b}
+    .sidebar header{display:flex;flex-direction:column;gap:7px}
+    .brand{font-size:20px;font-weight:800;letter-spacing:.04em}
+    .brand small{color:#a9b5d3;font-size:11px;font-weight:500}
+    .sidebar-version{color:#a9b5d3;font-size:12px}
+    #visor-version{color:#d1baff;font-weight:700}
+    #mesh-version{color:#f0cea3;font-size:12px;font-weight:650;overflow-wrap:anywhere}
+    .section{padding-top:14px;border-top:1px solid #343d56}
+    .section h2{margin:0 0 10px;font-size:11px;font-weight:800;letter-spacing:.12em;
+      color:#a6b6d8;text-transform:uppercase}
+    nav{display:flex;flex-direction:column;align-items:stretch;gap:7px}
+    nav button,.secondary-button{background:#252c42;color:#dae1fa;border:1px solid #46516f;
+      padding:10px 12px;border-radius:8px;cursor:pointer;text-align:left;font:inherit;font-size:13px}
+    nav button[aria-pressed="true"]{background:#6147a1;border-color:#bc9cff;color:#fff}
+    nav button:hover,.secondary-button:hover{border-color:#ab8ce4;background:#343954}
+    nav button:focus-visible,.secondary-button:focus-visible,input:focus-visible{outline:2px solid #d8c5ff;outline-offset:2px}
+    .control{display:flex;flex-direction:column;align-items:stretch;gap:11px}
+    .zoom-heading{display:flex;align-items:center;justify-content:space-between;font-size:13px}
+    #zoom{width:100%;accent-color:#ab8ce4}
+    output{font-variant-numeric:tabular-nums;color:#d1baff}
+    .mirror-option{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px}
+    .mirror-option input{width:17px;height:17px;accent-color:#ab8ce4;cursor:pointer}
+    .mirror-option input:disabled{cursor:not-allowed;opacity:.55}
+    .mirror-option:has(input:disabled){opacity:.55;cursor:not-allowed}
+    .help{margin:0 0 10px;font-size:12px;color:#b0bddb;line-height:1.6}
+    #camera-angle,#rotation-angle{font-size:12px;color:#94e1ce;font-variant-numeric:tabular-nums}
+    #camera-angle{margin:0 0 10px}
+    .secondary-button{width:100%;text-align:center}
+    #status{margin:0;min-height:2em;color:#adb6ce;font-size:12px;line-height:1.6;
+      overflow-wrap:anywhere}
+    .preview-panel{position:relative;min-width:0;min-height:0;background:#101424}
+    #visor{display:block;width:100%;height:100%;min-width:0;min-height:0;
+      touch-action:none;cursor:grab;outline:none}
+    #visor.is-dragging{cursor:grabbing}
+    @media(max-width:640px){
+      main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,auto) minmax(0,1fr)}
+      .sidebar{max-height:min(43vh,270px);padding:12px 16px;gap:10px;border-right:0;
+        border-bottom:1px solid #35405b}
+      .brand{font-size:16px}
+      nav{flex-direction:row;flex-wrap:wrap}
+      nav button{padding:8px 10px}
+      .section{padding-top:10px}
+    }
   </style>
 </head>
 <body>
 <main>
-  <header>
-    <div class="brand">PYRION 3D <small>· MODELOS</small></div>
-    <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
-    <div class="build-info" aria-label="Versión y rotación del visor"><span id="visor-version">v1.1.7</span><span id="mesh-version" aria-live="polite">Modelo: —</span><span id="rotation-angle">Giro 0°</span></div>
-  </header>
-  <canvas id="visor" aria-label="Visualización 3D con rotación automática de la malla seleccionada"></canvas>
-  <div class="control">
-    <label for="zoom">Zoom</label>
-    <input id="zoom" type="range" min="50" max="220" value="100">
-    <output id="valor" for="zoom">100%</output>
-    <label class="mirror-option" for="mirror-x" title="Refleja la mitad del modelo sobre el eje X">
-      <input id="mirror-x" type="checkbox" autocomplete="off">
-      Espejo X
-    </label>
-  </div>
-  <p id="status" role="status" aria-live="polite">Cargando lista de modelos desde GitHub…</p>
+  <aside class="sidebar" aria-label="Información y controles de PYRION">
+    <header>
+      <div class="brand">PYRION <small>3D · MODELOS</small></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.2.0</span></div>
+      <div id="mesh-version" aria-live="polite">Modelo: —</div>
+      <div id="rotation-angle">Giro 0°</div>
+    </header>
+    <section class="section">
+      <h2>Modelos</h2>
+      <nav id="modelos" aria-label="Seleccionar modelo 3D"></nav>
+    </section>
+    <section class="section">
+      <h2>Visualización</h2>
+      <div class="control">
+        <div class="zoom-heading"><label for="zoom">Zoom</label><output id="valor" for="zoom">100%</output></div>
+        <input id="zoom" type="range" min="50" max="220" value="100">
+        <label class="mirror-option" for="mirror-x" title="Reflejar la mitad del modelo sobre el eje X">
+          <input id="mirror-x" type="checkbox" autocomplete="off">
+          Espejo X
+        </label>
+      </div>
+    </section>
+    <section class="section">
+      <h2>Cámara</h2>
+      <p class="help">Arrastra sobre el modelo con el mouse para girar la cámara.
+        Utiliza la rueda para acercar o alejar.</p>
+      <div id="camera-angle">Horizontal 0° · Vertical 13°</div>
+      <button class="secondary-button" id="reset-camera" type="button">Restablecer cámara</button>
+    </section>
+    <section class="section" aria-label="Estado de carga">
+      <h2>Estado</h2>
+      <p id="status" role="status" aria-live="polite">Cargando lista de modelos desde GitHub…</p>
+    </section>
+  </aside>
+  <section class="preview-panel" aria-label="Vista 3D">
+    <canvas id="visor" aria-label="Vista 3D: arrastra para girar la cámara sobre el modelo"></canvas>
+  </section>
 </main>
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.1.7';
+  const APP_VERSION = 'v1.2.0';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -80,8 +122,10 @@
   let active = null;
   let serial = 0;
   let zoom = 1, width = 1, height = 1;
-  let yaw = 0.55;
-  const pitch = 0.22; // Inclinación fija: el modelo gira sobre su eje Y.
+  let yaw = 0.55; // Giro automático del modelo, independiente de la cámara.
+  let cameraYaw = 0, cameraPitch = 0.22; // Órbita controlada con el mouse.
+  const cameraAngle = document.getElementById('camera-angle');
+  const resetCamera = document.getElementById('reset-camera');
   const ROTATION_SPEED = Math.PI / 6; // 30 grados por segundo (vuelta cada 12 s).
   const rotationAngle = document.getElementById('rotation-angle');
   const meshVersionLabel = document.getElementById('mesh-version');
@@ -432,13 +476,16 @@
     ctx.fillStyle=background;ctx.fillRect(0,0,width,height);
     if (!active) return;
     const vs=active.geometry.vertices, fs=active.geometry.faces;
-    const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+    const cy=Math.cos(yaw),sy=Math.sin(yaw);
+    const cc=Math.cos(cameraYaw),sc=Math.sin(cameraYaw);
+    const cp=Math.cos(cameraPitch),sp=Math.sin(cameraPitch);
     const bounds=[0,1,2].map(i=>[Math.min(...vs.map(v=>v[i])),Math.max(...vs.map(v=>v[i]))]);
     const center=bounds.map(b=>(b[0]+b[1])/2);
     const points=vs.map(v=>{
       const x=v[0]-center[0],y=v[1]-center[1],z=v[2]-center[2];
       const rx=x*cy+z*sy,rz=-x*sy+z*cy;
-      return [rx,y*cp-rz*sp,y*sp+rz*cp];
+      const viewX=rx*cc-rz*sc,viewZ=rx*sc+rz*cc;
+      return [viewX,y*cp-viewZ*sp,y*sp+viewZ*cp];
     });
     // Escala constante durante la rotacion: evita que el modelo pulse
     // o cambie de tamaño al girar sobre el eje vertical.
@@ -446,8 +493,9 @@
     const ySpan=bounds[1][1]-bounds[1][0];
     const zSpan=bounds[2][1]-bounds[2][0];
     const diameter=Math.hypot(xSpan,zSpan);
+    // Escala fija ante giro del modelo Y movimiento de cámara (no "respira").
     const scale=Math.min(width*.78/Math.max(.1,diameter),
-                         height*.76/Math.max(.1,ySpan*Math.cos(pitch)+diameter*Math.abs(Math.sin(pitch)))) * zoom;
+                         height*.76/Math.max(.1,Math.hypot(xSpan,ySpan,zSpan))) * zoom;
     const screen=points.map(p=>{const k=4.8/(4.8-p[2]);return [width/2+p[0]*scale*k,height/2-p[1]*scale*k];});
     const metal=active.metallic, rough=active.roughness;
     const faceColors=active.geometry.faceColors;
@@ -585,6 +633,47 @@
     slider.value=String(Math.min(220,Math.max(50,Number(slider.value)+(e.deltaY<0?10:-10))));
     slider.dispatchEvent(new Event('input'));
   },{passive:false});
+  // La cámara es independiente del giro automático del objeto.
+  function updateCameraLabel() {
+    const horizontal=((cameraYaw*180/Math.PI)%360+360)%360;
+    cameraAngle.textContent='Horizontal '+Math.round(horizontal)+
+      '° · Vertical '+Math.round(cameraPitch*180/Math.PI)+'°';
+  }
+  let drag=null;
+  canvas.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    drag={id:e.pointerId,x:e.clientX,y:e.clientY};
+    canvas.classList.add('is-dragging');
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!drag || drag.id !== e.pointerId) return;
+    const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+    drag.x=e.clientX;drag.y=e.clientY;
+    cameraYaw=(cameraYaw+dx*.007)%(2*Math.PI);
+    cameraPitch=Math.max(-1.25,Math.min(1.25,cameraPitch+dy*.006));
+    updateCameraLabel();
+    render();
+    e.preventDefault();
+  });
+  function finishCameraDrag(e) {
+    if (!drag || drag.id !== e.pointerId) return;
+    drag=null;
+    canvas.classList.remove('is-dragging');
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+  }
+  canvas.addEventListener('pointerup',finishCameraDrag);
+  canvas.addEventListener('pointercancel',finishCameraDrag);
+  canvas.addEventListener('lostpointercapture',finishCameraDrag);
+  resetCamera.addEventListener('click', () => {
+    cameraYaw=0;
+    cameraPitch=.22;
+    updateCameraLabel();
+    render();
+  });
+  updateCameraLabel();
+
   if (window.ResizeObserver) new ResizeObserver(resize).observe(canvas);
   else window.addEventListener('resize',resize);
 
