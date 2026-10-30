@@ -29,9 +29,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.76"
-APP_UPDATE_DATE = "29/10/2026"
-APP_UPDATE_TIME = "10:21"
+APP_VERSION = "1.0.77"
+APP_UPDATE_DATE = "30/10/2026"
+APP_UPDATE_TIME = "15:27"
 SEARCH_MAX_LENGTH = 40
 
 REPO_OWNER = "mobatfb"
@@ -41,10 +41,6 @@ REPO_RAW_BASE = f"{REPO_RAW_ROOT}/main/PTM"
 GUIDE_URL = f"{REPO_RAW_BASE}/guide.csv"
 GUIDE_API_URL = (
     f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/guide.csv?ref=main"
-)
-GUIDE_META_URL = f"{REPO_RAW_BASE}/guide_meta.json"
-GUIDE_META_API_URL = (
-    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/PTM/guide_meta.json?ref=main"
 )
 SELF_CONFIG_URL = f"{REPO_RAW_BASE}/config.json"
 SELF_CONFIG_API_URL = (
@@ -588,7 +584,6 @@ class PTMApp(tk.Tk):
         self.tools_dir = self.base_dir / "tools"
         self.tools_dir.mkdir(exist_ok=True)
         self.guide_path = self.base_dir / "guide.csv"
-        self.guide_meta_path = self.base_dir / "guide_meta.json"
 
         local_appdata = os.environ.get("LOCALAPPDATA")
         if local_appdata:
@@ -1897,66 +1892,19 @@ class PTMApp(tk.Tk):
         ):
             self.refresh_results()
 
-    def _read_local_guide_meta(self):
-        try:
-            if self.guide_meta_path.is_file():
-                return json.loads(
-                    self.guide_meta_path.read_text(encoding="utf-8-sig")
-                )
-        except Exception:
-            pass
-        return {}
-
-    def _fetch_remote_guide_meta(self):
-        """Consulta solo el archivo pequeño guide_meta.json."""
-        if os.environ.get("AMDEV_MODE") == "local":
-            return self._read_local_guide_meta()
-        last_error = None
-
-        try:
-            request = urllib.request.Request(
-                GUIDE_META_API_URL,
-                headers={
-                    "User-Agent": f"PTM/{APP_VERSION}",
-                    "Accept": "application/vnd.github+json",
-                    "Cache-Control": "no-cache",
-                },
-            )
-            with urllib.request.urlopen(request, timeout=6) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            encoded = str(payload.get("content", "")).replace("\n", "")
-            if encoded:
-                return json.loads(
-                    base64.b64decode(encoded).decode("utf-8-sig")
-                )
-        except Exception as exc:
-            last_error = exc
-
-        try:
-            request = urllib.request.Request(
-                f"{GUIDE_META_URL}?v={time.time_ns()}",
-                headers={
-                    "User-Agent": f"PTM/{APP_VERSION}",
-                    "Cache-Control": "no-cache",
-                },
-            )
-            with urllib.request.urlopen(request, timeout=6) as response:
-                return json.loads(response.read().decode("utf-8-sig"))
-        except Exception as exc:
-            last_error = exc
-
-        raise RuntimeError(f"No se pudo consultar guide_meta.json ({last_error})")
-
-    @staticmethod
-    def _guide_meta_matches(local_meta, remote_meta):
-        if not local_meta or not remote_meta:
-            return False
-        return (
-            str(local_meta.get("updated_at", "")).strip()
-            == str(remote_meta.get("updated_at", "")).strip()
-            and str(local_meta.get("guide_sha", "")).strip()
-            == str(remote_meta.get("guide_sha", "")).strip()
-        )
+    def _fetch_remote_guide_sha(self):
+        """Obtiene SHA del archivo desde GitHub, sin escribir el CSV."""
+        req = urllib.request.Request(GUIDE_API_URL, headers={
+            "User-Agent": f"PTM/{APP_VERSION}",
+            "Accept": "application/vnd.github+json",
+            "Cache-Control": "no-cache, no-store",
+        })
+        with urllib.request.urlopen(req, timeout=8) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        sha = str(result.get("sha", "")).lower().strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise RuntimeError("SHA del catálogo no válido.")
+        return sha
 
     def _local_guide_git_sha(self):
         """Calcula el SHA Git real del guide.csv local, normalizando saltos."""
@@ -1972,7 +1920,7 @@ class PTMApp(tk.Tk):
             return ""
 
     def _download_guide_text(self):
-        """Descarga guide.csv únicamente cuando la metadata indica un cambio."""
+        """Descarga guide.csv cuando cambió el SHA remoto."""
         if os.environ.get("AMDEV_MODE") == "local":
             return self.guide_path.read_text(encoding="utf-8-sig")
         last_error = None
@@ -2010,44 +1958,29 @@ class PTMApp(tk.Tk):
         raise RuntimeError(f"No se pudo descargar guide.csv ({last_error})")
 
     def _sync_guide_if_needed(self):
-        """Valida metadata Y contenido real antes de dar guide.csv por vigente."""
+        """Consulta SHA remoto y descarga guide.csv solo si cambió."""
         if os.environ.get("AMDEV_MODE") == "local":
             if not self.guide_path.is_file():
                 raise FileNotFoundError(f"No existe el catálogo local: {self.guide_path}")
-            current_sha = self._local_guide_git_sha()
-            changed = current_sha != getattr(self, "_local_catalog_sha", None)
-            self._local_catalog_sha = current_sha
+            sha = self._local_guide_git_sha()
+            changed = sha != getattr(self, "_local_catalog_sha", None)
+            self._local_catalog_sha = sha
             return changed
-        remote_meta = self._fetch_remote_guide_meta()
-        local_meta = self._read_local_guide_meta()
-        remote_sha = str(remote_meta.get("guide_sha", "")).strip()
-        local_guide_sha = self._local_guide_git_sha()
 
-        needs_update = (
-            not self.guide_path.is_file()
-            or not self._guide_meta_matches(local_meta, remote_meta)
-            or not remote_sha
-            or local_guide_sha != remote_sha
-        )
-
-        if not needs_update:
+        remote_sha = self._fetch_remote_guide_sha()
+        if self.guide_path.is_file() and self._local_guide_git_sha() == remote_sha:
             return False
-
         text = self._download_guide_text()
-        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-        self.guide_path.write_bytes(normalized.encode("utf-8"))
-        self.guide_meta_path.write_text(
-            json.dumps(remote_meta, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        # No aceptar una descarga si no coincide con el SHA publicado.
-        downloaded_sha = self._local_guide_git_sha()
-        if remote_sha and downloaded_sha != remote_sha:
-            raise RuntimeError(
-                "El guide.csv descargado no coincide con el SHA publicado."
-            )
-
+        data = text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+        calculated = hashlib.sha1(f"blob {len(data)}\0".encode("ascii") + data).hexdigest()
+        if calculated != remote_sha:
+            raise RuntimeError("guide.csv no coincide con el SHA publicado.")
+        tmp = self.guide_path.with_suffix(".csv.tmp")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(self.guide_path)
+        finally:
+            tmp.unlink(missing_ok=True)
         return True
 
     def _check_guide_on_search_async(self):
@@ -2170,23 +2103,14 @@ class PTMApp(tk.Tk):
             pass
 
     def _load_guide_rows(self, local_only=False):
-        """Carga la copia local; al iniciar sincroniza metadata si es necesario."""
+        """Usa caché local y comprueba SHA remoto si procede."""
         if not local_only:
             try:
                 self._sync_guide_if_needed()
             except Exception:
                 pass
-
         if not self.guide_path.is_file():
-            # Si no existe ninguna copia local, la descarga es obligatoria.
-            remote_meta = self._fetch_remote_guide_meta()
-            text = self._download_guide_text()
-            self.guide_path.write_text(text, encoding="utf-8")
-            self.guide_meta_path.write_text(
-                json.dumps(remote_meta, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-
+            self._sync_guide_if_needed()
         text = self.guide_path.read_text(encoding="utf-8-sig")
         reader = csv.DictReader(io.StringIO(text), delimiter=";")
         if not reader.fieldnames or "ruta" not in reader.fieldnames:
