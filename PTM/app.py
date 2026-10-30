@@ -29,7 +29,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 APP_TITLE = "PTM - Buscador y lanzador de herramientas"
-APP_VERSION = "1.0.77"
+APP_VERSION = "1.0.78"
 APP_UPDATE_DATE = "30/10/2026"
 APP_UPDATE_TIME = "15:27"
 SEARCH_MAX_LENGTH = 40
@@ -5242,6 +5242,9 @@ class PTMApp(tk.Tk):
             if spec is None or spec.loader is None:
                 raise RuntimeError("No se pudo preparar el módulo.")
             module = importlib.util.module_from_spec(spec)
+            # dataclasses y otras librerías consultan sys.modules durante la importación.
+            # Registrar antes de ejecutar evita AttributeError sobre None.__dict__.
+            sys.modules[module_name] = module
 
             # Ejecutar SIEMPRE el .py descargado, nunca un __pycache__/.pyc
             # que puede conservar una versión anterior con igual mtime/tamaño.
