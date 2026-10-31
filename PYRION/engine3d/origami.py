@@ -15,7 +15,7 @@ def _validate(model):
     if any(len(v) != 3 or not all(math.isfinite(float(x)) for x in v) for v in vertices):
         raise ValueError("Vertice invalido")
     for f in faces:
-        if len(f) not in (3, 4) or len(set(f)) != len(f) or any(
+        if not 3 <= len(f) <= 128 or len(set(f)) != len(f) or any(
                 type(i) is not int or i < 0 or i >= len(vertices) for i in f):
             raise ValueError("Cara invalida")
     colors = model.get("face_colors")
@@ -24,13 +24,13 @@ def _validate(model):
 
 
 def triangulate(model):
-    """Acepta triangulos/quads y devuelve triangles compatibles con renderer."""
+    """Acepta triangulos/quads/ngons convexos y devuelve triangulos."""
     _validate(model)
     result = copy.deepcopy(model)
     faces, colors = [], []
     original_colors = result.get("face_colors")
     for n, f in enumerate(result["faces"]):
-        sub = [list(f)] if len(f) == 3 else [[f[0], f[1], f[2]], [f[0], f[2], f[3]]]
+        sub = [list(f)] if len(f) == 3 else [[f[0], f[i], f[i + 1]] for i in range(1, len(f) - 1)]
         faces.extend(sub)
         if original_colors is not None:
             colors.extend([original_colors[n]] * len(sub))
