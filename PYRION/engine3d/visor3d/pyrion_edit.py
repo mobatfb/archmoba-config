@@ -811,8 +811,8 @@ class Editor(QMainWindow):
             for ei in range(len(faces[fi])):
                 edge = detail(fi, ei)
                 if edge:
-                    alignment = sum(edge[2][k]*direction[k] for k in range(3))
-                    if alignment >= 0.95:
+                    alignment = sum(edge[2][k]*unit[k] for k in range(3))
+                    if alignment >= 0.3:
                         candidates.append((alignment, edge))
             if not candidates:
                 QMessageBox.warning(self, "Crear quads",
