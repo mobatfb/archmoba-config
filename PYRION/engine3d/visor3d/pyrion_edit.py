@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -64,12 +64,12 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script></head><body>
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
-let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,multiSelected=[],mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
+let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,multiSelected=[],mirror=true,wire=true,material=true,surface=true,labels=true,spin=false,showPlus=true;
 let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null,edgeButtons=[];
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function setMesh(x){mesh=x;draw()}
-function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;surface=x.surface;labels=x.labels;spin=x.spin;draw()}
+function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;surface=x.surface;labels=x.labels;spin=x.spin;showPlus=x.showPlus;draw()}
 function setSelected(x){if(x!==selected)selectedReflected=false;selected=x;selectedGroup=null;multiSelected=x>=0?[x]:[];draw()}
 function setMultiSelected(ids){multiSelected=ids;selected=ids.length?ids[ids.length-1]:-1;selectedGroup=null;draw()}
 function selectFaceVisual(i,reflected){selected=i;selectedReflected=!!reflected;selectedGroup=null;draw()}
@@ -141,7 +141,7 @@ function draw(){
    const face=polygons[i];if(face.reflected)continue;
    if(!front.has(face.i))front.add(face.i);
  }
- for(const edge of counts.values()){
+ for(const edge of (showPlus?counts.values():[])){
    if(edge.count!==1)continue;
    const a=vv[edge.a],b=vv[edge.b];
    // No ofrecer + sobre la costura virtual del espejo.
@@ -156,9 +156,9 @@ function draw(){
    const covered=polygons.some(other=>other!==poly&&other.depth>poly.depth+0.005&&inside(other.p,x,y));
    if(covered)continue;
    edgeButtons.push({x,y,face:edge.i,edge:j});
-   ctx.beginPath();ctx.arc(x,y,10,0,Math.PI*2);
+   ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);
    ctx.fillStyle='#143e3a';ctx.fill();ctx.strokeStyle='#6bffcf';ctx.lineWidth=1.5;ctx.stroke();
-   ctx.font='bold 16px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+   ctx.font='bold 10px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
    ctx.fillStyle='#ffffff';ctx.fillText('+',x,y+0.3);
  }
 }
@@ -171,7 +171,7 @@ cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,
  drag.x=e.clientX;drag.y=e.clientY});
 cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=drag.add;drag=null;if(moved)return;
  const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
- const plus=edgeButtons.find(b=>Math.hypot(b.x-x,b.y-y)<12);
+ const plus=edgeButtons.find(b=>Math.hypot(b.x-x,b.y-y)<8);
  if(plus&&bridge&&!add){bridge.extendEdge(plus.face,plus.edge);return;}
  const hit=[...(window.polygons||[])].reverse().find(f=>inside(f.p,x,y));
  if(hit&&bridge){if(add)bridge.toggleFace(hit.i);else{selectFaceVisual(hit.i,hit.reflected);bridge.selectFace(hit.i)}}});
@@ -423,7 +423,7 @@ class Editor(QMainWindow):
         self.toggles = {}
         for key, title, value in [("mirror","Espejo X",True),("wire","Aristas reales",True),
                                   ("material","Con material (colores)",True),("surface","Mostrar superficie",True),
-                                  ("labels","Números de caras",True),
+                                  ("labels","Números de caras",True),("showPlus","Mostrar + en bordes",True),
                                   ("spin","Giro automático",False)]:
             cb = QCheckBox(title);cb.setChecked(value);cb.toggled.connect(self.push_options)
             self.toggles[key]=cb;op.addWidget(cb)
