@@ -2,6 +2,7 @@
 # PYRION EDIT - Editor de mallas .mesh (PySide6 + Qt WebEngine)
 # PySide6 se instala automaticamente si falta.
 import json
+import math
 import base64
 import os
 import urllib.error
@@ -12,7 +13,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.6"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -468,7 +469,7 @@ class Editor(QMainWindow):
         tools_layout.addWidget(modes)
         self.mode_group = QButtonGroup(self)
         self.mode_group.setExclusive(True)
-        for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar")]:
+        for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar"), ("girar", "Girar")]:
             button = QRadioButton(label)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setMinimumHeight(38)
@@ -526,6 +527,8 @@ class Editor(QMainWindow):
         self.status.setText("Modo de edición: " + mode.capitalize() +
             (" · Seleccione caras y utilice Ctrl + flechas para estirar."
              if mode == "estirar" else
+             " · Ctrl + flechas gira caras alrededor de su centro; Shift da precision."
+             if mode == "girar" else
              " · Pulse + sobre un borde libre para agregar quads."
              if mode == "agregar" else " · Selección sin modificar la malla."))
 
@@ -931,8 +934,52 @@ class Editor(QMainWindow):
         self.record_change(before)
         self.push_mesh()
 
+    def rotate_selection(self, dx, dy, dz):
+        """Rotate unique selected vertices about selection centroid; undoable."""
+        if not self.mesh or not self.selection:
+            return
+        vertices = self.mesh["vertices"]
+        ids = list(dict.fromkeys(self.selection))
+        center = [sum(vertices[i][k] for i in ids)/len(ids) for k in range(3)]
+        # Controller passes camera-relative vectors; axis follows screen direction.
+        # Horizontal arrows rotate around global Y, vertical around camera horizontal.
+        if abs(dy) < 1e-9:
+            angle = math.copysign(math.radians(5), dx if abs(dx) > abs(dz) else dz)
+            axis = [0.0, 1.0, 0.0]
+        else:
+            angle = math.copysign(math.radians(5), dy)
+            axis = [dz, 0.0, -dx]
+            size = math.hypot(axis[0], axis[2])
+            if size < 1e-8:
+                axis = [1.0, 0.0, 0.0]
+            else:
+                axis = [axis[0]/size, 0.0, axis[2]/size]
+        # Shift modifies movement step supplied by viewer.
+        if math.sqrt(dx*dx+dy*dy+dz*dz) < 0.015:
+            angle /= 5
+        ax, ay, az = axis
+        ca, sa = math.cos(angle), math.sin(angle)
+        before = deepcopy(self.mesh)
+        for i in ids:
+            x, y, z = (vertices[i][k]-center[k] for k in range(3))
+            dot = ax*x+ay*y+az*z
+            cross = (ay*z-az*y, az*x-ax*z, ax*y-ay*x)
+            vertices[i] = [center[k]+v*ca+cross[k]*sa+axis[k]*dot*(1-ca)
+                           for k,v in enumerate((x,y,z))]
+        self.record_change(before)
+        self.push_mesh()
+        self.anchor = {i:list(vertices[i]) for i in ids}
+        self.selecting = True
+        try:
+            for spin in self.spins:spin.setValue(0)
+        finally:
+            self.selecting = False
+
     def move_perspective(self, dx, dy, dz):
         if not self.mesh or not self.selection:
+            return
+        if self.edit_mode == "girar":
+            self.rotate_selection(dx, dy, dz)
             return
         if self.edit_mode == "estirar":
             # El extremo delantero de la seleccion se extiende; el posterior
