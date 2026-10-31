@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.3.0"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -48,7 +48,7 @@ except Exception as exc:
 from PySide6.QtCore import QObject, Qt, Slot
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QComboBox, QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QMessageBox,
-    QGroupBox, QFormLayout, QInputDialog, QLineEdit)
+    QGroupBox, QFormLayout, QInputDialog, QLineEdit, QToolButton, QScrollArea)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 
@@ -194,6 +194,31 @@ class Bridge(QObject):
         self.editor.move_perspective(dx, dy, dz)
 
 
+class ExpandableSection(QWidget):
+    def __init__(self, title, expanded=True):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.toggle = QToolButton()
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(expanded)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.toggle.setStyleSheet("QToolButton{text-align:left;padding:10px;background:#202b47;border:1px solid #3b4b75;border-radius:7px;color:#dceaff;font-weight:bold}")
+        layout.addWidget(self.toggle)
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(9, 7, 9, 9)
+        layout.addWidget(self.content)
+        self.content.setVisible(expanded)
+        self.toggle.toggled.connect(self._changed)
+
+    def _changed(self, checked):
+        self.content.setVisible(checked)
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+
+
 class Editor(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -229,16 +254,28 @@ class Editor(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         panel = QWidget()
         panel.setFixedWidth(330)
-        left = QVBoxLayout(panel)
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(6, 6, 6, 6)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget()
+        left = QVBoxLayout(body)
+        left.setContentsMargins(3, 3, 3, 3)
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
         heading = QLabel("PYRION 3D  /  EDIT")
         heading.setStyleSheet("font-size:21px;font-weight:bold;color:#84baff;padding:12px")
         left.addWidget(heading)
+        files_section = ExpandableSection("Archivos y GitHub", True)
+        left.addWidget(files_section)
         for label, fn in [("Abrir .mesh", self.open_file), ("Cargar CHEST de GitHub", self.load_remote),
                           ("Guardar .mesh", self.save_file), ("Guardar como...", self.save_as),
                           ("Guardar en GitHub", self.save_github)]:
             b = QPushButton(label)
             b.clicked.connect(fn)
-            left.addWidget(b)
+            files_section.content_layout.addWidget(b)
         group = QGroupBox("Seleccionar objeto / cara")
         g = QVBoxLayout(group)
         self.selector = QComboBox()
@@ -247,7 +284,9 @@ class Editor(QMainWindow):
         self.selection_info = QLabel("Seleccione una pieza o cara")
         self.selection_info.setWordWrap(True)
         g.addWidget(self.selection_info)
-        left.addWidget(group)
+        group_section = ExpandableSection("Seleccionar objeto o cara", True)
+        group_section.content_layout.addWidget(group)
+        left.addWidget(group_section)
         trans = QGroupBox("Mover seleccion por valores X / Y / Z")
         form = QFormLayout(trans)
         self.spins = []
@@ -263,7 +302,9 @@ class Editor(QMainWindow):
         btn = QPushButton("Restablecer desplazamiento de selección")
         btn.clicked.connect(self.reset_transform)
         form.addRow(btn)
-        left.addWidget(trans)
+        move_section = ExpandableSection("Mover X / Y / Z", True)
+        move_section.content_layout.addWidget(trans)
+        left.addWidget(move_section)
         opts = QGroupBox("Visualización")
         op = QVBoxLayout(opts)
         self.toggles = {}
@@ -273,7 +314,9 @@ class Editor(QMainWindow):
                                   ("spin","Giro automático",False)]:
             cb = QCheckBox(title);cb.setChecked(value);cb.toggled.connect(self.push_options)
             self.toggles[key]=cb;op.addWidget(cb)
-        left.addWidget(opts)
+        options_section = ExpandableSection("Visualizacion", False)
+        options_section.content_layout.addWidget(opts)
+        left.addWidget(options_section)
         self.status = QLabel("")
         self.status.setWordWrap(True)
         left.addWidget(self.status)
