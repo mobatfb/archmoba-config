@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -140,7 +140,7 @@ cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,z
 window.addEventListener('keydown',e=>{
   const target=e.target;
   if(target&&['INPUT','TEXTAREA','SELECT'].includes(target.tagName))return;
-  if(e.ctrlKey&&e.key==='ArrowLeft'){e.preventDefault();yaw-=Math.PI/24;draw();return;}
+  if(e.altKey&&e.key==='ArrowLeft'){e.preventDefault();yaw-=Math.PI/24;draw();return;}
   if(e.altKey&&e.key==='ArrowRight'){e.preventDefault();yaw+=Math.PI/24;draw();return;}
   if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;
   if(e.ctrlKey||e.altKey||e.metaKey)return;
@@ -242,7 +242,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: mover según la vista · Shift: precisión.\nCtrl+← / Alt+→: girar cámara.\nLas caras comparten vértices.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: mover según la vista · Shift: precisión.\nAlt+← / Alt+→: girar cámara.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
