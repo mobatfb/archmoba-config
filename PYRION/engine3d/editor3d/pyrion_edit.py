@@ -1,11 +1,46 @@
 #!/usr/bin/env python3
 # PYRION EDIT - Editor de mallas .mesh (PySide6 + Qt WebEngine)
-# pip install PySide6
+# PySide6 se instala automaticamente si falta.
 import json
 import sys
 import urllib.request
 from pathlib import Path
 from copy import deepcopy
+import importlib.util
+import subprocess
+
+APP_VERSION = "1.1.0"
+
+def ensure_pyside6():
+    required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
+    try:
+        if all(importlib.util.find_spec(x) is not None for x in required):
+            return
+    except ModuleNotFoundError:
+        pass
+    print("PYRION EDIT: instalando PySide6 (solo la primera vez)...", flush=True)
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "PySide6"],
+        capture_output=True, text=True, creationflags=creationflags
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "Error desconocido").strip()
+        raise RuntimeError("No se pudo instalar PySide6 automáticamente: " + detail[-900:])
+    importlib.invalidate_caches()
+
+try:
+    ensure_pyside6()
+except Exception as exc:
+    import traceback
+    traceback.print_exc()
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, str(exc), "PYRION EDIT - Dependencias", 0x10)
+        except Exception:
+            pass
+    raise SystemExit(1)
 
 from PySide6.QtCore import QObject, Qt, Slot
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
