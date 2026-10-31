@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.3.7"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -63,15 +63,16 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script></head><body>
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
-let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
+let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,multiSelected=[],mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
 let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null;
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function setMesh(x){mesh=x;draw()}
 function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;surface=x.surface;labels=x.labels;spin=x.spin;draw()}
-function setSelected(x){if(x!==selected)selectedReflected=false;selected=x;selectedGroup=null;draw()}
+function setSelected(x){if(x!==selected)selectedReflected=false;selected=x;selectedGroup=null;multiSelected=x>=0?[x]:[];draw()}
+function setMultiSelected(ids){multiSelected=ids;selected=ids.length?ids[ids.length-1]:-1;selectedGroup=null;draw()}
 function selectFaceVisual(i,reflected){selected=i;selectedReflected=!!reflected;selectedGroup=null;draw()}
-function setSelectedGroup(a,b){selected=-1;selectedGroup=[a,b];draw()}
+function setSelectedGroup(a,b){selected=-1;multiSelected=[];selectedGroup=[a,b];draw()}
 function resize(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
 cv.width=Math.floor(r.width*d);cv.height=Math.floor(r.height*d);draw()}
 window.addEventListener('resize',resize);
@@ -115,7 +116,7 @@ function draw(){
  polygons.sort((a,b)=>a.depth-b.depth);window.polygons=polygons;
  for(const f of polygons){
   ctx.beginPath();f.p.forEach((p,j)=>j?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
-  const picked=f.i===selected||(selectedGroup&&f.i>=selectedGroup[0]&&f.i<selectedGroup[1]);
+  const picked=multiSelected.includes(f.i)||(selectedGroup&&f.i>=selectedGroup[0]&&f.i<selectedGroup[1]);
   if(surface){ctx.fillStyle=picked?'#f4be50':f.color;ctx.fill();}
   if(wire||picked){ctx.strokeStyle=picked?'#fff4bc':'#171a35';
     ctx.lineWidth=picked?3:1.35;ctx.stroke()}
@@ -129,15 +130,15 @@ function draw(){
 }
 function inside(poly,x,y){let ok=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){
  const a=poly[i],b=poly[j];if(((a[1]>y)!==(b[1]>y))&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])ok=!ok}return ok}
-cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,moved:false};cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,moved:false,add:e.altKey};cv.setPointerCapture(e.pointerId)});
 cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
  if(Math.abs(dx)+Math.abs(dy)>1)drag.moved=true;
  if(drag.moved){yaw+=dx*.009;pitch=Math.max(-1.45,Math.min(1.45,pitch+dy*.009));draw()}
  drag.x=e.clientX;drag.y=e.clientY});
-cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved;drag=null;if(moved)return;
+cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=drag.add;drag=null;if(moved)return;
  const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
  const hit=[...(window.polygons||[])].reverse().find(f=>inside(f.p,x,y));
- if(hit&&bridge){selectFaceVisual(hit.i,hit.reflected);bridge.selectFace(hit.i)}});
+ if(hit&&bridge){if(add)bridge.toggleFace(hit.i);else{selectFaceVisual(hit.i,hit.reflected);bridge.selectFace(hit.i)}}});
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,zoom*(e.deltaY>0?.9:1.1)));draw()},{passive:false});
 // Flechas verticales: desplazar en el eje vertical de la pantalla, segun camara.
 function selectFaceInDirection(key){
@@ -233,6 +234,10 @@ class Bridge(QObject):
         self.editor.select_face(index)
 
     @Slot(int)
+    def toggleFace(self, index):
+        self.editor.toggle_face(index)
+
+    @Slot(int)
     def selectAdjacentPiece(self, direction):
         self.editor.select_adjacent_piece(direction)
 
@@ -276,6 +281,7 @@ class Editor(QMainWindow):
         self.saved = None
         self.remote_sha = None
         self.selection = []
+        self.selected_faces = []
         self.selecting = False
         self.view = QWebEngineView()
         self.channel = QWebChannel(self.view.page())
@@ -343,7 +349,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: girar cámara.\nCtrl+flechas: mover pieza según vista.\nShift: precisión.\nAlt+flechas: seleccionar cara segun vista.\nLas caras comparten vértices.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: girar cámara.\nCtrl+flechas: mover pieza según vista.\nShift: precisión.\nAlt+flechas: seleccionar cara segun vista.\nAlt+clic: seleccionar varias caras.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
@@ -413,6 +419,7 @@ class Editor(QMainWindow):
         item=self.selector.currentData()
         if item is None:return
         kind,i=item
+        self.selected_faces=[i] if kind=="face" else []
         self.selection=self.vertex_ids(kind,i)
         self.anchor={j:list(self.mesh["vertices"][j]) for j in self.selection}
         self.selecting=True
@@ -426,6 +433,24 @@ class Editor(QMainWindow):
             group=self.mesh["groups"][i]
             a=int(group.get("face_start",0));b=a+int(group.get("face_count",0))
             self.js(f"setSelectedGroup({a},{b});")
+
+    def toggle_face(self, index):
+        if not self.mesh or not 0 <= index < len(self.mesh["faces"]):
+            return
+        if index in self.selected_faces:
+            self.selected_faces.remove(index)
+        else:
+            self.selected_faces.append(index)
+        self.selection=sorted({v for i in self.selected_faces for v in self.mesh["faces"][i]})
+        self.anchor={j:list(self.mesh["vertices"][j]) for j in self.selection}
+        self.selecting=True
+        try:
+            for spin in self.spins:spin.setValue(0)
+        finally:
+            self.selecting=False
+        self.selection_info.setText(str(len(self.selected_faces))+" caras seleccionadas · "+
+            str(len(self.selection))+" vértices únicos")
+        self.js("setMultiSelected("+json.dumps(self.selected_faces)+");")
 
     def select_adjacent_piece(self, direction):
         if not self.mesh or not self.mesh.get("faces"):
