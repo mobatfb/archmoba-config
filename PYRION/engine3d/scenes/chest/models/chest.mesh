@@ -1,6 +1,6 @@
 {
   "format": "pyrion.mesh",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "name": "chest",
   "primitive": "triangle_mesh",
   "topology": "mixed_quads_ngons",
@@ -555,6 +555,111 @@
       0,
       0.078,
       -0.48583
+    ],
+    [
+      0,
+      0.46,
+      0.64
+    ],
+    [
+      0,
+      0.68,
+      0.48
+    ],
+    [
+      0,
+      0.8,
+      0.25
+    ],
+    [
+      0,
+      0.84,
+      0
+    ],
+    [
+      0,
+      0.8,
+      -0.25
+    ],
+    [
+      0,
+      0.68,
+      -0.48
+    ],
+    [
+      0,
+      0.46,
+      -0.64
+    ],
+    [
+      -0.6,
+      0.46,
+      0.64
+    ],
+    [
+      -0.6,
+      0.68,
+      0.48
+    ],
+    [
+      -0.6,
+      0.8,
+      0.25
+    ],
+    [
+      -0.6,
+      0.84,
+      0
+    ],
+    [
+      -0.6,
+      0.8,
+      -0.25
+    ],
+    [
+      -0.6,
+      0.68,
+      -0.48
+    ],
+    [
+      -0.6,
+      0.46,
+      -0.64
+    ],
+    [
+      -0.88,
+      0.46,
+      0.64
+    ],
+    [
+      -0.88,
+      0.68,
+      0.48
+    ],
+    [
+      -0.88,
+      0.8,
+      0.25
+    ],
+    [
+      -0.88,
+      0.84,
+      0
+    ],
+    [
+      -0.88,
+      0.8,
+      -0.25
+    ],
+    [
+      -0.88,
+      0.68,
+      -0.48
+    ],
+    [
+      -0.88,
+      0.46,
+      -0.64
     ]
   ],
   "faces": [
@@ -1123,6 +1228,78 @@
       107,
       108,
       109
+    ],
+    [
+      110,
+      117,
+      118,
+      111
+    ],
+    [
+      111,
+      118,
+      119,
+      112
+    ],
+    [
+      112,
+      119,
+      120,
+      113
+    ],
+    [
+      113,
+      120,
+      121,
+      114
+    ],
+    [
+      114,
+      121,
+      122,
+      115
+    ],
+    [
+      115,
+      122,
+      123,
+      116
+    ],
+    [
+      117,
+      124,
+      125,
+      118
+    ],
+    [
+      118,
+      125,
+      126,
+      119
+    ],
+    [
+      119,
+      126,
+      127,
+      120
+    ],
+    [
+      120,
+      127,
+      128,
+      121
+    ],
+    [
+      121,
+      128,
+      129,
+      122
+    ],
+    [
+      122,
+      129,
+      130,
+      123
     ]
   ],
   "render": {
@@ -1164,9 +1341,16 @@
       "name": "piso_amarillo_interior_plano",
       "face_start": 91,
       "face_count": 1
+    },
+    {
+      "name": "tapa_superior_curva_separada_en_quads",
+      "vertex_start": 110,
+      "vertex_count": 21,
+      "face_start": 92,
+      "face_count": 12
     }
   ],
-  "notes": "CHEST 1.0.15: cada piso amarillo es un n-gon plano con un unico contorno. Sin vertices centrales. Los quads exteriores y sus colores permanecen intactos; triangulacion al renderizar. v1.0.16: color distinto por cada fila horizontal de pared verde y cada franja/piso para visualizar las secciones; geometria y indices sin modificar.",
+  "notes": "CHEST 1.0.15: cada piso amarillo es un n-gon plano con un unico contorno. Sin vertices centrales. Los quads exteriores y sus colores permanecen intactos; triangulacion al renderizar. v1.0.16: color distinto por cada fila horizontal de pared verde y cada franja/piso para visualizar las secciones; geometria y indices sin modificar. CHEST v1.0.17: tapa arqueada flotante encima del cuerpo, NO unida, como pieza provisional. Superficie de quads con perfil curvo en Z, media malla X<=0 para Espejo X. Sin alterar los 110 vertices y 92 caras anteriores.",
   "face_colors": [
     "#FFD43B",
     "#FFD43B",
@@ -1259,7 +1443,19 @@
     "#00BCD4",
     "#00BCD4",
     "#00BCD4",
-    "#FFB347"
+    "#FFB347",
+    "#A855F7",
+    "#A855F7",
+    "#A855F7",
+    "#A855F7",
+    "#A855F7",
+    "#A855F7",
+    "#7C3AED",
+    "#7C3AED",
+    "#7C3AED",
+    "#7C3AED",
+    "#7C3AED",
+    "#7C3AED"
   ],
   "modeling": {
     "system": "pyrion-origami",
