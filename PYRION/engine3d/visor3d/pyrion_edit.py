@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -146,23 +146,37 @@ function selectFaceInDirection(key){
     f.p.reduce((sum,p)=>sum+p[0],0)/f.p.length,
     f.p.reduce((sum,p)=>sum+p[1],0)/f.p.length
   ];
-  // Preferimos la cara frontal visible del ID seleccionado.
+  const axis=key==='ArrowLeft'?[-1,0]:key==='ArrowRight'?[1,0]:
+    key==='ArrowUp'?[0,-1]:[0,1];
   const current=[...faces].reverse().find(f=>f.i===selected);
   if(!current)return;
   const origin=center(current);
-  const axis=key==='ArrowLeft'?[-1,0]:key==='ArrowRight'?[1,0]:
-    key==='ArrowUp'?[0,-1]:[0,1];
-  let best=null,bestScore=Infinity;
-  for(const candidate of faces){
-    if(candidate.i===selected)continue;
-    const c=center(candidate),dx=c[0]-origin[0],dy=c[1]-origin[1];
-    const forward=dx*axis[0]+dy*axis[1];
-    if(forward<3)continue;
-    const sideways=Math.abs(dx*axis[1]-dy*axis[0]);
-    const score=forward+sideways*2.5;
-    if(score<bestScore){bestScore=score;best=candidate;}
+  // Elegir caras de acuerdo con su posicion VISUAL; nunca avanzar por ID.
+  // El orden de dibujo es de atras hacia delante: identificar la cara visible
+  // en el centro de cada candidata evita navegar hacia caras ocultas.
+  function visible(f){
+    const c=center(f);
+    for(let i=faces.length-1;i>=0;i--){
+      const top=faces[i];
+      if(inside(top.p,c[0],c[1]))return top===f;
+    }
+    return false;
   }
-  if(best)bridge.selectFace(best.i);
+  const candidates=[];
+  for(const f of faces){
+    if(f.i===selected||!visible(f))continue;
+    const c=center(f),dx=c[0]-origin[0],dy=c[1]-origin[1];
+    const along=dx*axis[0]+dy*axis[1];
+    const across=Math.abs(dx*axis[1]-dy*axis[0]);
+    if(along<=4||across>along*1.8)continue;
+    const shared=mesh.faces[selected]?.filter(v=>mesh.faces[f.i]?.includes(v)).length||0;
+    // Cara vecina primero; si no hay, siguiente lugar visible en esa direccion.
+    const distance=Math.hypot(dx,dy);
+    const score=distance+across*1.4-(shared>=2?10000:shared===1?1500:0);
+    candidates.push({f,score});
+  }
+  candidates.sort((a,b)=>a.score-b.score);
+  if(candidates.length)bridge.selectFace(candidates[0].f.i);
 }
 window.addEventListener('keydown',e=>{
   const target=e.target;
