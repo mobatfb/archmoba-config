@@ -2,8 +2,8 @@
   "app": "pyrion_edit",
   "name": "PYRION EDIT",
   "description": "Editor 3D de mallas Origami con movimiento XYZ, IDs de caras y Espejo X",
-  "version": "1.4.11",
+  "version": "1.4.12",
   "app_path": "PYRION/engine3d/visor3d/pyrion_edit.py",
-  "release_commit": "5d0b413566cf69d0c2b07abf024bddf1a7d1bbb1",
+  "release_commit": "1e2823831fa33620268725f665beec81cefbcf36",
   "maintenance": false
 }
