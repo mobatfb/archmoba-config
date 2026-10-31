@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -139,11 +139,36 @@ cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved;drag=
  if(hit&&bridge)bridge.selectFace(hit.i)});
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,zoom*(e.deltaY>0?.9:1.1)));draw()},{passive:false});
 // Flechas verticales: desplazar en el eje vertical de la pantalla, segun camara.
+function selectFaceInDirection(key){
+  if(!mesh||!bridge||!(window.polygons||[]).length)return;
+  const faces=window.polygons;
+  const center=f=>[
+    f.p.reduce((sum,p)=>sum+p[0],0)/f.p.length,
+    f.p.reduce((sum,p)=>sum+p[1],0)/f.p.length
+  ];
+  // Preferimos la cara frontal visible del ID seleccionado.
+  const current=[...faces].reverse().find(f=>f.i===selected);
+  if(!current)return;
+  const origin=center(current);
+  const axis=key==='ArrowLeft'?[-1,0]:key==='ArrowRight'?[1,0]:
+    key==='ArrowUp'?[0,-1]:[0,1];
+  let best=null,bestScore=Infinity;
+  for(const candidate of faces){
+    if(candidate.i===selected)continue;
+    const c=center(candidate),dx=c[0]-origin[0],dy=c[1]-origin[1];
+    const forward=dx*axis[0]+dy*axis[1];
+    if(forward<3)continue;
+    const sideways=Math.abs(dx*axis[1]-dy*axis[0]);
+    const score=forward+sideways*2.5;
+    if(score<bestScore){bestScore=score;best=candidate;}
+  }
+  if(best)bridge.selectFace(best.i);
+}
 window.addEventListener('keydown',e=>{
   const target=e.target;
   if(target&&['INPUT','TEXTAREA','SELECT'].includes(target.tagName))return;
-  if(e.altKey&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){
-    e.preventDefault();if(bridge)bridge.selectAdjacentPiece(e.key==='ArrowRight'?1:-1);return;
+  if(e.altKey&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
+    e.preventDefault();selectFaceInDirection(e.key);return;
   }
   if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;
   if(e.altKey||e.metaKey)return;
@@ -296,7 +321,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: girar cámara.\nCtrl+flechas: mover pieza según vista.\nShift: precisión.\nAlt+← / Alt+→: cara ID anterior/siguiente.\nLas caras comparten vértices.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: girar cámara.\nCtrl+flechas: mover pieza según vista.\nShift: precisión.\nAlt+flechas: seleccionar cara segun vista.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
