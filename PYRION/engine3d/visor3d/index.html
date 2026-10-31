@@ -68,7 +68,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.9</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.10</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -122,7 +122,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.9';
+  const APP_VERSION = 'v1.3.10';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -545,10 +545,11 @@
       }
       for (let i=0;i<source.faces.length;i++) {
         const f=source.faces[i];
-        if (!Array.isArray(f) || (f.length!==3 && f.length!==4)) {
-          throw new Error('Origami admite triangulos y quads');
+        if (!Array.isArray(f) || f.length<3 || f.length>128) {
+          throw new Error('Origami admite poligonos de 3 a 128 vertices');
         }
-        const parts=f.length===3 ? [f] : [[f[0],f[1],f[2]],[f[0],f[2],f[3]]];
+        const parts=f.length===3 ? [f] :
+          Array.from({length:f.length-2},(_,j)=>[f[0],f[j+1],f[j+2]]);
         triangles.push(...parts);
         if (sourceColors !== undefined) for (const _ of parts) triColors.push(sourceColors[i]);
       }
