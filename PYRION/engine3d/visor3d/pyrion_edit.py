@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -63,12 +63,12 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script></head><body>
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
-let mesh=null,selected=-1,mirror=true,wire=true,material=true,labels=true,spin=false;
+let mesh=null,selected=-1,mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
 let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null;
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function setMesh(x){mesh=x;draw()}
-function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;labels=x.labels;spin=x.spin;draw()}
+function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;surface=x.surface;labels=x.labels;spin=x.spin;draw()}
 function setSelected(x){selected=x;draw()}
 function resize(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
 cv.width=Math.floor(r.width*d);cv.height=Math.floor(r.height*d);draw()}
@@ -113,7 +113,7 @@ function draw(){
  polygons.sort((a,b)=>a.depth-b.depth);window.polygons=polygons;
  for(const f of polygons){
   ctx.beginPath();f.p.forEach((p,j)=>j?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
-  ctx.fillStyle=f.i===selected?'#f4be50':f.color;ctx.fill();
+  if(surface){ctx.fillStyle=f.i===selected?'#f4be50':f.color;ctx.fill();}
   if(wire||f.i===selected){ctx.strokeStyle=f.i===selected?'#fff4bc':'#171a35';
     ctx.lineWidth=f.i===selected?3:1.35;ctx.stroke()}
   if(labels){const x=f.p.reduce((a,v)=>a+v[0],0)/f.p.length;
@@ -253,7 +253,8 @@ class Editor(QMainWindow):
         op = QVBoxLayout(opts)
         self.toggles = {}
         for key, title, value in [("mirror","Espejo X",True),("wire","Aristas reales",True),
-                                  ("material","Colores por cara",True),("labels","IDs numéricos",True),
+                                  ("material","Con material (colores)",True),("surface","Mostrar superficie",True),
+                                  ("labels","Números de caras",True),
                                   ("spin","Giro automático",False)]:
             cb = QCheckBox(title);cb.setChecked(value);cb.toggled.connect(self.push_options)
             self.toggles[key]=cb;op.addWidget(cb)
