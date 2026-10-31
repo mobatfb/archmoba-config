@@ -1,2 +1,0 @@
-PRUEBA CANVAEDIT
-Archivo de prueba creado junto a canvaedit.py y run.py.
