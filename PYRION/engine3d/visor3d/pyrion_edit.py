@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -311,27 +311,33 @@ class Editor(QMainWindow):
         except Exception as ex:QMessageBox.critical(self,"Error al abrir",str(ex))
 
     def load_remote(self):
-        try:
-            url="https://api.github.com/repos/"+REPO+"/contents/"+REMOTE+"?ref=main"
-            request=urllib.request.Request(url,headers={"Accept":"application/vnd.github.raw+json",
-                                                         "User-Agent":"PYRION-EDIT"})
-            with urllib.request.urlopen(request,timeout=12) as response:
-                raw=json.loads(response.read().decode("utf-8"))
-            if "content" in raw:
-                data=json.loads(base64.b64decode(raw["content"]).decode("utf-8"))
-            else:data=raw
-            self.set_mesh(data)
-            self.remote_sha = raw.get('sha')
-        except Exception as ex:
-            self.status.setText("GitHub no disponible: "+str(ex)+" · Utilice Abrir .mesh")
+        # RAW no consume la cuota de la API publica y es suficiente para abrir modelos.
+        # La escritura sigue verificando el SHA con un token de GitHub.
+        urls = [
+            "https://raw.githubusercontent.com/" + REPO + "/main/" + REMOTE,
+            "https://cdn.jsdelivr.net/gh/" + REPO + "@main/" + REMOTE,
+        ]
+        errors = []
+        for url in urls:
+            try:
+                request = urllib.request.Request(
+                    url + "?refresh=" + str(__import__("time").time_ns()),
+                    headers={"User-Agent": "PYRION-EDIT/1.2.1", "Cache-Control": "no-cache"})
+                with urllib.request.urlopen(request, timeout=18) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                self.set_mesh(data)
+                self.remote_sha = None
+                self.status.setText("CHEST v" + str(data.get("version", "?")) +
+                    " cargado desde GitHub RAW. Guardar en GitHub solicitará comprobación autenticada.")
+                return
+            except Exception as exc:
+                errors.append(str(exc))
+        self.status.setText("No se pudo descargar CHEST: " +
+            " | ".join(errors)[:240] + " · También puede abrir un .mesh local.")
 
     def save_github(self):
         if not self.mesh:
             QMessageBox.warning(self, "PYRION EDIT", "Primero abra una malla.")
-            return
-        if not self.remote_sha:
-            QMessageBox.warning(self, "PYRION EDIT",
-                "Para evitar sobrescribir cambios ajenos, primero pulse 'Cargar CHEST de GitHub', luego edite y publique.")
             return
         if self.mesh == self.saved:
             QMessageBox.information(self, "PYRION EDIT", "No hay cambios para publicar.")
@@ -354,8 +360,13 @@ class Editor(QMainWindow):
             request = urllib.request.Request(api + "?ref=main", headers=headers)
             with urllib.request.urlopen(request, timeout=20) as response:
                 remote = json.load(response)
-            if remote.get("sha") != self.remote_sha:
+            if self.remote_sha and remote.get("sha") != self.remote_sha:
                 raise RuntimeError("CHEST cambió en GitHub desde que fue abierto. Vuelva a cargarlo antes de publicar.")
+            if self.saved is None or remote.get("encoding") != "base64":
+                raise RuntimeError("No se pudo verificar la malla remota antes de publicar.")
+            remote_mesh = json.loads(base64.b64decode(remote["content"]).decode("utf-8"))
+            if remote_mesh != self.saved:
+                raise RuntimeError("CHEST cambió en GitHub desde la carga. Recargue antes de publicar.")
             updated = deepcopy(self.mesh)
             original = str(updated.get("version", "1.0.0")).split(".")
             if not original or not all(p.isdecimal() for p in original):
@@ -371,7 +382,7 @@ class Editor(QMainWindow):
             payload = {
                 "message": "PYRION EDIT: actualizar CHEST v" + updated["version"],
                 "content": base64.b64encode((json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")).decode("ascii"),
-                "sha": self.remote_sha,
+                "sha": remote["sha"],
                 "branch": "main"
             }
             put = urllib.request.Request(api, data=json.dumps(payload).encode("utf-8"),
