@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -142,17 +142,23 @@ window.addEventListener('keydown',e=>{
   if(target&&['INPUT','TEXTAREA','SELECT'].includes(target.tagName))return;
   if(e.ctrlKey&&e.key==='ArrowLeft'){e.preventDefault();yaw-=Math.PI/24;draw();return;}
   if(e.altKey&&e.key==='ArrowRight'){e.preventDefault();yaw+=Math.PI/24;draw();return;}
-  if(e.key!=='ArrowUp'&&e.key!=='ArrowDown')return;
+  if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;
+  if(e.ctrlKey||e.altKey||e.metaKey)return;
   e.preventDefault();
   if(!bridge||selected<0)return;
-  const dir=e.key==='ArrowUp'?1:-1;
   const step=e.shiftKey?.005:.025;
-  // py = y*cos(pitch) - (-x*sin(yaw)+z*cos(yaw))*sin(pitch)
-  // vector unitario de arriba de la pantalla expresado en XYZ.
-  bridge.movePerspective(
-    dir*step*Math.sin(yaw)*Math.sin(pitch),
-    dir*step*Math.cos(pitch),
-    -dir*step*Math.cos(yaw)*Math.sin(pitch));
+  if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+    const dir=e.key==='ArrowRight'?1:-1;
+    // Eje horizontal de la pantalla, segun la rotacion de la camara.
+    bridge.movePerspective(dir*step*Math.cos(yaw),0,dir*step*Math.sin(yaw));
+  }else{
+    const dir=e.key==='ArrowUp'?1:-1;
+    // Eje vertical de la pantalla, respetando yaw y pitch.
+    bridge.movePerspective(
+      dir*step*Math.sin(yaw)*Math.sin(pitch),
+      dir*step*Math.cos(pitch),
+      -dir*step*Math.cos(yaw)*Math.sin(pitch));
+  }
 });
 setInterval(()=>{if(spin){yaw+=.0035;draw()}},33);
 resize();
@@ -236,7 +242,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\n↑ / ↓: mover según la vista · Shift: precisión.\nCtrl+← / Alt+→: girar cámara.\nLas caras comparten vértices.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: mover según la vista · Shift: precisión.\nCtrl+← / Alt+→: girar cámara.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
