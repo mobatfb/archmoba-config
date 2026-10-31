@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -296,7 +296,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: girar cámara.\nCtrl+flechas: mover pieza según vista.\nShift: precisión.\nAlt+← / Alt+→: cambiar pieza.\nLas caras comparten vértices.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: girar cámara.\nCtrl+flechas: mover pieza según vista.\nShift: precisión.\nAlt+← / Alt+→: cara ID anterior/siguiente.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
@@ -381,14 +381,19 @@ class Editor(QMainWindow):
             self.js(f"setSelectedGroup({a},{b});")
 
     def select_adjacent_piece(self, direction):
-        if not self.mesh or not self.selector.count():return
-        groups=len(self.mesh.get('groups',[]))
-        if groups:
-            current=self.selector.currentIndex()
-            target=(current+direction)%groups if current<groups else (0 if direction>0 else groups-1)
+        if not self.mesh or not self.mesh.get("faces"):
+            return
+        ids = self.mesh.get("face_ids") or list(range(1, len(self.mesh["faces"])+1))
+        ordered = sorted((face_id, index) for index, face_id in enumerate(ids))
+        current = self.selector.currentData()
+        if current and current[0] == "face":
+            current_id = ids[current[1]]
+            pos = next((i for i, (fid, _) in enumerate(ordered) if fid == current_id), 0)
+            pos = (pos + (1 if direction > 0 else -1)) % len(ordered)
         else:
-            target=(self.selector.currentIndex()+direction)%self.selector.count()
-        self.selector.setCurrentIndex(target)
+            pos = 0 if direction > 0 else len(ordered)-1
+        face_index = ordered[pos][1]
+        self.select_face(face_index)
 
     def select_face(self,i):
         for j in range(self.selector.count()):
