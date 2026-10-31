@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 
-APP_VERSION = "1.4.11"
+APP_VERSION = "1.4.12"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -200,11 +200,26 @@ function draw(){
      const a=vv[f[j]],b=vv[f[(j+1)%f.length]];
      const e=b.map((v,k)=>v-a[k]),length=Math.hypot(...e);
      if(length>1e-7){
-       // Axes in world space corresponding to the current screen view.
-       const right=[Math.cos(yaw),0,Math.sin(yaw)];
-       const up=[Math.sin(yaw)*Math.sin(pitch),Math.cos(pitch),-Math.cos(yaw)*Math.sin(pitch)];
-       const opts=[["left",right.map(v=>-v)],["right",right],
-                   ["up",up],["down",up.map(v=>-v)]];
+       // Directions anchored in the predecessor face, independent of camera.
+       const centroid=[0,1,2].map(k=>f.reduce((sum,id)=>sum+vv[id][k],0)/f.length);
+       const mid=a.map((v,k)=>(v+b[k])/2);
+       const dot3=(u,v)=>u.reduce((sum,n,k)=>sum+n*v[k],0);
+       const cross3=(u,v)=>[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+       let n=[0,0,0];
+       for(let k=0;k<f.length;k++){
+         const p=vv[f[k]],q=vv[f[(k+1)%f.length]];
+         const u=p.map((v,i)=>v-centroid[i]),v=q.map((val,i)=>val-centroid[i]);
+         const c=cross3(u,v);n=n.map((val,i)=>val+c[i]);
+       }
+       const nl=Math.hypot(...n);if(nl<1e-8)return;
+       n=n.map(v=>v/nl);
+       let outward=cross3(n,e);
+       const sign=dot3(outward,mid.map((v,k)=>v-centroid[k]))<0?-1:1;
+       outward=outward.map(v=>sign*v/Math.hypot(...outward));
+       // Four fixed possibilities: straight outside/inside face, and two
+       // folded quads perpendicular to the predecessor plane.
+       const opts=[["outside",outward],["inside",outward.map(v=>-v)],
+                   ["front",n],["back",n.map(v=>-v)]];
        for(const [mode,unit] of opts){
          const proj=e.reduce((v,n,k)=>v+n*unit[k],0)/(length*length);
          const perp=unit.map((v,k)=>v-proj*e[k]);
@@ -225,7 +240,7 @@ function draw(){
          ctx.fill();ctx.strokeStyle="#88f5ff";ctx.lineWidth=2;ctx.stroke();
          ctx.font="bold 13px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
          ctx.strokeStyle="#152438";ctx.lineWidth=3;
-         const symbol={up:"↑",down:"↓",left:"←",right:"→"}[mode];
+         const symbol={outside:"↗",inside:"↙",front:"⊙",back:"⊗"}[mode];
          ctx.strokeText(symbol,cx,cy);ctx.fillStyle="#fff";ctx.fillText(symbol,cx,cy);
          quadPreview.options.push({mode,polygon:poly,x:cx,y:cy});
        }
@@ -246,7 +261,7 @@ cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=d
  if(quadPreview&&editMode==="agregar"&&!add){
    const chosen=[...(quadPreview.options||[])].reverse().find(opt=>inside(opt.polygon,x,y)||Math.hypot(opt.x-x,opt.y-y)<13);
    if(chosen){const f=quadPreview.face,e=quadPreview.edge;quadPreview=null;
-     bridge.extendEdgeChoice(f,e,chosen.mode,Math.cos(yaw),Math.sin(yaw),Math.sin(yaw)*Math.sin(pitch),Math.cos(pitch),-Math.cos(yaw)*Math.sin(pitch));draw();return;}
+     bridge.extendEdgeChoice(f,e,chosen.mode);draw();return;}
    quadPreview=null;draw();return;
  }
  if(plus&&bridge&&!add&&editMode==="agregar"){
@@ -362,9 +377,8 @@ class Bridge(QObject):
     def selectFace(self, index):
         self.editor.select_face(index)
 
-    @Slot(int, int, str, float, float, float, float, float)
-    def extendEdgeChoice(self, face_index, edge_index, mode, rx, rz, ux, uy, uz):
-        self.editor.set_preview_axes(rx, rz, ux, uy, uz)
+    @Slot(int, int, str)
+    def extendEdgeChoice(self, face_index, edge_index, mode):
         self.editor.extend_edge(face_index, edge_index, mode)
 
     @Slot(int, int)
@@ -786,19 +800,39 @@ class Editor(QMainWindow):
         self.restore_history(state)
         self.status.setText("Rehacer: cambio restaurado.")
 
-    def preview_direction(self, mode):
-        if mode not in ("up", "down", "left", "right"):
+    def preview_direction(self, mode, face_index, edge_index):
+        faces = self.mesh["faces"]
+        vertices = self.mesh["vertices"]
+        face = faces[face_index]
+        a = vertices[face[edge_index]]
+        b = vertices[face[(edge_index + 1) % len(face)]]
+        center = [sum(vertices[i][k] for i in face)/len(face) for k in range(3)]
+        edge = [b[k]-a[k] for k in range(3)]
+        normal = [0.0, 0.0, 0.0]
+        for j in range(len(face)):
+            p = vertices[face[j]]
+            q = vertices[face[(j+1) % len(face)]]
+            u = [p[k]-center[k] for k in range(3)]
+            v = [q[k]-center[k] for k in range(3)]
+            c = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2],
+                 u[0]*v[1]-u[1]*v[0]]
+            normal = [normal[k]+c[k] for k in range(3)]
+        length = math.sqrt(sum(v*v for v in normal))
+        if length < 1e-8:
             return None
-        # Camera orientation is provided by the WebChannel before confirmation.
-        return self.preview_axes.get(mode)
-
-    def set_preview_axes(self, right_x, right_z, up_x, up_y, up_z):
-        self.preview_axes = {
-            "right": [right_x, 0.0, right_z],
-            "left": [-right_x, 0.0, -right_z],
-            "up": [up_x, up_y, up_z],
-            "down": [-up_x, -up_y, -up_z]
-        }
+        normal = [v/length for v in normal]
+        outward = [normal[1]*edge[2]-normal[2]*edge[1],
+                   normal[2]*edge[0]-normal[0]*edge[2],
+                   normal[0]*edge[1]-normal[1]*edge[0]]
+        mid = [(a[k]+b[k])/2 for k in range(3)]
+        if sum(outward[k]*(mid[k]-center[k]) for k in range(3)) < 0:
+            outward = [-v for v in outward]
+        size = math.sqrt(sum(v*v for v in outward))
+        if size < 1e-8:
+            return None
+        outward = [v/size for v in outward]
+        return {"outside":outward, "inside":[-v for v in outward],
+                "front":normal, "back":[-v for v in normal]}.get(mode)
 
     def extend_edge(self, face_index, edge_index, mode="down"):
         """Add a quad to an open mesh edge, extending outwards within its face plane."""
@@ -832,7 +866,7 @@ class Editor(QMainWindow):
             QMessageBox.warning(self, "Crear quad", "No se pudo determinar la direccion exterior.")
             return
         distance = edge_len2**0.5
-        unit = self.preview_direction(mode)
+        unit = self.preview_direction(mode, face_index, edge_index)
         if unit is None:
             return
         proj = sum(unit[k]*edge[k] for k in range(3))/edge_len2
@@ -907,7 +941,7 @@ class Editor(QMainWindow):
         if initial is None:
             return
         direction = initial[2]
-        unit = self.preview_direction(mode)
+        unit = self.preview_direction(mode, clicked_face, clicked_edge)
         if unit is None:return
         chosen = []
         for fi in dict.fromkeys(self.selected_faces):
