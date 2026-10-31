@@ -88,11 +88,17 @@ def merge_vertices(model, keep_index, remove_index, tolerance=None):
     for n, f in enumerate(result["faces"]):
         changed = [keep_index if i == remove_index else i for i in f]
         changed = [i - 1 if i > remove_index else i for i in changed]
-        if len(set(changed)) < 3:
+        compact = []
+        for index in changed:
+            if not compact or compact[-1] != index:
+                compact.append(index)
+        if len(compact) > 1 and compact[0] == compact[-1]:
+            compact.pop()
+        if len(set(compact)) < 3:
             continue
-        if len(set(changed)) != len(changed):
+        if len(set(compact)) != len(compact):
             raise ValueError("Fusion produce una cara no valida")
-        new_faces.append(changed)
+        new_faces.append(compact)
         if "face_colors" in result:
             new_colors.append(result["face_colors"][n])
     v.pop(remove_index)
