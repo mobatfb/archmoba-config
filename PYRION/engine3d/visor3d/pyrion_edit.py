@@ -338,7 +338,7 @@ class Editor(QMainWindow):
         self.selection = []
         self.selected_faces = []
         self.selecting = False
-        self.edit_mode = "normal"
+        self.edit_mode = "agregar"
         self.undo_stack = []
         self.redo_stack = []
         self.view = QWebEngineView()
@@ -450,7 +450,7 @@ class Editor(QMainWindow):
         self.mode_group.setExclusive(True)
         for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar")]:
             button = QRadioButton(label)
-            button.setChecked(mode == "normal")
+            button.setChecked(mode == "agregar")
             button.toggled.connect(lambda checked, m=mode: self.set_edit_mode(m) if checked else None)
             self.mode_group.addButton(button)
             modes.content_layout.addWidget(button)
@@ -890,6 +890,35 @@ class Editor(QMainWindow):
 
     def move_perspective(self, dx, dy, dz):
         if not self.mesh or not self.selection:
+            return
+        if self.edit_mode == "normal":
+            return
+        if self.edit_mode == "estirar":
+            # El extremo delantero de la seleccion se extiende; el posterior
+            # permanece como ancla. Funciona tambien con varias caras.
+            direction = (dx, dy, dz)
+            length = sum(c*c for c in direction)**0.5
+            if length < 1e-12:
+                return
+            unit = [c/length for c in direction]
+            vertices = self.mesh["vertices"]
+            projections = {i:sum(vertices[i][k]*unit[k] for k in range(3))
+                           for i in self.selection}
+            low, high = min(projections.values()), max(projections.values())
+            span = high-low
+            before = deepcopy(self.mesh)
+            for i in self.selection:
+                factor = (projections[i]-low)/span if span > 1e-9 else 1.0
+                vertices[i] = [vertices[i][k]+direction[k]*factor for k in range(3)]
+            self.record_change(before)
+            self.push_mesh()
+            # Actualizar la base para evitar saltos al editar coordenadas despues.
+            self.anchor = {i:list(vertices[i]) for i in self.selection}
+            self.selecting = True
+            try:
+                for spin in self.spins:spin.setValue(0)
+            finally:
+                self.selecting = False
             return
         self.selecting = True
         try:
