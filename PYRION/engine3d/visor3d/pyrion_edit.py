@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -202,15 +202,18 @@ window.addEventListener('keydown',e=>{
   }
   if(!bridge||!mesh)return;
   const step=e.shiftKey?.005:.025;
+  // Convertir de coordenadas de pantalla a XYZ de la malla original.
+  // Cuando se selecciona la copia Espejo X, su X visual es -X original:
+  // invertir el desplazamiento X evita controles al reves desde la espalda.
+  const mirrorSign=mirror&&selectedReflected?-1:1;
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
     const dir=e.key==='ArrowRight'?1:-1;
-    // Eje horizontal de la pantalla, segun la rotacion de la camara.
-    bridge.movePerspective(dir*step*Math.cos(yaw),0,dir*step*Math.sin(yaw));
+    bridge.movePerspective(
+      mirrorSign*dir*step*Math.cos(yaw),0,dir*step*Math.sin(yaw));
   }else{
     const dir=e.key==='ArrowUp'?1:-1;
-    // Eje vertical de la pantalla, respetando yaw y pitch.
     bridge.movePerspective(
-      dir*step*Math.sin(yaw)*Math.sin(pitch),
+      mirrorSign*dir*step*Math.sin(yaw)*Math.sin(pitch),
       dir*step*Math.cos(pitch),
       -dir*step*Math.cos(yaw)*Math.sin(pitch));
   }
