@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -376,6 +376,18 @@ class Editor(QMainWindow):
         left.addStretch()
         row.addWidget(panel)
         row.addWidget(self.view,1)
+        tools_panel = QWidget()
+        tools_panel.setFixedWidth(170)
+        tools_layout = QVBoxLayout(tools_panel)
+        title = QLabel("HERRAMIENTAS")
+        title.setStyleSheet("font-weight:bold;color:#84baff;padding:9px")
+        tools_layout.addWidget(title)
+        self.merge_button = QPushButton("Unir caras")
+        self.merge_button.setToolTip("Selecciona 2 o mas caras contiguas con Alt + clic")
+        self.merge_button.clicked.connect(self.merge_faces)
+        tools_layout.addWidget(self.merge_button)
+        tools_layout.addStretch()
+        row.addWidget(tools_panel)
         self.setCentralWidget(root)
 
     def js(self, script):
@@ -433,6 +445,120 @@ class Editor(QMainWindow):
             group=self.mesh["groups"][i]
             a=int(group.get("face_start",0));b=a+int(group.get("face_count",0))
             self.js(f"setSelectedGroup({a},{b});")
+
+    def merge_faces(self):
+        """Fusionar un conjunto de caras contiguas siguiendo su borde exterior."""
+        if not self.mesh or len(self.selected_faces) < 2:
+            QMessageBox.information(self, "Unir caras", "Seleccione 2 o mas caras con Alt + clic.")
+            return
+        indices = sorted(set(self.selected_faces))
+        faces = self.mesh["faces"]
+        edge_counts = {}
+        for i in indices:
+            face = faces[i]
+            for a, b in zip(face, face[1:] + face[:1]):
+                key = tuple(sorted((a, b)))
+                edge_counts.setdefault(key, []).append((a, b))
+        if any(len(occurrences) > 2 for occurrences in edge_counts.values()):
+            QMessageBox.warning(self, "Unir caras", "Hay aristas compartidas por mas de dos caras.")
+            return
+        if not any(len(occurrences) == 2 for occurrences in edge_counts.values()):
+            QMessageBox.warning(self, "Unir caras", "Las caras no comparten aristas.")
+            return
+        edges = [entries[0] for entries in edge_counts.values() if len(entries) == 1]
+        neighbors = {}
+        for a, b in edges:
+            neighbors.setdefault(a, set()).add(b)
+            neighbors.setdefault(b, set()).add(a)
+        if not edges or any(len(links) != 2 for links in neighbors.values()):
+            QMessageBox.warning(self, "Unir caras", "La seleccion tiene bifurcaciones o bordes abiertos.")
+            return
+        loop = [edges[0][0]]
+        previous = None
+        current = loop[0]
+        while True:
+            options = neighbors[current] - ({previous} if previous is not None else set())
+            if len(options) != 1 and previous is not None:
+                break
+            nxt = sorted(options)[0]
+            if nxt == loop[0]:
+                break
+            if nxt in loop:
+                break
+            loop.append(nxt)
+            previous, current = current, nxt
+            if len(loop) > 128:
+                break
+        if len(loop) != len(edges) or len(loop) < 3 or len(loop) > 128:
+            QMessageBox.warning(self, "Unir caras", "La seleccion no forma un unico contorno valido.")
+            return
+        # No fusionar superficies con quiebres: se perderia su forma 3D.
+        vertices = self.mesh["vertices"]
+        p0 = vertices[loop[0]]
+        normal = None
+        for k in range(1, len(loop)-1):
+            u = [vertices[loop[k]][j]-p0[j] for j in range(3)]
+            v = [vertices[loop[k+1]][j]-p0[j] for j in range(3)]
+            n = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2],
+                 u[0]*v[1]-u[1]*v[0]]
+            mag = sum(c*c for c in n)**0.5
+            if mag > 1e-9:
+                normal = [c/mag for c in n]
+                break
+        if normal is None or any(abs(sum(normal[j]*(vertices[v][j]-p0[j])
+               for j in range(3))) > 0.002 for v in loop):
+            QMessageBox.warning(self, "Unir caras",
+                "Estas caras no son coplanares. No se uniran porque se perderia la geometria.")
+            return
+        # Los interiores no pueden dejar agujeros.
+        all_vertices = set(v for i in indices for v in faces[i])
+        if any(abs(sum(normal[j]*(vertices[v][j]-p0[j]) for j in range(3))) > 0.002
+               for v in all_vertices):
+            QMessageBox.warning(self, "Unir caras", "La superficie completa no es plana.")
+            return
+        first = indices[0]
+        chosen = set(indices)
+        def merged(items, replacement):
+            return [replacement if i == first else item
+                    for i, item in enumerate(items) if i not in chosen or i == first]
+        original_groups = self.mesh.get("groups", [])
+        if original_groups:
+            owners = []
+            for i in range(len(faces)):
+                owners.append(next((g for g, group in enumerate(original_groups)
+                    if group.get("face_start", 0) <= i <
+                    group.get("face_start", 0)+group.get("face_count", 0)), None))
+            group_owner = owners[first]
+            if any(owners[i] != group_owner for i in indices):
+                QMessageBox.warning(self, "Unir caras",
+                    "Para conservar los grupos del modelo, seleccione caras del mismo grupo.")
+                return
+        answer = QMessageBox.question(self, "Unir caras",
+            "Fusionar " + str(len(indices)) + " caras en una sola superficie?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.mesh["faces"] = merged(faces, loop)
+        if isinstance(self.mesh.get("face_ids"), list):
+            ids = self.mesh["face_ids"]
+            self.mesh["face_ids"] = merged(ids, ids[first])
+        if isinstance(self.mesh.get("face_colors"), list):
+            colors = self.mesh["face_colors"]
+            self.mesh["face_colors"] = merged(colors, colors[first])
+        if original_groups:
+            count_before = 0
+            for group in original_groups:
+                count = group.get("face_count", 0)
+                old_start = group.get("face_start", 0)
+                group["face_start"] = count_before
+                group["face_count"] = count - sum(old_start <= i < old_start+count and
+                    i != first for i in indices)
+                count_before += group["face_count"]
+        self.selected_faces = []
+        self.selection = []
+        self.populate()
+        self.push_mesh()
+        self.status.setText(str(len(indices)) + " caras unidas en una sola. Guarde el .mesh para conservar los cambios.")
 
     def toggle_face(self, index):
         if not self.mesh or not 0 <= index < len(self.mesh["faces"]):
