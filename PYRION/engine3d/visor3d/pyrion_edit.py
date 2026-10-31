@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.2.9"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -146,8 +146,9 @@ window.addEventListener('keydown',e=>{
     e.preventDefault();if(bridge)bridge.selectAdjacentPiece(e.key==='ArrowRight'?1:-1);return;
   }
   if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;
-  if(e.ctrlKey&&!e.altKey){
-    e.preventDefault();
+  if(e.altKey||e.metaKey)return;
+  e.preventDefault();
+  if(!e.ctrlKey){
     const turn=e.shiftKey?Math.PI/120:Math.PI/24;
     if(e.key==='ArrowLeft')yaw-=turn;
     if(e.key==='ArrowRight')yaw+=turn;
@@ -155,8 +156,6 @@ window.addEventListener('keydown',e=>{
     if(e.key==='ArrowDown')pitch=Math.max(-1.45,pitch-turn);
     draw();return;
   }
-  if(e.altKey||e.metaKey)return;
-  e.preventDefault();
   if(!bridge||!mesh)return;
   const step=e.shiftKey?.005:.025;
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
@@ -258,7 +257,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: mover según la vista · Shift: precisión.\nCtrl+flechas: girar cámara.\nAlt+← / Alt+→: cambiar pieza.\nLas caras comparten vértices.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: girar cámara.\nCtrl+flechas: mover pieza según vista.\nShift: precisión.\nAlt+← / Alt+→: cambiar pieza.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
