@@ -1,0 +1,30 @@
+{
+  "format": "pyrion.mesh",
+  "version": "1.0.0",
+  "name": "sphere",
+  "primitive": "uv_sphere",
+  "parameters": {
+    "radius": 1,
+    "rings": 17,
+    "segments": 34
+  },
+  "topology": "triangles",
+  "material": {
+    "base_color": "#2767d7"
+  },
+  "generate_on_load": true,
+  "modeling": {
+    "system": "pyrion-origami",
+    "version": 1,
+    "editable": true,
+    "face_mode": "triangles_and_quads",
+    "tools": [
+      "split_face",
+      "merge_vertices",
+      "weld_nearby",
+      "triangulate"
+    ],
+    "render_mode": "triangles",
+    "note": "Se conserva la geometria renderizada; las operaciones de edicion trabajan sobre copias y requieren guardar el resultado."
+  }
+}

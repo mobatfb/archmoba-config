@@ -1,0 +1,187 @@
+{
+  "format": "pyrion.mesh",
+  "version": "1.0.0",
+  "name": "Chamfered floating plinth",
+  "primitive": "triangle_mesh",
+  "vertices": [
+    [
+      0.601041,
+      -0.12,
+      0.601041
+    ],
+    [
+      -0.601041,
+      -0.12,
+      0.601041
+    ],
+    [
+      -0.601041,
+      -0.12,
+      -0.601041
+    ],
+    [
+      0.601041,
+      -0.12,
+      -0.601041
+    ],
+    [
+      0.601041,
+      0.06,
+      0.601041
+    ],
+    [
+      -0.601041,
+      0.06,
+      0.601041
+    ],
+    [
+      -0.601041,
+      0.06,
+      -0.601041
+    ],
+    [
+      0.601041,
+      0.06,
+      -0.601041
+    ],
+    [
+      0.509117,
+      0.12,
+      0.509117
+    ],
+    [
+      -0.509117,
+      0.12,
+      0.509117
+    ],
+    [
+      -0.509117,
+      0.12,
+      -0.509117
+    ],
+    [
+      0.509117,
+      0.12,
+      -0.509117
+    ]
+  ],
+  "faces": [
+    [
+      0,
+      4,
+      1
+    ],
+    [
+      1,
+      4,
+      5
+    ],
+    [
+      1,
+      5,
+      2
+    ],
+    [
+      2,
+      5,
+      6
+    ],
+    [
+      2,
+      6,
+      3
+    ],
+    [
+      3,
+      6,
+      7
+    ],
+    [
+      3,
+      7,
+      0
+    ],
+    [
+      0,
+      7,
+      4
+    ],
+    [
+      4,
+      8,
+      5
+    ],
+    [
+      5,
+      8,
+      9
+    ],
+    [
+      5,
+      9,
+      6
+    ],
+    [
+      6,
+      9,
+      10
+    ],
+    [
+      6,
+      10,
+      7
+    ],
+    [
+      7,
+      10,
+      11
+    ],
+    [
+      7,
+      11,
+      4
+    ],
+    [
+      4,
+      11,
+      8
+    ],
+    [
+      0,
+      1,
+      2
+    ],
+    [
+      8,
+      10,
+      9
+    ],
+    [
+      0,
+      2,
+      3
+    ],
+    [
+      8,
+      11,
+      10
+    ]
+  ],
+  "render": {
+    "flat_shading": true
+  },
+  "modeling": {
+    "system": "pyrion-origami",
+    "version": 1,
+    "editable": true,
+    "face_mode": "triangles_and_quads",
+    "tools": [
+      "split_face",
+      "merge_vertices",
+      "weld_nearby",
+      "triangulate"
+    ],
+    "render_mode": "triangles",
+    "note": "Se conserva la geometria renderizada; las operaciones de edicion trabajan sobre copias y requieren guardar el resultado."
+  }
+}

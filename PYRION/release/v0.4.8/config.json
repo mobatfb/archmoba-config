@@ -1,0 +1,10 @@
+{
+  "app": "PYRION",
+  "name": "PYRION OS",
+  "description": "Botón MAT/IMG y textura fotográfica dorada GIF en la escena 3D",
+  "version": "0.4.8",
+  "app_path": "PYRION/app.py",
+  "release_commit": "90d85e4a6d3adb2be3cbdf31f1240aeb6964b94c",
+  "maintenance": false,
+  "engine_version": "0.2.1"
+}

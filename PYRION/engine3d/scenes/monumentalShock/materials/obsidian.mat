@@ -1,0 +1,10 @@
+{
+  "format": "pyrion.material",
+  "version": 2,
+  "name": "obsidian",
+  "shader": "pbr",
+  "base_color": "#253E5B",
+  "metallic": 0.48,
+  "roughness": 0.38,
+  "specular_strength": 0.28
+}

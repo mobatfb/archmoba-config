@@ -1,0 +1,10 @@
+{
+  "format": "pyrion.material",
+  "version": 1,
+  "name": "chest",
+  "shader": "pbr",
+  "base_color": "#976B46",
+  "metallic": 0.03,
+  "roughness": 0.7,
+  "notes": "Material marrón sencillo para el cubo inicial chest."
+}

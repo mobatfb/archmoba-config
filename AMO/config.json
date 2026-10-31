@@ -1,0 +1,7 @@
+{
+  "app": "ArchMoba One",
+  "version": "2.3.0",
+  "api_url": "https://api.ejemplo.com/amo/",
+  "update_url": "https://ejemplo.com/amo/update.zip",
+  "maintenance": false
+}
