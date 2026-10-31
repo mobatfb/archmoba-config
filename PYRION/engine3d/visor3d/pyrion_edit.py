@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -558,6 +558,8 @@ class Editor(QMainWindow):
         if not self.mesh or not (0 <= face_index < len(self.mesh["faces"])):
             return
         face = self.mesh["faces"][face_index]
+        if len(self.selected_faces) > 1 and face_index in self.selected_faces:
+            return self.extend_selected_edges(face_index, edge_index)
         if not (0 <= edge_index < len(face)):
             return
         a, b = face[edge_index], face[(edge_index + 1) % len(face)]
