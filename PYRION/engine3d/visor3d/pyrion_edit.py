@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.4.5"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -142,7 +142,7 @@ function draw(){
    const face=polygons[i];if(face.reflected)continue;
    if(!front.has(face.i))front.add(face.i);
  }
- for(const edge of (showPlus&&editMode==="agregar"?counts.values():[])){
+ for(const edge of ((editMode==="estirar" || (showPlus&&editMode==="agregar"))?counts.values():[])){
    if(edge.count!==1)continue;
    const a=vv[edge.a],b=vv[edge.b];
    // No ofrecer + sobre la costura virtual del espejo.
@@ -152,15 +152,35 @@ function draw(){
    const face=ff[edge.i],j=face.findIndex(v=>v===edge.a);
    if(j<0||face[(j+1)%face.length]!==edge.b)continue;
    const p=poly.p[j],q=poly.p[(j+1)%face.length];
+   if(editMode==="estirar" && !multiSelected.includes(edge.i) && !(selectedGroup&&edge.i>=selectedGroup[0]&&edge.i<selectedGroup[1]))continue;
    const x=(p[0]+q[0])/2,y=(p[1]+q[1])/2;
    if(x<14||y<14||x>w-14||y>h-14)continue;
    const covered=polygons.some(other=>other!==poly&&other.depth>poly.depth+0.005&&inside(other.p,x,y));
    if(covered)continue;
-   edgeButtons.push({x,y,face:edge.i,edge:j});
-   ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);
-   ctx.fillStyle='#143e3a';ctx.fill();ctx.strokeStyle='#6bffcf';ctx.lineWidth=1.5;ctx.stroke();
-   ctx.font='bold 10px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
-   ctx.fillStyle='#ffffff';ctx.fillText('+',x,y+0.3);
+   if(editMode==="estirar"){
+     const midx=x,midy=y;
+     const cx=poly.p.reduce((total,t)=>total+t[0],0)/poly.p.length;
+     const cy=poly.p.reduce((total,t)=>total+t[1],0)/poly.p.length;
+     // Vector perpendicular al borde y orientado hacia fuera de la cara.
+     const ex=q[0]-p[0],ey=q[1]-p[1],len=Math.hypot(ex,ey);
+     if(len<1e-5)continue;
+     let nx=-ey/len,ny=ex/len;
+     if(nx*(midx-cx)+ny*(midy-cy)<0){nx=-nx;ny=-ny;}
+     const tx=x+nx*12,ty=y+ny*12;
+     edgeButtons.push({x:tx,y:ty,face:edge.i,edge:j,mode:"estirar"});
+     ctx.save();ctx.translate(tx,ty);ctx.rotate(Math.atan2(ny,nx));
+     ctx.fillStyle='#1b5472';ctx.strokeStyle='#85eeff';ctx.lineWidth=1.6;
+     ctx.beginPath();ctx.moveTo(10,0);ctx.lineTo(-3,-7);
+     ctx.lineTo(-3,-3);ctx.lineTo(-10,-3);ctx.lineTo(-10,3);
+     ctx.lineTo(-3,3);ctx.lineTo(-3,7);ctx.closePath();
+     ctx.fill();ctx.stroke();ctx.restore();
+   }else{
+     edgeButtons.push({x,y,face:edge.i,edge:j,mode:"agregar"});
+     ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);
+     ctx.fillStyle='#143e3a';ctx.fill();ctx.strokeStyle='#6bffcf';ctx.lineWidth=1.5;ctx.stroke();
+     ctx.font='bold 10px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+     ctx.fillStyle='#ffffff';ctx.fillText('+',x,y+0.3);
+   }
  }
 }
 function inside(poly,x,y){let ok=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){
