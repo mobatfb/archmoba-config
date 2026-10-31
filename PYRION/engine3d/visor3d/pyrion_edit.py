@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 
-APP_VERSION = "1.4.13"
+APP_VERSION = "1.4.14"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -218,13 +218,14 @@ function draw(){
        outward=outward.map(v=>sign*v/Math.hypot(...outward));
        // Four fixed possibilities: straight outside/inside face, and two
        // folded quads perpendicular to the predecessor plane.
-       const opts=[["outside",outward],["inside",outward.map(v=>-v)],
-                   ["front",n],["back",n.map(v=>-v)]];
+       const opts=[["outside",outward],["front",n],["back",n.map(v=>-v)]];
        for(const [mode,unit] of opts){
          const proj=e.reduce((v,n,k)=>v+n*unit[k],0)/(length*length);
          const perp=unit.map((v,k)=>v-proj*e[k]);
          const norm=Math.hypot(...perp);if(norm<.08)continue;
-         const shift=perp.map(v=>v*length/norm);
+         // Keep depth of predecessor measured from shared border, not edge width.
+         const oldDepth=Math.max(1e-8,Math.abs(dot3(mid.map((v,k)=>v-centroid[k]),outward))*2);
+         const shift=perp.map(v=>v*oldDepth/norm);
          const na=a.map((v,k)=>v+shift[k]),nb=b.map((v,k)=>v+shift[k]);
          if(mirror&&(na[0]>1e-6||nb[0]>1e-6))continue;
          const poly=[a,b,nb,na].map(window.projectVertex);
@@ -240,7 +241,7 @@ function draw(){
          ctx.fill();ctx.strokeStyle="#88f5ff";ctx.lineWidth=2;ctx.stroke();
          ctx.font="bold 13px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
          ctx.strokeStyle="#152438";ctx.lineWidth=3;
-         const symbol={outside:"↗",inside:"↙",front:"⊙",back:"⊗"}[mode];
+         const symbol={outside:"↗",front:"⊙",back:"⊗"}[mode];
          ctx.strokeText(symbol,cx,cy);ctx.fillStyle="#fff";ctx.fillText(symbol,cx,cy);
          quadPreview.options.push({mode,polygon:poly,x:cx,y:cy});
        }
@@ -831,8 +832,19 @@ class Editor(QMainWindow):
         if size < 1e-8:
             return None
         outward = [v/size for v in outward]
-        return {"outside":outward, "inside":[-v for v in outward],
-                "front":normal, "back":[-v for v in normal]}.get(mode)
+        return {"outside":outward, "front":normal, "back":[-v for v in normal]}.get(mode)
+
+    def predecessor_depth(self, face_index, edge_index):
+        face = self.mesh["faces"][face_index]
+        vertices = self.mesh["vertices"]
+        a = vertices[face[edge_index]]
+        b = vertices[face[(edge_index + 1) % len(face)]]
+        midpoint = [(a[k]+b[k])/2 for k in range(3)]
+        center = [sum(vertices[i][k] for i in face)/len(face) for k in range(3)]
+        outward = self.preview_direction("outside", face_index, edge_index)
+        if outward is None:
+            return 0.0
+        return 2*abs(sum((midpoint[k]-center[k])*outward[k] for k in range(3)))
 
     def extend_edge(self, face_index, edge_index, mode="down"):
         """Add a quad to an open mesh edge, extending outwards within its face plane."""
@@ -865,7 +877,8 @@ class Editor(QMainWindow):
         if norm < 1e-8:
             QMessageBox.warning(self, "Crear quad", "No se pudo determinar la direccion exterior.")
             return
-        distance = edge_len2**0.5
+        distance = self.predecessor_depth(face_index, edge_index)
+        if distance < 1e-8:return
         unit = self.preview_direction(mode, face_index, edge_index)
         if unit is None:
             return
@@ -963,7 +976,9 @@ class Editor(QMainWindow):
         perpendicular = [unit[k]-scalar*edgevec[k] for k in range(3)]
         magnitude = math.sqrt(sum(v*v for v in perpendicular))
         if magnitude<0.08:return
-        offset = [v*initial[3]/magnitude for v in perpendicular]
+        depth = self.predecessor_depth(clicked_face, clicked_edge)
+        if depth < 1e-8:return
+        offset = [v*depth/magnitude for v in perpendicular]
         for _, item in chosen:
             pa, pb = vertices[item[0]], vertices[item[1]]
             edge_vec = [pb[k]-pa[k] for k in range(3)]
