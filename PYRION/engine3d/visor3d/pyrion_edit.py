@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -154,7 +154,7 @@ class Bridge(QObject):
 class Editor(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PYRION EDIT · Modelador Origami")
+        self.setWindowTitle(f"PYRION EDIT v{APP_VERSION} · Modelador Origami")
         self.resize(1390, 830)
         self.mesh = None
         self.path = None
