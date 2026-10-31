@@ -13,7 +13,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.9"
+APP_VERSION = "1.4.10"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -66,7 +66,7 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
 let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,multiSelected=[],mirror=true,wire=true,material=true,surface=true,labels=true,spin=false,showPlus=true;
-let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null,edgeButtons=[],editMode="normal";
+let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null,edgeButtons=[],quadPreview=null,editMode="normal";
 function setEditMode(mode){editMode=mode;quadPreview=null;draw()}
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
@@ -139,7 +139,7 @@ function draw(){
    ctx.fillStyle='#fff';ctx.fillText(String(f.id),x,y)}
  }
  // Botones + sobre bordes sin cara vecina (solo la malla original editable).
- edgeButtons=[],quadPreview=null;
+ edgeButtons=[];
  const counts=new Map();
  ff.forEach((f,i)=>f.forEach((a,j)=>{
    const b=f[(j+1)%f.length],key=[Math.min(a,b),Math.max(a,b)].join(':');
@@ -245,7 +245,7 @@ cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=d
    const chosen=[...(quadPreview.options||[])].reverse().find(opt=>inside(opt.polygon,x,y)||Math.hypot(opt.x-x,opt.y-y)<13);
    if(chosen){const f=quadPreview.face,e=quadPreview.edge;quadPreview=null;
      bridge.extendEdgeChoice(f,e,chosen.mode,Math.cos(yaw),Math.sin(yaw),Math.sin(yaw)*Math.sin(pitch),Math.cos(pitch),-Math.cos(yaw)*Math.sin(pitch));draw();return;}
-   quadPreview=null;draw();
+   quadPreview=null;draw();return;
  }
  if(plus&&bridge&&!add&&editMode==="agregar"){
    quadPreview={face:plus.face,edge:plus.edge,options:[]};draw();return;
