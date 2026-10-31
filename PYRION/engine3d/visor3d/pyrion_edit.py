@@ -522,18 +522,21 @@ class Editor(QMainWindow):
                 raise FileNotFoundError(stage)
             # External process waits for this editor to exit, then replaces and restarts.
             helper = (
-                "import os,sys,time,subprocess\\n"
-                "pid,stage,target=int(sys.argv[1]),sys.argv[2],sys.argv[3]\\n"
-                "for _ in range(150):\\n"
-                " try:\\n"
-                "  os.kill(pid,0)\\n"
-                " except OSError:break\\n"
-                " time.sleep(.1)\\n"
-                "os.replace(stage,target)\\n"
-                "subprocess.Popen([sys.executable,target],close_fds=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))\\n"
+                "import os,sys,time,subprocess\n"
+                "stage,target=sys.argv[1],sys.argv[2]\n"
+                "time.sleep(1.5)\n"
+                "for attempt in range(40):\n"
+                " try:\n"
+                "  os.replace(stage,target)\n"
+                "  break\n"
+                " except PermissionError:\n"
+                "  time.sleep(.25)\n"
+                "else:\n"
+                " sys.exit(2)\n"
+                "subprocess.Popen([sys.executable,target],close_fds=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))\n"
             )
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            subprocess.Popen([sys.executable, "-c", helper, str(os.getpid()),stage,target],
+            subprocess.Popen([sys.executable, "-c", helper, stage,target],
                              close_fds=True, creationflags=flags)
             self.update_animation.stop()
             self.update_button.setText("updated")
