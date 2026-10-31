@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -48,7 +48,7 @@ except Exception as exc:
 from PySide6.QtCore import QObject, Qt, Slot
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QComboBox, QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QMessageBox,
-    QGroupBox, QFormLayout, QInputDialog, QLineEdit, QToolButton, QScrollArea)
+    QGroupBox, QFormLayout, QInputDialog, QLineEdit, QToolButton, QScrollArea, QButtonGroup, QRadioButton)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtGui import QShortcut, QKeySequence
@@ -65,7 +65,8 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
 let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,multiSelected=[],mirror=true,wire=true,material=true,surface=true,labels=true,spin=false,showPlus=true;
-let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null,edgeButtons=[];
+let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null,edgeButtons=[],editMode="normal";
+function setEditMode(mode){editMode=mode;draw()}
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function setMesh(x){mesh=x;draw()}
@@ -141,7 +142,7 @@ function draw(){
    const face=polygons[i];if(face.reflected)continue;
    if(!front.has(face.i))front.add(face.i);
  }
- for(const edge of (showPlus?counts.values():[])){
+ for(const edge of (showPlus&&editMode==="agregar"?counts.values():[])){
    if(edge.count!==1)continue;
    const a=vv[edge.a],b=vv[edge.b];
    // No ofrecer + sobre la costura virtual del espejo.
@@ -172,7 +173,7 @@ cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,
 cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=drag.add;drag=null;if(moved)return;
  const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
  const plus=edgeButtons.find(b=>Math.hypot(b.x-x,b.y-y)<8);
- if(plus&&bridge&&!add){bridge.extendEdge(plus.face,plus.edge);return;}
+ if(plus&&bridge&&!add&&editMode==="agregar"){bridge.extendEdge(plus.face,plus.edge);return;}
  const hit=[...(window.polygons||[])].reverse().find(f=>inside(f.p,x,y));
  if(hit&&bridge){if(add)bridge.toggleFace(hit.i);else{selectFaceVisual(hit.i,hit.reflected);bridge.selectFace(hit.i)}}});
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,zoom*(e.deltaY>0?.9:1.1)));draw()},{passive:false});
@@ -337,6 +338,7 @@ class Editor(QMainWindow):
         self.selection = []
         self.selected_faces = []
         self.selecting = False
+        self.edit_mode = "normal"
         self.undo_stack = []
         self.redo_stack = []
         self.view = QWebEngineView()
@@ -442,6 +444,16 @@ class Editor(QMainWindow):
         title = QLabel("HERRAMIENTAS")
         title.setStyleSheet("font-weight:bold;color:#84baff;padding:9px")
         tools_layout.addWidget(title)
+        modes = ExpandableSection("Modos de edición", True)
+        tools_layout.addWidget(modes)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar")]:
+            button = QRadioButton(label)
+            button.setChecked(mode == "normal")
+            button.toggled.connect(lambda checked, m=mode: self.set_edit_mode(m) if checked else None)
+            self.mode_group.addButton(button)
+            modes.content_layout.addWidget(button)
         self.merge_button = QPushButton("Unir caras")
         self.merge_button.setToolTip("Selecciona 2 o mas caras contiguas con Alt + clic")
         self.merge_button.clicked.connect(self.merge_faces)
@@ -463,6 +475,16 @@ class Editor(QMainWindow):
         if self.mesh:
             self.js("setMesh(" + json.dumps(self.mesh,ensure_ascii=False) + ");")
             self.push_options()
+            self.js("setEditMode(" + json.dumps(self.edit_mode) + ");")
+
+    def set_edit_mode(self, mode):
+        self.edit_mode = mode
+        self.js("setEditMode(" + json.dumps(mode) + ");")
+        self.status.setText("Modo de edición: " + mode.capitalize() +
+            (" · Seleccione caras y utilice Ctrl + flechas para estirar."
+             if mode == "estirar" else
+             " · Pulse + sobre un borde libre para agregar quads."
+             if mode == "agregar" else " · Selección sin modificar la malla."))
 
     def push_options(self):
         self.js("setOptions(" + json.dumps({k:v.isChecked() for k,v in self.toggles.items()}) + ");")
