@@ -29,7 +29,7 @@ let mesh=null,selected=-1,mirror=true,wire=true,material=true,labels=true,spin=f
 let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null;
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
-function setMesh(x){mesh=x;selected=-1;draw()}
+function setMesh(x){mesh=x;draw()}
 function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;labels=x.labels;spin=x.spin;draw()}
 function setSelected(x){selected=x;draw()}
 function resize(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
@@ -45,8 +45,8 @@ function draw(){
  const vv=mesh.vertices, ff=mesh.faces;if(!vv.length)return;
  const min=[0,1,2].map(k=>Math.min(...vv.map(v=>v[k])));
  const max=[0,1,2].map(k=>Math.max(...vv.map(v=>v[k])));
- const center=min.map((v,k)=>(v+max[k])/2);
- const dimension=Math.max(...max.map((v,k)=>v-min[k]),0.01);
+ const center=min.map((v,k)=>(k===0&&mirror)?0:(v+max[k])/2);
+ const dimension=Math.max(...max.map((v,k)=>(k===0&&mirror)?2*Math.max(Math.abs(v),Math.abs(min[k])):v-min[k]),0.01);
  const scale=Math.min(w,h)*0.72/dimension;
  const vertices=vv.map(v=>{const x=v[0]-center[0],y=v[1]-center[1],z=v[2]-center[2];
  const rx=x*Math.cos(yaw)+z*Math.sin(yaw),rz=-x*Math.sin(yaw)+z*Math.cos(yaw);
