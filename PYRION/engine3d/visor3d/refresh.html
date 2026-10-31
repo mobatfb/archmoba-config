@@ -7,7 +7,7 @@
 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PYRION 3D - Refresh r1.4.5</title>
+  <title>PYRION 3D - Refresh r1.4.6</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0c101d; }
@@ -38,7 +38,7 @@
     <button id="refresh" type="button">Refresh</button>
     <span id="estado" data-type="loading" role="status" aria-live="polite">Conectando...</span>
     <span id="version">Visor: —</span>
-    <span id="wrapper-version">Refresh r1.4.5</span>
+    <span id="wrapper-version">Refresh r1.4.6</span>
   </header>
   <iframe id="contenido" title="Visualizador 3D PYRION" sandbox="allow-scripts"></iframe>
 
@@ -215,13 +215,7 @@
         show('Consultando index.html en GitHub...');
         const nonce = Date.now() + '-' + Math.random().toString(36).slice(2);
         try {
-          if (mismoServidor) {
-            // Si se aloja junto al visor, la carga directa es mas sencilla.
-            show('Abriendo index.html actualizado...');
-            visor.src = './index.html?refresh=' + nonce;
-          } else {
-            // Descarga la version nueva sin mezclar la geometria con este archivo.
-            // API primero: evita que el CDN RAW devuelva una version antigua.
+          // Cargar siempre la version vigente del repositorio, aun en GitHub Pages.
             let html, source = 'GitHub API';
             try {
               const datos = await (await obtener(api + '&_=' + nonce)).json();
@@ -243,7 +237,7 @@
             version.textContent = 'Visor: ' + htmlVersion(html);
             show('HTML recibido desde ' + source + '; cargando modelos...');
             visor.srcdoc = html;
-          }
+
         } catch (error) {
           show('No se pudo actualizar: ' + error.message, 'error');
         } finally {
