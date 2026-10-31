@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.8"
+APP_VERSION = "1.3.9"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -64,7 +64,7 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
 let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,multiSelected=[],mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
-let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null;
+let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null,edgeButtons=[];
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function setMesh(x){mesh=x;draw()}
@@ -127,6 +127,39 @@ function draw(){
    ctx.strokeStyle='#000';ctx.strokeText(String(f.id),x,y);
    ctx.fillStyle='#fff';ctx.fillText(String(f.id),x,y)}
  }
+ // Botones + sobre bordes sin cara vecina (solo la malla original editable).
+ edgeButtons=[];
+ const counts=new Map();
+ ff.forEach((f,i)=>f.forEach((a,j)=>{
+   const b=f[(j+1)%f.length],key=[Math.min(a,b),Math.max(a,b)].join(':');
+   const item=counts.get(key)||{count:0,i,a,b};
+   item.count++;counts.set(key,item);
+ }));
+ const front=new Set();
+ for(let i=polygons.length-1;i>=0;i--){
+   const face=polygons[i];if(face.reflected)continue;
+   if(!front.has(face.i))front.add(face.i);
+ }
+ for(const edge of counts.values()){
+   if(edge.count!==1)continue;
+   const a=vv[edge.a],b=vv[edge.b];
+   // No ofrecer + sobre la costura virtual del espejo.
+   if(mirror&&Math.abs(a[0])<.00001&&Math.abs(b[0])<.00001)continue;
+   const poly=[...polygons].reverse().find(p=>p.i===edge.i&&!p.reflected);
+   if(!poly)continue;
+   const face=ff[edge.i],j=face.findIndex(v=>v===edge.a);
+   if(j<0||face[(j+1)%face.length]!==edge.b)continue;
+   const p=poly.p[j],q=poly.p[(j+1)%face.length];
+   const x=(p[0]+q[0])/2,y=(p[1]+q[1])/2;
+   if(x<14||y<14||x>w-14||y>h-14)continue;
+   const covered=polygons.some(other=>other!==poly&&other.depth>poly.depth+0.005&&inside(other.p,x,y));
+   if(covered)continue;
+   edgeButtons.push({x,y,face:edge.i,edge:j});
+   ctx.beginPath();ctx.arc(x,y,10,0,Math.PI*2);
+   ctx.fillStyle='#143e3a';ctx.fill();ctx.strokeStyle='#6bffcf';ctx.lineWidth=1.5;ctx.stroke();
+   ctx.font='bold 16px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+   ctx.fillStyle='#ffffff';ctx.fillText('+',x,y+0.3);
+ }
 }
 function inside(poly,x,y){let ok=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){
  const a=poly[i],b=poly[j];if(((a[1]>y)!==(b[1]>y))&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])ok=!ok}return ok}
@@ -137,6 +170,8 @@ cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,
  drag.x=e.clientX;drag.y=e.clientY});
 cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=drag.add;drag=null;if(moved)return;
  const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
+ const plus=edgeButtons.find(b=>Math.hypot(b.x-x,b.y-y)<12);
+ if(plus&&bridge&&!add){bridge.extendEdge(plus.face,plus.edge);return;}
  const hit=[...(window.polygons||[])].reverse().find(f=>inside(f.p,x,y));
  if(hit&&bridge){if(add)bridge.toggleFace(hit.i);else{selectFaceVisual(hit.i,hit.reflected);bridge.selectFace(hit.i)}}});
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,zoom*(e.deltaY>0?.9:1.1)));draw()},{passive:false});
@@ -232,6 +267,10 @@ class Bridge(QObject):
     @Slot(int)
     def selectFace(self, index):
         self.editor.select_face(index)
+
+    @Slot(int, int)
+    def extendEdge(self, face_index, edge_index):
+        self.editor.extend_edge(face_index, edge_index)
 
     @Slot(int)
     def toggleFace(self, index):
@@ -445,6 +484,64 @@ class Editor(QMainWindow):
             group=self.mesh["groups"][i]
             a=int(group.get("face_start",0));b=a+int(group.get("face_count",0))
             self.js(f"setSelectedGroup({a},{b});")
+
+    def extend_edge(self, face_index, edge_index):
+        """Add a quad to an open mesh edge, extending outwards within its face plane."""
+        if not self.mesh or not (0 <= face_index < len(self.mesh["faces"])):
+            return
+        face = self.mesh["faces"][face_index]
+        if not (0 <= edge_index < len(face)):
+            return
+        a, b = face[edge_index], face[(edge_index + 1) % len(face)]
+        edge_key = {a, b}
+        if sum(1 for f in self.mesh["faces"] for k in range(len(f))
+               if {f[k], f[(k + 1) % len(f)]} == edge_key) != 1:
+            QMessageBox.warning(self, "Crear quad", "Esta arista ya tiene una cara vecina.")
+            return
+        v = self.mesh["vertices"]
+        pa, pb = v[a], v[b]
+        center = [sum(v[j][axis] for j in face)/len(face) for axis in range(3)]
+        mid = [(pa[axis] + pb[axis])/2 for axis in range(3)]
+        edge = [pb[axis] - pa[axis] for axis in range(3)]
+        edge_len2 = sum(t*t for t in edge)
+        if edge_len2 < 1e-12:
+            QMessageBox.warning(self, "Crear quad", "Arista sin longitud.")
+            return
+        outward = [mid[axis]-center[axis] for axis in range(3)]
+        dot = sum(outward[axis]*edge[axis] for axis in range(3))/edge_len2
+        outward = [outward[axis]-dot*edge[axis] for axis in range(3)]
+        norm = sum(x*x for x in outward)**0.5
+        if norm < 1e-8:
+            QMessageBox.warning(self, "Crear quad", "No se pudo determinar la direccion exterior.")
+            return
+        distance = edge_len2**0.5
+        shift = [x*distance/norm for x in outward]
+        new_a = [pa[i]+shift[i] for i in range(3)]
+        new_b = [pb[i]+shift[i] for i in range(3)]
+        if (self.toggles["mirror"].isChecked() and
+                (new_a[0] > 1e-6 or new_b[0] > 1e-6)):
+            QMessageBox.warning(self, "Crear quad",
+                "La extension cruzaria el plano del Espejo X. Desactive Espejo X para continuar.")
+            return
+        ia = len(v)
+        v.extend([new_a, new_b])
+        new_index = len(self.mesh["faces"])
+        self.mesh["faces"].append([a, b, ia+1, ia])
+        if isinstance(self.mesh.get("face_ids"), list):
+            self.mesh["face_ids"].append(max(self.mesh["face_ids"], default=0)+1)
+        if isinstance(self.mesh.get("face_colors"), list):
+            self.mesh["face_colors"].append(self.mesh["face_colors"][face_index])
+        self.mesh.setdefault("groups", []).append({
+            "name": "quad_extendido_" + str(new_index+1),
+            "face_start": new_index, "face_count": 1,
+            "vertex_start": ia, "vertex_count": 2
+        })
+        self.selected_faces = []
+        self.selection = []
+        self.populate()
+        self.push_mesh()
+        self.select_face(new_index)
+        self.status.setText("Quad nuevo en borde libre. Guarde para conservar el cambio.")
 
     def merge_faces(self):
         """Fusionar un conjunto de caras contiguas siguiendo su borde exterior."""
