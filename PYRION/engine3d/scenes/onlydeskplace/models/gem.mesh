@@ -743,5 +743,19 @@
     "flat_shading": true,
     "double_sided": false
   },
-  "notes": "Gema de grafito facetada: el ancho y la profundidad son iguales en todos los sentidos horizontales (X=Z), con cuatro anillos de 12 lados. La altura Y y la triangulacion original permanecen sin cambios."
+  "notes": "Gema de grafito facetada: el ancho y la profundidad son iguales en todos los sentidos horizontales (X=Z), con cuatro anillos de 12 lados. La altura Y y la triangulacion original permanecen sin cambios.",
+  "modeling": {
+    "system": "pyrion-origami",
+    "version": 1,
+    "editable": true,
+    "face_mode": "triangles_and_quads",
+    "tools": [
+      "split_face",
+      "merge_vertices",
+      "weld_nearby",
+      "triangulate"
+    ],
+    "render_mode": "triangles",
+    "note": "Se conserva la geometria renderizada; las operaciones de edicion trabajan sobre copias y requieren guardar el resultado."
+  }
 }
