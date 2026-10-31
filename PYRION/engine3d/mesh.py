@@ -159,3 +159,7 @@ class TriangleMesh:
 
     def signature(self):
         return ("triangle_mesh", self.vertex_count, self.triangle_count)
+
+
+# Herramientas de edicion origami (no afectan el render de modelos existentes).
+from .origami import split_face, merge_vertices, weld_nearby, triangulate
