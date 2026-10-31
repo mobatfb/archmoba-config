@@ -169,5 +169,19 @@
   ],
   "render": {
     "flat_shading": true
+  },
+  "modeling": {
+    "system": "pyrion-origami",
+    "version": 1,
+    "editable": true,
+    "face_mode": "triangles_and_quads",
+    "tools": [
+      "split_face",
+      "merge_vertices",
+      "weld_nearby",
+      "triangulate"
+    ],
+    "render_mode": "triangles",
+    "note": "Se conserva la geometria renderizada; las operaciones de edicion trabajan sobre copias y requieren guardar el resultado."
   }
 }
