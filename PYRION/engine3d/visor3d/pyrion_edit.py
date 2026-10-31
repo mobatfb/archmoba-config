@@ -338,7 +338,7 @@ class Editor(QMainWindow):
         self.selection = []
         self.selected_faces = []
         self.selecting = False
-        self.edit_mode = "agregar"
+        self.edit_mode = "normal"
         self.undo_stack = []
         self.redo_stack = []
         self.view = QWebEngineView()
@@ -450,7 +450,7 @@ class Editor(QMainWindow):
         self.mode_group.setExclusive(True)
         for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar")]:
             button = QRadioButton(label)
-            button.setChecked(mode == "agregar")
+            button.setChecked(mode == "normal")
             button.toggled.connect(lambda checked, m=mode: self.set_edit_mode(m) if checked else None)
             self.mode_group.addButton(button)
             modes.content_layout.addWidget(button)
@@ -890,8 +890,6 @@ class Editor(QMainWindow):
 
     def move_perspective(self, dx, dy, dz):
         if not self.mesh or not self.selection:
-            return
-        if self.edit_mode == "normal":
             return
         if self.edit_mode == "estirar":
             # El extremo delantero de la seleccion se extiende; el posterior
