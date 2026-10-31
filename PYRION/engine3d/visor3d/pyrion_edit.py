@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.4.0"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
     QGroupBox, QFormLayout, QInputDialog, QLineEdit, QToolButton, QScrollArea)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtGui import QShortcut, QKeySequence
 
 REPO = "mobatfb/archmoba-dev"
 REMOTE = "PYRION/engine3d/scenes/chest/models/chest.mesh"
@@ -222,6 +223,12 @@ function selectFaceInDirection(key){
 window.addEventListener('keydown',e=>{
   const target=e.target;
   if(target&&['INPUT','TEXTAREA','SELECT'].includes(target.tagName))return;
+  if(e.ctrlKey&&!e.altKey&&!e.shiftKey&&e.key.toLowerCase()==='z'){
+    e.preventDefault();if(bridge)bridge.undo();return;
+  }
+  if(e.ctrlKey&&!e.altKey&&!e.shiftKey&&e.key.toLowerCase()==='y'){
+    e.preventDefault();if(bridge)bridge.redo();return;
+  }
   if(e.altKey&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
     e.preventDefault();selectFaceInDirection(e.key);return;
   }
@@ -263,6 +270,14 @@ class Bridge(QObject):
     def __init__(self, editor):
         super().__init__()
         self.editor = editor
+
+    @Slot()
+    def undo(self):
+        self.editor.undo()
+
+    @Slot()
+    def redo(self):
+        self.editor.redo()
 
     @Slot(int)
     def selectFace(self, index):
@@ -322,6 +337,8 @@ class Editor(QMainWindow):
         self.selection = []
         self.selected_faces = []
         self.selecting = False
+        self.undo_stack = []
+        self.redo_stack = []
         self.view = QWebEngineView()
         self.channel = QWebChannel(self.view.page())
         self.bridge = Bridge(self)
@@ -330,6 +347,10 @@ class Editor(QMainWindow):
         self.view.setHtml(HTML, "qrc:///")
         self.view.loadFinished.connect(lambda ok: self.push_mesh() if ok else None)
         self.make_ui()
+        self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.undo_shortcut.activated.connect(self.undo)
+        self.redo_shortcut = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self.redo_shortcut.activated.connect(self.redo)
         self.setStyleSheet("""
           QMainWindow,QWidget{background:#101424;color:#e7e9ff;font-size:13px}
           QPushButton,QComboBox,QDoubleSpinBox{background:#222942;border:1px solid #3b4b75;
@@ -425,6 +446,12 @@ class Editor(QMainWindow):
         self.merge_button.setToolTip("Selecciona 2 o mas caras contiguas con Alt + clic")
         self.merge_button.clicked.connect(self.merge_faces)
         tools_layout.addWidget(self.merge_button)
+        self.undo_button = QPushButton("Deshacer (Ctrl+Z)")
+        self.undo_button.clicked.connect(self.undo)
+        tools_layout.addWidget(self.undo_button)
+        self.redo_button = QPushButton("Rehacer (Ctrl+Y)")
+        self.redo_button.clicked.connect(self.redo)
+        tools_layout.addWidget(self.redo_button)
         tools_layout.addStretch()
         row.addWidget(tools_panel)
         self.setCentralWidget(root)
@@ -445,6 +472,9 @@ class Editor(QMainWindow):
             raise ValueError("Formato .mesh no compatible")
         self.mesh=deepcopy(model);self.path=path;self.saved=deepcopy(model)
         self.remote_sha = None
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.update_history_buttons()
         self.populate();self.push_mesh()
         self.status.setText("Modelo cargado: " + str(model.get("name","sin nombre")) +
                             " · v" + str(model.get("version","?")) + " · " + str(len(model["faces"])) + " caras")
@@ -485,6 +515,44 @@ class Editor(QMainWindow):
             a=int(group.get("face_start",0));b=a+int(group.get("face_count",0))
             self.js(f"setSelectedGroup({a},{b});")
 
+    def update_history_buttons(self):
+        if hasattr(self, "undo_button"):
+            self.undo_button.setEnabled(bool(self.undo_stack))
+            self.redo_button.setEnabled(bool(self.redo_stack))
+
+    def record_change(self, before):
+        if self.mesh == before:
+            return
+        self.undo_stack.append(deepcopy(before))
+        if len(self.undo_stack) > 80:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        self.update_history_buttons()
+
+    def restore_history(self, snapshot):
+        self.mesh = deepcopy(snapshot)
+        self.selected_faces = []
+        self.selection = []
+        self.populate()
+        self.push_mesh()
+        self.update_history_buttons()
+
+    def undo(self):
+        if not self.undo_stack or self.mesh is None:
+            return
+        self.redo_stack.append(deepcopy(self.mesh))
+        state = self.undo_stack.pop()
+        self.restore_history(state)
+        self.status.setText("Deshacer: cambio anterior recuperado.")
+
+    def redo(self):
+        if not self.redo_stack or self.mesh is None:
+            return
+        self.undo_stack.append(deepcopy(self.mesh))
+        state = self.redo_stack.pop()
+        self.restore_history(state)
+        self.status.setText("Rehacer: cambio restaurado.")
+
     def extend_edge(self, face_index, edge_index):
         """Add a quad to an open mesh edge, extending outwards within its face plane."""
         if not self.mesh or not (0 <= face_index < len(self.mesh["faces"])):
@@ -523,6 +591,7 @@ class Editor(QMainWindow):
             QMessageBox.warning(self, "Crear quad",
                 "La extension cruzaria el plano del Espejo X. Desactive Espejo X para continuar.")
             return
+        before = deepcopy(self.mesh)
         ia = len(v)
         v.extend([new_a, new_b])
         new_index = len(self.mesh["faces"])
@@ -536,6 +605,7 @@ class Editor(QMainWindow):
             "face_start": new_index, "face_count": 1,
             "vertex_start": ia, "vertex_count": 2
         })
+        self.record_change(before)
         self.selected_faces = []
         self.selection = []
         self.populate()
@@ -635,6 +705,7 @@ class Editor(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
+        before = deepcopy(self.mesh)
         self.mesh["faces"] = merged(faces, loop)
         if isinstance(self.mesh.get("face_ids"), list):
             ids = self.mesh["face_ids"]
@@ -651,6 +722,7 @@ class Editor(QMainWindow):
                 group["face_count"] = count - sum(old_start <= i < old_start+count and
                     i != first for i in indices)
                 count_before += group["face_count"]
+        self.record_change(before)
         self.selected_faces = []
         self.selection = []
         self.populate()
@@ -697,9 +769,11 @@ class Editor(QMainWindow):
 
     def apply_coordinates(self,*_):
         if self.selecting or not self.mesh or not self.selection:return
+        before = deepcopy(self.mesh)
         offsets=[spin.value() for spin in self.spins]
         for index in self.selection:
             self.mesh["vertices"][index]=[self.anchor[index][k]+offsets[k] for k in range(3)]
+        self.record_change(before)
         self.push_mesh()
 
     def move_perspective(self, dx, dy, dz):
