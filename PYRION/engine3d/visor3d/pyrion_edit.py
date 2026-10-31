@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -293,7 +293,7 @@ class Editor(QMainWindow):
         heading = QLabel("PYRION 3D  /  EDIT")
         heading.setStyleSheet("font-size:21px;font-weight:bold;color:#84baff;padding:12px")
         left.addWidget(heading)
-        files_section = ExpandableSection("Archivos y GitHub", True)
+        files_section = ExpandableSection("Archivos y GitHub", False)
         left.addWidget(files_section)
         for label, fn in [("Abrir .mesh", self.open_file), ("Cargar CHEST de GitHub", self.load_remote),
                           ("Guardar .mesh", self.save_file), ("Guardar como...", self.save_as),
@@ -309,7 +309,7 @@ class Editor(QMainWindow):
         self.selection_info = QLabel("Seleccione una pieza o cara")
         self.selection_info.setWordWrap(True)
         g.addWidget(self.selection_info)
-        group_section = ExpandableSection("Seleccionar objeto o cara", True)
+        group_section = ExpandableSection("Seleccionar objeto o cara", False)
         group_section.content_layout.addWidget(group)
         left.addWidget(group_section)
         trans = QGroupBox("Mover seleccion por valores X / Y / Z")
@@ -327,7 +327,7 @@ class Editor(QMainWindow):
         btn = QPushButton("Restablecer desplazamiento de selección")
         btn.clicked.connect(self.reset_transform)
         form.addRow(btn)
-        move_section = ExpandableSection("Mover X / Y / Z", True)
+        move_section = ExpandableSection("Mover X / Y / Z", False)
         move_section.content_layout.addWidget(trans)
         left.addWidget(move_section)
         opts = QGroupBox("Visualización")
@@ -560,5 +560,5 @@ class Editor(QMainWindow):
 
 if __name__=="__main__":
     app=QApplication(sys.argv)
-    editor=Editor();editor.show()
+    editor=Editor();editor.showMaximized()
     sys.exit(app.exec())
