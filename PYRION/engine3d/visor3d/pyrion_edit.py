@@ -13,7 +13,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.7"
+APP_VERSION = "1.4.8"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -67,10 +67,10 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <script>
 let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,multiSelected=[],mirror=true,wire=true,material=true,surface=true,labels=true,spin=false,showPlus=true;
 let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null,edgeButtons=[],editMode="normal";
-function setEditMode(mode){editMode=mode;draw()}
+function setEditMode(mode){editMode=mode;quadPreview=null;draw()}
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
-function setMesh(x){mesh=x;draw()}
+function setMesh(x){mesh=x;quadPreview=null;draw()}
 function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;surface=x.surface;labels=x.labels;spin=x.spin;showPlus=x.showPlus;draw()}
 function setSelected(x){if(x!==selected)selectedReflected=false;selected=x;selectedGroup=null;multiSelected=x>=0?[x]:[];draw()}
 function setMultiSelected(ids){multiSelected=ids;selected=ids.length?ids[ids.length-1]:-1;selectedGroup=null;draw()}
@@ -116,6 +116,14 @@ function draw(){
        reflected:true,color:material?(mesh.face_colors?.[i]||'#9062d6'):'#8986a1',
        depth:p.reduce((a,v)=>a+v[2],0)/p.length})});
  }
+ // Keep projection consistent for preview quads and for the actual mesh.
+ window.projectVertex=(v)=>{
+   const x=v[0]-center[0],y=v[1]-center[1],z=v[2]-center[2];
+   const rx=x*Math.cos(yaw)+z*Math.sin(yaw),rz=-x*Math.sin(yaw)+z*Math.cos(yaw);
+   const py=y*Math.cos(pitch)-rz*Math.sin(pitch),pz=y*Math.sin(pitch)+rz*Math.cos(pitch);
+   const k=zoom/(zoom+pz*0.6+3);
+   return [w/2+rx*scale*k,h/2-py*scale*k];
+ };
  polygons.sort((a,b)=>a.depth-b.depth);window.polygons=polygons;
  for(const f of polygons){
   ctx.beginPath();f.p.forEach((p,j)=>j?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
@@ -131,7 +139,7 @@ function draw(){
    ctx.fillStyle='#fff';ctx.fillText(String(f.id),x,y)}
  }
  // Botones + sobre bordes sin cara vecina (solo la malla original editable).
- edgeButtons=[];
+ edgeButtons=[],quadPreview=null;
  const counts=new Map();
  ff.forEach((f,i)=>f.forEach((a,j)=>{
    const b=f[(j+1)%f.length],key=[Math.min(a,b),Math.max(a,b)].join(':');
@@ -183,6 +191,42 @@ function draw(){
      ctx.fillStyle='#ffffff';ctx.fillText('+',x,y+0.3);
    }
  }
+ if(quadPreview&&editMode==="agregar"){
+   const face=ff[quadPreview.face],idx=quadPreview.edge;
+   if(face&&idx<face.length){
+     const a=vv[face[idx]],b=vv[face[(idx+1)%face.length]];
+     const center3=[0,1,2].map(k=>face.reduce((sum,i)=>sum+vv[i][k],0)/face.length);
+     const mid=[0,1,2].map(k=>(a[k]+b[k])/2);
+     const edge=[0,1,2].map(k=>b[k]-a[k]);
+     const length=Math.hypot(...edge);
+     if(length>1e-8){
+       let outward=[0,1,2].map(k=>mid[k]-center3[k]);
+       const dot=outward.reduce((sum,v,k)=>sum+v*edge[k],0)/(length*length);
+       outward=outward.map((v,k)=>v-dot*edge[k]);
+       const mag=Math.hypot(...outward);
+       const opts=[["down",[0,-length,0]],["up",[0,length,0]]];
+       if(mag>1e-8)opts.push(["auto",outward.map(x=>x*length/mag)]);
+       quadPreview.options=[];
+       for(const [mode,shift] of opts){
+         if(Math.hypot(...[edge[1]*shift[2]-edge[2]*shift[1],
+           edge[2]*shift[0]-edge[0]*shift[2],edge[0]*shift[1]-edge[1]*shift[0]])<1e-7)continue;
+         const na=a.map((v,k)=>v+shift[k]),nb=b.map((v,k)=>v+shift[k]);
+         if(mirror&&(na[0]>0.000001||nb[0]>0.000001))continue;
+         const polygon=[a,b,nb,na].map(window.projectVertex);
+         // Clickable translucent location, blink subtly at 2 Hz.
+         const alpha=.26+.18*(.5+.5*Math.sin(Date.now()/230));
+         ctx.beginPath();polygon.forEach((pt,i)=>i?ctx.lineTo(pt[0],pt[1]):ctx.moveTo(pt[0],pt[1]));
+         ctx.closePath();ctx.fillStyle="rgba(80,230,255,"+alpha+")";ctx.fill();
+         ctx.lineWidth=1.6;ctx.strokeStyle="#9ffff5";ctx.stroke();
+         const px=polygon.reduce((sum,v)=>sum+v[0],0)/4;
+         const py=polygon.reduce((sum,v)=>sum+v[1],0)/4;
+         ctx.fillStyle="#ffffff";ctx.font="bold 12px sans-serif";ctx.textAlign="center";
+         ctx.fillText(mode==="down"?"↓":mode==="up"?"↑":"↗",px,py);
+         quadPreview.options.push({mode,polygon});
+       }
+     }
+   }
+ }
 }
 function inside(poly,x,y){let ok=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){
  const a=poly[i],b=poly[j];if(((a[1]>y)!==(b[1]>y))&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])ok=!ok}return ok}
@@ -194,7 +238,15 @@ cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,
 cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=drag.add;drag=null;if(moved)return;
  const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
  const plus=edgeButtons.find(b=>Math.hypot(b.x-x,b.y-y)<8);
- if(plus&&bridge&&!add&&editMode==="agregar"){bridge.extendEdge(plus.face,plus.edge);return;}
+ if(quadPreview&&editMode==="agregar"&&!add){
+   const chosen=quadPreview.options?.find(opt=>inside(opt.polygon,x,y));
+   if(chosen){const f=quadPreview.face,e=quadPreview.edge;quadPreview=null;
+     bridge.extendEdgeChoice(f,e,chosen.mode);draw();return;}
+   quadPreview=null;draw();
+ }
+ if(plus&&bridge&&!add&&editMode==="agregar"){
+   quadPreview={face:plus.face,edge:plus.edge,options:[]};draw();return;
+ }
  const hit=[...(window.polygons||[])].reverse().find(f=>inside(f.p,x,y));
  if(hit&&bridge){if(add)bridge.toggleFace(hit.i);else{selectFaceVisual(hit.i,hit.reflected);bridge.selectFace(hit.i)}}});
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,zoom*(e.deltaY>0?.9:1.1)));draw()},{passive:false});
@@ -283,7 +335,7 @@ window.addEventListener('keydown',e=>{
       -dir*step*Math.cos(yaw)*Math.sin(pitch));
   }
 });
-setInterval(()=>{if(spin){yaw+=.0035;draw()}},33);
+setInterval(()=>{if(spin)yaw+=.0035;if(spin||quadPreview)draw()},33);
 resize();
 </script></body></html>
 """
@@ -304,6 +356,19 @@ class Bridge(QObject):
     @Slot(int)
     def selectFace(self, index):
         self.editor.select_face(index)
+
+    @Slot(int, int, str)
+    def extendEdgeChoice(self, face_index, edge_index, mode):
+        if mode not in ("down", "up", "auto"):
+            return
+        previous=self.editor.add_direction.currentIndex()
+        idx=self.editor.add_direction.findData(mode)
+        if idx<0:return
+        self.editor.add_direction.setCurrentIndex(idx)
+        try:
+            self.editor.extend_edge(face_index, edge_index)
+        finally:
+            self.editor.add_direction.setCurrentIndex(previous)
 
     @Slot(int, int)
     def extendEdge(self, face_index, edge_index):
