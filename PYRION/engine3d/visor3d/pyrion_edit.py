@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.7"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -63,13 +63,14 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script></head><body>
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
-let mesh=null,selected=-1,mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
+let mesh=null,selected=-1,selectedGroup=null,mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
 let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null;
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function setMesh(x){mesh=x;draw()}
 function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;surface=x.surface;labels=x.labels;spin=x.spin;draw()}
-function setSelected(x){selected=x;draw()}
+function setSelected(x){selected=x;selectedGroup=null;draw()}
+function setSelectedGroup(a,b){selected=-1;selectedGroup=[a,b];draw()}
 function resize(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
 cv.width=Math.floor(r.width*d);cv.height=Math.floor(r.height*d);draw()}
 window.addEventListener('resize',resize);
@@ -113,9 +114,10 @@ function draw(){
  polygons.sort((a,b)=>a.depth-b.depth);window.polygons=polygons;
  for(const f of polygons){
   ctx.beginPath();f.p.forEach((p,j)=>j?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();
-  if(surface){ctx.fillStyle=f.i===selected?'#f4be50':f.color;ctx.fill();}
-  if(wire||f.i===selected){ctx.strokeStyle=f.i===selected?'#fff4bc':'#171a35';
-    ctx.lineWidth=f.i===selected?3:1.35;ctx.stroke()}
+  const picked=f.i===selected||(selectedGroup&&f.i>=selectedGroup[0]&&f.i<selectedGroup[1]);
+  if(surface){ctx.fillStyle=picked?'#f4be50':f.color;ctx.fill();}
+  if(wire||picked){ctx.strokeStyle=picked?'#fff4bc':'#171a35';
+    ctx.lineWidth=picked?3:1.35;ctx.stroke()}
   if(labels){const x=f.p.reduce((a,v)=>a+v[0],0)/f.p.length;
    const y=f.p.reduce((a,v)=>a+v[1],0)/f.p.length;
    ctx.font='bold '+Math.max(11,Math.round(Math.min(w,h)/75))+'px sans-serif';
@@ -140,12 +142,13 @@ cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,z
 window.addEventListener('keydown',e=>{
   const target=e.target;
   if(target&&['INPUT','TEXTAREA','SELECT'].includes(target.tagName))return;
-  if(e.altKey&&e.key==='ArrowLeft'){e.preventDefault();yaw-=Math.PI/24;draw();return;}
-  if(e.altKey&&e.key==='ArrowRight'){e.preventDefault();yaw+=Math.PI/24;draw();return;}
+  if(e.altKey&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){
+    e.preventDefault();if(bridge)bridge.selectAdjacentPiece(e.key==='ArrowRight'?1:-1);return;
+  }
   if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key))return;
   if(e.ctrlKey||e.altKey||e.metaKey)return;
   e.preventDefault();
-  if(!bridge||selected<0)return;
+  if(!bridge||!mesh)return;
   const step=e.shiftKey?.005:.025;
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
     const dir=e.key==='ArrowRight'?1:-1;
@@ -173,6 +176,10 @@ class Bridge(QObject):
     @Slot(int)
     def selectFace(self, index):
         self.editor.select_face(index)
+
+    @Slot(int)
+    def selectAdjacentPiece(self, direction):
+        self.editor.select_adjacent_piece(direction)
 
     @Slot(float, float, float)
     def movePerspective(self, dx, dy, dz):
@@ -242,7 +249,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: mover según la vista · Shift: precisión.\nAlt+← / Alt+→: girar cámara.\nLas caras comparten vértices.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\nFlechas ↑ ↓ ← →: mover según la vista · Shift: precisión.\nAlt+← / Alt+→: seleccionar pieza anterior/siguiente.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
@@ -315,7 +322,22 @@ class Editor(QMainWindow):
         self.selecting=False
         self.selection_info.setText(str(len(self.selection))+" vértices seleccionados · " +
             ("pieza completa" if kind=="group" else "cara editable"))
-        self.js("setSelected("+str(i if kind=="face" else -1)+");")
+        if kind=="face":
+            self.js("setSelected("+str(i)+");")
+        else:
+            group=self.mesh["groups"][i]
+            a=int(group.get("face_start",0));b=a+int(group.get("face_count",0))
+            self.js(f"setSelectedGroup({a},{b});")
+
+    def select_adjacent_piece(self, direction):
+        if not self.mesh or not self.selector.count():return
+        groups=len(self.mesh.get('groups',[]))
+        if groups:
+            current=self.selector.currentIndex()
+            target=(current+direction)%groups if current<groups else (0 if direction>0 else groups-1)
+        else:
+            target=(self.selector.currentIndex()+direction)%self.selector.count()
+        self.selector.setCurrentIndex(target)
 
     def select_face(self,i):
         for j in range(self.selector.count()):
