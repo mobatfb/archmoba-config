@@ -68,7 +68,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.10</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.11</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -122,7 +122,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.10';
+  const APP_VERSION = 'v1.3.11';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -448,13 +448,20 @@
     const model = selectedModel, request = serial;
     polling = true;
     try {
-      const response = await meshFromApi(model.mesh);
+      // Si la API falla (rate limit/red), consultar RAW en vez de congelar el polling.
+      let source, remoteSha=null;
+      try {
+        const response=await meshFromApi(model.mesh);
+        remoteSha=response.sha;
+        if (remoteSha === meshSha) return;
+        source=decodeMeshResponse(response);
+      } catch(apiError) {
+        source=await fetchJson(RAW+model.mesh+'?_='+Date.now()+'-'+Math.random().toString(36).slice(2));
+      }
       if (request !== serial || selectedModel !== model || !active) return;
-      if (response.sha === meshSha) return;
-      const source = decodeMeshResponse(response);
       const snapshot = JSON.stringify(source);
       if (snapshot === meshSnapshot) {
-        meshSha = response.sha;
+        meshSha = remoteSha;
         return;
       }
       const nextVersion = meshVersion(source);
@@ -465,7 +472,7 @@
       active.baseGeometry = geometry;
       active.meshVersion = nextVersion;
       applyMirrorGeometry();
-      meshSha = response.sha;
+      meshSha = remoteSha;
       meshSnapshot = snapshot;
       showMeshVersion(model, nextVersion);
       if (!versionIncreased) {
@@ -480,8 +487,11 @@
         report('ready', 'Malla ' + model.name + ' · v' + nextVersion + ' actualizada en vivo');
       }
     } catch (error) {
-      // Ante límites de API o desconexión, el visor sigue girando.
-      if (/HTTP (403|429)/.test(error.message)) pollNotBefore = Date.now() + 60000;
+      // Sin silencio: un fallo de red nunca debe confundirse con malla actualizada.
+      pollNotBefore = Date.now() + 5000;
+      const message='No se pudo comprobar actualización: '+error.message;
+      status.textContent=message;
+      report('error',message);
     } finally {
       polling = false;
     }
