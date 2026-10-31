@@ -13,7 +13,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.4.7"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -467,6 +467,12 @@ class Editor(QMainWindow):
         tools_layout.addWidget(title)
         modes = ExpandableSection("Modos de edición", True)
         tools_layout.addWidget(modes)
+        tools_layout.addWidget(QLabel("Dirección del +"))
+        self.add_direction = QComboBox()
+        self.add_direction.addItem("Abajo (-Y)", "down")
+        self.add_direction.addItem("Exterior de la cara", "auto")
+        self.add_direction.addItem("Arriba (+Y)", "up")
+        tools_layout.addWidget(self.add_direction)
         self.mode_group = QButtonGroup(self)
         self.mode_group.setExclusive(True)
         for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar"), ("girar", "Girar")]:
@@ -653,7 +659,13 @@ class Editor(QMainWindow):
             QMessageBox.warning(self, "Crear quad", "No se pudo determinar la direccion exterior.")
             return
         distance = edge_len2**0.5
-        shift = [x*distance/norm for x in outward]
+        mode = self.add_direction.currentData()
+        shift = ([0.0, -distance, 0.0] if mode == "down" else
+                 [0.0, distance, 0.0] if mode == "up" else
+                 [x*distance/norm for x in outward])
+        if abs(sum(shift[k]*edge[k] for k in range(3))) / (distance*distance) > 0.999:
+            QMessageBox.warning(self, "Crear quad", "Este borde es paralelo a la direccion elegida. Seleccione otro borde.")
+            return
         new_a = [pa[i]+shift[i] for i in range(3)]
         new_b = [pb[i]+shift[i] for i in range(3)]
         if (self.toggles["mirror"].isChecked() and
@@ -717,6 +729,7 @@ class Editor(QMainWindow):
         if initial is None:
             return
         direction = initial[2]
+        mode = self.add_direction.currentData()
         chosen = []
         for fi in dict.fromkeys(self.selected_faces):
             candidates = []
@@ -731,7 +744,18 @@ class Editor(QMainWindow):
                     "Una cara seleccionada no tiene borde libre en esa direccion.")
                 return
             chosen.append((fi, max(candidates, key=lambda v: v[0])[1]))
-        offset = [x*initial[3] for x in direction]
+        offset = ([0.0, -initial[3], 0.0] if mode == "down" else
+                  [0.0, initial[3], 0.0] if mode == "up" else
+                  [x*initial[3] for x in direction])
+        for _, item in chosen:
+            pa, pb = vertices[item[0]], vertices[item[1]]
+            edge_vec = [pb[k]-pa[k] for k in range(3)]
+            cross = [edge_vec[1]*offset[2]-edge_vec[2]*offset[1],
+                     edge_vec[2]*offset[0]-edge_vec[0]*offset[2],
+                     edge_vec[0]*offset[1]-edge_vec[1]*offset[0]]
+            if sum(c*c for c in cross) < 1e-12:
+                QMessageBox.warning(self, "Crear quads", "Uno de los bordes es paralelo a la direccion indicada.")
+                return
         endpoints = {v for _, edge in chosen for v in edge[:2]}
         if self.toggles["mirror"].isChecked() and any(
                 vertices[i][0]+offset[0] > 0.000001 for i in endpoints):
