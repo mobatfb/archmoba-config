@@ -68,7 +68,7 @@
   <aside class="sidebar" aria-label="Información y controles de PYRION">
     <header>
       <div class="brand">PYRION <small>3D · MODELOS</small></div>
-      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.8</span></div>
+      <div class="sidebar-version">Versión del visor <span id="visor-version">v1.3.9</span></div>
       <div id="mesh-version" aria-live="polite">Modelo: —</div>
       <div id="rotation-angle">Giro 0°</div>
     </header>
@@ -122,7 +122,7 @@
 <script>
 (() => {
   'use strict';
-  const APP_VERSION = 'v1.3.8';
+  const APP_VERSION = 'v1.3.9';
   const REPO = 'mobatfb/archmoba-dev';
   const MODELS_PATH = 'PYRION/engine3d/visor3d/models.json';
   const RAW = 'https://raw.githubusercontent.com/' + REPO + '/main/';
@@ -411,6 +411,11 @@
       return mirrored;
     });
     const faces = base.faces.map(f => f.slice());
+    const wireFaces = (base.wireFaces || base.faces).map(f => f.slice());
+    for (const f of base.wireFaces || base.faces) {
+      if (!f.every(i => Math.abs(base.vertices[i][0]) <= 1e-5))
+        wireFaces.push(f.map(i=>mirrorIndices[i]).reverse());
+    }
     const faceColors = base.faceColors ? base.faceColors.slice() : null;
     for (let faceIndex = 0; faceIndex < base.faces.length; faceIndex++) {
       const f = base.faces[faceIndex];
@@ -419,7 +424,7 @@
       faces.push([mirrorIndices[f[0]],mirrorIndices[f[2]],mirrorIndices[f[1]]]);
       if (faceColors) faceColors.push(base.faceColors[faceIndex]);
     }
-    return {vertices,faces,faceColors};
+    return {vertices,faces,wireFaces,faceColors};
   }
 
   function applyMirrorGeometry() {
@@ -547,7 +552,7 @@
         triangles.push(...parts);
         if (sourceColors !== undefined) for (const _ of parts) triColors.push(sourceColors[i]);
       }
-      geometry = {vertices:source.vertices,faces:triangles,faceColorsRaw:sourceColors === undefined ? undefined : triColors};
+      geometry = {vertices:source.vertices,faces:triangles,wireFaces:source.faces.map(f=>f.slice()),faceColorsRaw:sourceColors === undefined ? undefined : triColors};
     } else if (source.primitive==='uv_sphere') {
       geometry = sphereGeometry(source.parameters);
     } else throw new Error('Tipo de malla no compatible: ' + source.primitive);
@@ -572,6 +577,7 @@
     return {
       vertices:geometry.vertices.map(v=>v.map((n,i)=>n*factors[i])),
       faces:geometry.faces,
+      wireFaces:geometry.wireFaces || geometry.faces,
       faceColors
     };
   }
@@ -618,8 +624,9 @@
         ctx.strokeStyle='rgba(205,215,233,.9)';
         ctx.beginPath();
         const edges=new Set();
-        for (const [i,j,k] of fs) {
-          for (const [u,v] of [[i,j],[j,k],[k,i]]) {
+        for (const f of (active.geometry.wireFaces || fs)) {
+          for (let e=0;e<f.length;e++) {
+            const u=f[e],v=f[(e+1)%f.length];
             const key=Math.min(u,v)+':'+Math.max(u,v);
             if (edges.has(key)) continue;
             edges.add(key);
@@ -654,7 +661,8 @@
     const pixels=image.data;
     const depthBuffer=new Float32Array(rw*rh);
     depthBuffer.fill(-Infinity);
-    const edgeBuffer=wireEnabled ? new Uint8Array(rw*rh) : null;
+    // El relleno usa triangulos, pero sus diagonales internas NO son aristas visibles.
+    const edgeBuffer=null;
     for (const t of triangles) {
       const f=t.f;
       const a=screen[f[0]],b=screen[f[1]],c=screen[f[2]];
@@ -680,12 +688,30 @@
           depthBuffer[pos]=z;
           const off=pos*4;
           pixels[off]=rgb[0];pixels[off+1]=rgb[1];pixels[off+2]=rgb[2];pixels[off+3]=255;
-          if(edgeBuffer)edgeBuffer[pos]=Math.min(u,v,w)<.012 ? 1:0;
+
         }
       }
     }
-    if(edgeBuffer)for(let p=0;p<edgeBuffer.length;p++)if(edgeBuffer[p]){
-      const off=p*4;pixels[off]=18;pixels[off+1]=24;pixels[off+2]=40;
+    // Mostrar solo aristas reales de quads/triangulos, con prueba de profundidad.
+    if(wireEnabled) {
+      const drawn=new Set();
+      for(const f of (active.geometry.wireFaces || fs)) for(let e=0;e<f.length;e++) {
+        const i=f[e],j=f[(e+1)%f.length];
+        const key=Math.min(i,j)+':'+Math.max(i,j);
+        if(drawn.has(key))continue;
+        drawn.add(key);
+        const a=screen[i],b=screen[j],dx=b[0]-a[0],dy=b[1]-a[1];
+        const steps=Math.max(1,Math.ceil(Math.hypot(dx,dy)*1.5));
+        const za=1/(4.8-points[i][2]),zb=1/(4.8-points[j][2]);
+        for(let n=0;n<=steps;n++) {
+          const t=n/steps,x=Math.round(a[0]+t*dx),y=Math.round(a[1]+t*dy);
+          if(x<0||y<0||x>=rw||y>=rh)continue;
+          const pos=y*rw+x,z=za+(zb-za)*t;
+          if(z+0.0015<depthBuffer[pos])continue;
+          const off=pos*4;
+          pixels[off]=18;pixels[off+1]=24;pixels[off+2]=40;pixels[off+3]=255;
+        }
+      }
     }
     // Composicion sobre el fondo sin rectangulo opaco.
     const layer=document.createElement('canvas');layer.width=rw;layer.height=rh;
