@@ -12,8 +12,10 @@ from pathlib import Path
 from copy import deepcopy
 import importlib.util
 import subprocess
+import tempfile
+import time
 
-APP_VERSION = "1.4.10"
+APP_VERSION = "1.4.11"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -46,7 +48,7 @@ except Exception as exc:
             pass
     raise SystemExit(1)
 
-from PySide6.QtCore import QObject, Qt, Slot
+from PySide6.QtCore import QObject, Qt, Slot, QTimer, QThread, Signal
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QComboBox, QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QMessageBox,
     QGroupBox, QFormLayout, QInputDialog, QLineEdit, QToolButton, QScrollArea, QButtonGroup, QRadioButton)
@@ -407,12 +409,49 @@ class ExpandableSection(QWidget):
         self.toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
 
 
+class UpdateWorker(QThread):
+    finished_check = Signal(str, str)
+
+    def run(self):
+        try:
+            base = "https://raw.githubusercontent.com/" + REPO + "/main/PYRION/engine3d/visor3d/"
+            req = urllib.request.Request(base+"config.json", headers={"User-Agent":"PYRION-EDIT-Updater"})
+            with urllib.request.urlopen(req, timeout=12) as response:
+                config = json.load(response)
+            newest = str(config.get("version", "")).strip()
+            if not newest:
+                raise ValueError("Version remota vacia")
+            def parts(version):
+                return tuple(int(piece) for piece in version.split("."))
+            if parts(newest) <= parts(APP_VERSION):
+                self.finished_check.emit("updated", "")
+                return
+            req = urllib.request.Request(base+"pyrion_edit.py", headers={"User-Agent":"PYRION-EDIT-Updater"})
+            with urllib.request.urlopen(req, timeout=18) as response:
+                source = response.read(2000000)
+            expected = ('APP_VERSION = "'+newest+'"').encode("utf-8")
+            if expected not in source or not source.startswith(b"#!/usr/bin/env python3"):
+                raise ValueError("El codigo descargado no coincide con la version publicada")
+            compile(source, "pyrion_edit.py", "exec")
+            target = Path(__file__).resolve()
+            with tempfile.NamedTemporaryFile(prefix="pyrion_update_",suffix=".py",delete=False,dir=str(target.parent)) as tmp:
+                tmp.write(source)
+                stage = tmp.name
+            self.finished_check.emit("install", stage)
+        except Exception as ex:
+            self.finished_check.emit("upfailed", str(ex))
+
+
 class Editor(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"PYRION EDIT v{APP_VERSION} · Modelador Origami")
         self.resize(1390, 830)
         self.mesh = None
+        self.update_worker = None
+        self.update_animation = QTimer(self)
+        self.update_animation.timeout.connect(self.animate_update)
+        self.update_dots = 0
         self.path = None
         self.saved = None
         self.remote_sha = None
@@ -445,6 +484,64 @@ class Editor(QMainWindow):
           QCheckBox{spacing:8px}""")
         self.load_remote()
 
+    def animate_update(self):
+        self.update_dots = self.update_dots % 3 + 1
+        self.update_button.setText("loading" + "." * self.update_dots)
+
+    def update_status(self, status):
+        self.update_animation.stop()
+        self.update_button.setText(status)
+        self.update_button.setEnabled(False)
+        QTimer.singleShot(3000, self.reset_update)
+
+    def reset_update(self):
+        self.update_button.setText("Update")
+        self.update_button.setEnabled(True)
+
+    def check_update(self):
+        if self.update_worker and self.update_worker.isRunning():
+            return
+        self.update_button.setEnabled(False)
+        self.update_dots = 0
+        self.animate_update()
+        self.update_animation.start(350)
+        self.update_worker = UpdateWorker(self)
+        self.update_worker.finished_check.connect(self.finish_update)
+        self.update_worker.start()
+
+    def finish_update(self, status, detail):
+        if status != "install":
+            self.update_status(status)
+            if status == "upfailed":
+                self.status.setText("Update: fallo de red o descarga: " + detail[:180])
+            return
+        try:
+            target = str(Path(__file__).resolve())
+            stage = str(Path(detail).resolve())
+            if not Path(stage).is_file():
+                raise FileNotFoundError(stage)
+            # External process waits for this editor to exit, then replaces and restarts.
+            helper = (
+                "import os,sys,time,subprocess\\n"
+                "pid,stage,target=int(sys.argv[1]),sys.argv[2],sys.argv[3]\\n"
+                "for _ in range(150):\\n"
+                " try:\\n"
+                "  os.kill(pid,0)\\n"
+                " except OSError:break\\n"
+                " time.sleep(.1)\\n"
+                "os.replace(stage,target)\\n"
+                "subprocess.Popen([sys.executable,target],close_fds=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))\\n"
+            )
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen([sys.executable, "-c", helper, str(os.getpid()),stage,target],
+                             close_fds=True, creationflags=flags)
+            self.update_animation.stop()
+            self.update_button.setText("updated")
+            QTimer.singleShot(200, QApplication.instance().quit)
+        except Exception as ex:
+            self.update_status("upfailed")
+            self.status.setText("No se pudo aplicar la actualizacion: " + str(ex)[:180])
+
     def make_ui(self):
         root = QWidget()
         row = QHBoxLayout(root)
@@ -461,6 +558,10 @@ class Editor(QMainWindow):
         left = QVBoxLayout(body)
         left.setContentsMargins(3, 3, 3, 3)
         scroll.setWidget(body)
+        self.update_button = QPushButton("Update")
+        self.update_button.setToolTip("Comprobar e instalar una nueva version de PYRION EDIT")
+        self.update_button.clicked.connect(self.check_update)
+        outer.addWidget(self.update_button)
         outer.addWidget(scroll)
         heading = QLabel("PYRION 3D  /  EDIT")
         heading.setStyleSheet("font-size:21px;font-weight:bold;color:#84baff;padding:12px")
