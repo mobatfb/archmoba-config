@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 
-APP_VERSION = "1.4.12"
+APP_VERSION = "1.4.13"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -525,7 +525,7 @@ class Editor(QMainWindow):
 
     def finish_update(self, status, detail):
         if status != "install":
-            self.update_status(status)
+            self.update_status(status.capitalize())
             if status == "upfailed":
                 self.status.setText("Update: fallo de red o descarga: " + detail[:180])
             return
@@ -553,7 +553,7 @@ class Editor(QMainWindow):
             subprocess.Popen([sys.executable, "-c", helper, stage,target],
                              close_fds=True, creationflags=flags)
             self.update_animation.stop()
-            self.update_button.setText("updated")
+            self.update_button.setText("Updated")
             QTimer.singleShot(200, QApplication.instance().quit)
         except Exception as ex:
             self.update_status("upfailed")
