@@ -2,6 +2,9 @@
 # PYRION EDIT - Editor de mallas .mesh (PySide6 + Qt WebEngine)
 # PySide6 se instala automaticamente si falta.
 import json
+import base64
+import os
+import urllib.error
 import sys
 import urllib.request
 from pathlib import Path
@@ -9,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -45,7 +48,7 @@ except Exception as exc:
 from PySide6.QtCore import QObject, Qt, Slot
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QComboBox, QPushButton, QLabel, QFileDialog, QDoubleSpinBox, QCheckBox, QMessageBox,
-    QGroupBox, QFormLayout)
+    QGroupBox, QFormLayout, QInputDialog, QLineEdit)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebChannel import QWebChannel
 
@@ -156,6 +159,7 @@ class Editor(QMainWindow):
         self.mesh = None
         self.path = None
         self.saved = None
+        self.remote_sha = None
         self.selection = []
         self.selecting = False
         self.view = QWebEngineView()
@@ -187,7 +191,8 @@ class Editor(QMainWindow):
         heading.setStyleSheet("font-size:21px;font-weight:bold;color:#84baff;padding:12px")
         left.addWidget(heading)
         for label, fn in [("Abrir .mesh", self.open_file), ("Cargar CHEST de GitHub", self.load_remote),
-                          ("Guardar .mesh", self.save_file), ("Guardar como...", self.save_as)]:
+                          ("Guardar .mesh", self.save_file), ("Guardar como...", self.save_as),
+                          ("Guardar en GitHub", self.save_github)]:
             b = QPushButton(label)
             b.clicked.connect(fn)
             left.addWidget(b)
@@ -248,6 +253,7 @@ class Editor(QMainWindow):
         if model.get("format")!="pyrion.mesh" or not isinstance(model.get("vertices"),list) or not isinstance(model.get("faces"),list):
             raise ValueError("Formato .mesh no compatible")
         self.mesh=deepcopy(model);self.path=path;self.saved=deepcopy(model)
+        self.remote_sha = None
         self.populate();self.push_mesh()
         self.status.setText("Modelo cargado: " + str(model.get("name","sin nombre")) +
                             " · v" + str(model.get("version","?")) + " · " + str(len(model["faces"])) + " caras")
@@ -311,13 +317,79 @@ class Editor(QMainWindow):
                                                          "User-Agent":"PYRION-EDIT"})
             with urllib.request.urlopen(request,timeout=12) as response:
                 raw=json.loads(response.read().decode("utf-8"))
-            import base64
             if "content" in raw:
                 data=json.loads(base64.b64decode(raw["content"]).decode("utf-8"))
             else:data=raw
             self.set_mesh(data)
+            self.remote_sha = raw.get('sha')
         except Exception as ex:
             self.status.setText("GitHub no disponible: "+str(ex)+" · Utilice Abrir .mesh")
+
+    def save_github(self):
+        if not self.mesh:
+            QMessageBox.warning(self, "PYRION EDIT", "Primero abra una malla.")
+            return
+        if not self.remote_sha:
+            QMessageBox.warning(self, "PYRION EDIT",
+                "Para evitar sobrescribir cambios ajenos, primero pulse 'Cargar CHEST de GitHub', luego edite y publique.")
+            return
+        if self.mesh == self.saved:
+            QMessageBox.information(self, "PYRION EDIT", "No hay cambios para publicar.")
+            return
+        token = os.environ.get("PYRION_GITHUB_TOKEN", "").strip()
+        if not token:
+            token, accepted = QInputDialog.getText(self, "Autorizacion GitHub",
+                "Token de GitHub con permiso Contents: Read and write sobre el repositorio:", QLineEdit.EchoMode.Password)
+            if not accepted or not token.strip():
+                return
+            token = token.strip()
+        api = "https://api.github.com/repos/" + REPO + "/contents/" + REMOTE
+        headers = {
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "PYRION-EDIT",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+        try:
+            request = urllib.request.Request(api + "?ref=main", headers=headers)
+            with urllib.request.urlopen(request, timeout=20) as response:
+                remote = json.load(response)
+            if remote.get("sha") != self.remote_sha:
+                raise RuntimeError("CHEST cambió en GitHub desde que fue abierto. Vuelva a cargarlo antes de publicar.")
+            updated = deepcopy(self.mesh)
+            original = str(updated.get("version", "1.0.0")).split(".")
+            if not original or not all(p.isdecimal() for p in original):
+                raise ValueError("La version actual no es numerica.")
+            original[-1] = str(int(original[-1]) + 1)
+            updated["version"] = ".".join(original)
+            answer = QMessageBox.question(self, "Publicar en GitHub",
+                "¿Publicar CHEST v" + updated["version"] + " en la rama main?\n"
+                "Se reemplazara la malla remota con los cambios actuales.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            payload = {
+                "message": "PYRION EDIT: actualizar CHEST v" + updated["version"],
+                "content": base64.b64encode((json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")).decode("ascii"),
+                "sha": self.remote_sha,
+                "branch": "main"
+            }
+            put = urllib.request.Request(api, data=json.dumps(payload).encode("utf-8"),
+                headers={**headers, "Content-Type": "application/json"}, method="PUT")
+            with urllib.request.urlopen(put, timeout=30) as response:
+                result = json.load(response)
+            self.mesh = updated
+            self.saved = deepcopy(updated)
+            self.remote_sha = result["content"]["sha"]
+            self.status.setText("Publicado CHEST v" + updated["version"] +
+                " · commit " + result["commit"]["sha"][:10])
+            QMessageBox.information(self, "PYRION EDIT",
+                "Guardado en GitHub correctamente.\nCHEST v" + updated["version"])
+        except urllib.error.HTTPError as ex:
+            detail = ex.read().decode("utf-8", errors="replace")[:350]
+            QMessageBox.critical(self, "GitHub", "HTTP " + str(ex.code) + ": " + detail)
+        except Exception as ex:
+            QMessageBox.critical(self, "GitHub", str(ex))
 
     def save_file(self):
         if not self.path:return self.save_as()
