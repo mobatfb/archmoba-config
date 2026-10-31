@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -63,13 +63,14 @@ canvas{display:block;width:100%;height:100%;cursor:grab}
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script></head><body>
 <canvas id="c"></canvas><div id="hint">Arrastrar: girar · Rueda: zoom · Clic: seleccionar cara</div>
 <script>
-let mesh=null,selected=-1,selectedGroup=null,mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
+let mesh=null,selected=-1,selectedReflected=false,selectedGroup=null,mirror=true,wire=true,material=true,surface=true,labels=true,spin=false;
 let yaw=-0.55,pitch=0.27,zoom=2.5,bridge=null,drag=null;
 new QWebChannel(qt.webChannelTransport,c=>{bridge=c.objects.bridge});
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 function setMesh(x){mesh=x;draw()}
 function setOptions(x){mirror=x.mirror;wire=x.wire;material=x.material;surface=x.surface;labels=x.labels;spin=x.spin;draw()}
-function setSelected(x){selected=x;selectedGroup=null;draw()}
+function setSelected(x){if(x!==selected)selectedReflected=false;selected=x;selectedGroup=null;draw()}
+function selectFaceVisual(i,reflected){selected=i;selectedReflected=!!reflected;selectedGroup=null;draw()}
 function setSelectedGroup(a,b){selected=-1;selectedGroup=[a,b];draw()}
 function resize(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;
 cv.width=Math.floor(r.width*d);cv.height=Math.floor(r.height*d);draw()}
@@ -136,7 +137,7 @@ cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,
 cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved;drag=null;if(moved)return;
  const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
  const hit=[...(window.polygons||[])].reverse().find(f=>inside(f.p,x,y));
- if(hit&&bridge)bridge.selectFace(hit.i)});
+ if(hit&&bridge){selectFaceVisual(hit.i,hit.reflected);bridge.selectFace(hit.i)}});
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,zoom*(e.deltaY>0?.9:1.1)));draw()},{passive:false});
 // Flechas verticales: desplazar en el eje vertical de la pantalla, segun camara.
 function selectFaceInDirection(key){
@@ -148,7 +149,7 @@ function selectFaceInDirection(key){
   ];
   const axis=key==='ArrowLeft'?[-1,0]:key==='ArrowRight'?[1,0]:
     key==='ArrowUp'?[0,-1]:[0,1];
-  const current=[...faces].reverse().find(f=>f.i===selected);
+  const current=[...faces].reverse().find(f=>f.i===selected&&f.reflected===selectedReflected);
   if(!current)return;
   const origin=center(current);
   // Elegir caras de acuerdo con su posicion VISUAL; nunca avanzar por ID.
@@ -164,19 +165,23 @@ function selectFaceInDirection(key){
   }
   const candidates=[];
   for(const f of faces){
-    if(f.i===selected||!visible(f))continue;
+    if(f.i===selected||f.reflected!==current.reflected||!visible(f))continue;
     const c=center(f),dx=c[0]-origin[0],dy=c[1]-origin[1];
     const along=dx*axis[0]+dy*axis[1];
     const across=Math.abs(dx*axis[1]-dy*axis[0]);
     if(along<=4||across>along*1.8)continue;
     const shared=mesh.faces[selected]?.filter(v=>mesh.faces[f.i]?.includes(v)).length||0;
+    if(shared<2)continue; // Fin de la malla o del espejo: no saltar a caras lejanas.
     // Cara vecina primero; si no hay, siguiente lugar visible en esa direccion.
     const distance=Math.hypot(dx,dy);
-    const score=distance+across*1.4-(shared>=2?10000:shared===1?1500:0);
+    const score=distance+across*1.4;
     candidates.push({f,score});
   }
   candidates.sort((a,b)=>a.score-b.score);
-  if(candidates.length)bridge.selectFace(candidates[0].f.i);
+  if(candidates.length){
+    selectFaceVisual(candidates[0].f.i,candidates[0].f.reflected);
+    bridge.selectFace(candidates[0].f.i);
+  }
 }
 window.addEventListener('keydown',e=>{
   const target=e.target;
