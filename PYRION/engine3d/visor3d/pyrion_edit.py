@@ -615,6 +615,94 @@ class Editor(QMainWindow):
         self.select_face(new_index)
         self.status.setText("Quad nuevo en borde libre. Guarde para conservar el cambio.")
 
+    def extend_selected_edges(self, clicked_face, clicked_edge):
+        """Extend selected faces together using the clicked border direction."""
+        faces = self.mesh["faces"]
+        vertices = self.mesh["vertices"]
+        usage = {}
+        for face in faces:
+            for a, b in zip(face, face[1:] + face[:1]):
+                key = tuple(sorted((a, b)))
+                usage[key] = usage.get(key, 0) + 1
+
+        def detail(fi, ei):
+            face = faces[fi]
+            a, b = face[ei], face[(ei+1) % len(face)]
+            if usage.get(tuple(sorted((a, b)))) != 1:
+                return None
+            va, vb = vertices[a], vertices[b]
+            midpoint = [(va[k]+vb[k])/2 for k in range(3)]
+            center = [sum(vertices[v][k] for v in face)/len(face) for k in range(3)]
+            edge = [vb[k]-va[k] for k in range(3)]
+            length = sum(x*x for x in edge)**0.5
+            if length < 1e-8:
+                return None
+            outward = [midpoint[k]-center[k] for k in range(3)]
+            component = sum(outward[k]*edge[k] for k in range(3))/(length*length)
+            outward = [outward[k]-component*edge[k] for k in range(3)]
+            magnitude = sum(x*x for x in outward)**0.5
+            if magnitude < 1e-8:
+                return None
+            return a, b, [x/magnitude for x in outward], length
+
+        initial = detail(clicked_face, clicked_edge)
+        if initial is None:
+            return
+        direction = initial[2]
+        chosen = []
+        for fi in dict.fromkeys(self.selected_faces):
+            candidates = []
+            for ei in range(len(faces[fi])):
+                edge = detail(fi, ei)
+                if edge:
+                    alignment = sum(edge[2][k]*direction[k] for k in range(3))
+                    if alignment >= 0.95:
+                        candidates.append((alignment, edge))
+            if not candidates:
+                QMessageBox.warning(self, "Crear quads",
+                    "Una cara seleccionada no tiene borde libre en esa direccion.")
+                return
+            chosen.append((fi, max(candidates, key=lambda v: v[0])[1]))
+        offset = [x*initial[3] for x in direction]
+        endpoints = {v for _, edge in chosen for v in edge[:2]}
+        if self.toggles["mirror"].isChecked() and any(
+                vertices[i][0]+offset[0] > 0.000001 for i in endpoints):
+            QMessageBox.warning(self, "Crear quads",
+                "La extension cruzaria el plano de Espejo X.")
+            return
+        before = deepcopy(self.mesh)
+        new_vertex_ids = {}
+        def moved(i):
+            if i not in new_vertex_ids:
+                new_vertex_ids[i] = len(vertices)
+                vertices.append([vertices[i][k]+offset[k] for k in range(3)])
+            return new_vertex_ids[i]
+        new_faces = []
+        for fi, edge in chosen:
+            a, b = edge[:2]
+            ia, ib = moved(a), moved(b)
+            new_index = len(faces)
+            faces.append([a, b, ib, ia])
+            new_faces.append(new_index)
+            if isinstance(self.mesh.get("face_ids"), list):
+                self.mesh["face_ids"].append(max(self.mesh["face_ids"], default=0)+1)
+            if isinstance(self.mesh.get("face_colors"), list):
+                self.mesh["face_colors"].append(self.mesh["face_colors"][fi])
+            self.mesh.setdefault("groups", []).append({
+                "name": "quad_extendido_" + str(new_index+1),
+                "face_start": new_index, "face_count": 1,
+                "vertex_start": ia, "vertex_count": 2
+            })
+        self.record_change(before)
+        self.selected_faces = []
+        self.selection = []
+        self.populate()
+        self.push_mesh()
+        for fi in new_faces:
+            self.toggle_face(fi)
+        self.status.setText(str(len(new_faces)) +
+            " quads extendidos juntos. Ctrl+Z deshace la operacion.")
+
     def merge_faces(self):
         """Fusionar un conjunto de caras contiguas siguiendo su borde exterior."""
         if not self.mesh or len(self.selected_faces) < 2:
