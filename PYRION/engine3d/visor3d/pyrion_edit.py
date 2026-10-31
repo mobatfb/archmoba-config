@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -136,6 +136,24 @@ cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved;drag=
  const hit=[...(window.polygons||[])].reverse().find(f=>inside(f.p,x,y));
  if(hit&&bridge)bridge.selectFace(hit.i)});
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.6,Math.min(8,zoom*(e.deltaY>0?.9:1.1)));draw()},{passive:false});
+// Flechas verticales: desplazar en el eje vertical de la pantalla, segun camara.
+window.addEventListener('keydown',e=>{
+  const target=e.target;
+  if(target&&['INPUT','TEXTAREA','SELECT'].includes(target.tagName))return;
+  if(e.ctrlKey&&e.key==='ArrowLeft'){e.preventDefault();yaw-=Math.PI/24;draw();return;}
+  if(e.altKey&&e.key==='ArrowRight'){e.preventDefault();yaw+=Math.PI/24;draw();return;}
+  if(e.key!=='ArrowUp'&&e.key!=='ArrowDown')return;
+  e.preventDefault();
+  if(!bridge||selected<0)return;
+  const dir=e.key==='ArrowUp'?1:-1;
+  const step=e.shiftKey?.005:.025;
+  // py = y*cos(pitch) - (-x*sin(yaw)+z*cos(yaw))*sin(pitch)
+  // vector unitario de arriba de la pantalla expresado en XYZ.
+  bridge.movePerspective(
+    dir*step*Math.sin(yaw)*Math.sin(pitch),
+    dir*step*Math.cos(pitch),
+    -dir*step*Math.cos(yaw)*Math.sin(pitch));
+});
 setInterval(()=>{if(spin){yaw+=.0035;draw()}},33);
 resize();
 </script></body></html>
@@ -149,6 +167,10 @@ class Bridge(QObject):
     @Slot(int)
     def selectFace(self, index):
         self.editor.select_face(index)
+
+    @Slot(float, float, float)
+    def movePerspective(self, dx, dy, dz):
+        self.editor.move_perspective(dx, dy, dz)
 
 
 class Editor(QMainWindow):
@@ -214,7 +236,7 @@ class Editor(QMainWindow):
             v.valueChanged.connect(self.apply_coordinates)
             form.addRow(axis + ":", v)
             self.spins.append(v)
-        self.note = QLabel("Desplazamiento relativo al seleccionar.\nMover una cara también desplaza sus vértices compartidos.")
+        self.note = QLabel("Desplazamiento relativo al seleccionar.\n↑ / ↓: mover según la vista · Shift: precisión.\nCtrl+← / Alt+→: girar cámara.\nLas caras comparten vértices.")
         self.note.setWordWrap(True)
         form.addRow(self.note)
         btn = QPushButton("Restablecer desplazamiento de selección")
@@ -299,6 +321,17 @@ class Editor(QMainWindow):
         for index in self.selection:
             self.mesh["vertices"][index]=[self.anchor[index][k]+offsets[k] for k in range(3)]
         self.push_mesh()
+
+    def move_perspective(self, dx, dy, dz):
+        if not self.mesh or not self.selection:
+            return
+        self.selecting = True
+        try:
+            for spin, delta in zip(self.spins, (dx, dy, dz)):
+                spin.setValue(round(spin.value() + delta, 5))
+        finally:
+            self.selecting = False
+        self.apply_coordinates()
 
     def reset_transform(self):
         if not self.mesh:return
