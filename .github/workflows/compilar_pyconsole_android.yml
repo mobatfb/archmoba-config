@@ -13,26 +13,33 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: actions/setup-python@v5
+      - name: Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35" "build-tools;35.0.0"
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Extract source
+      - name: Extraer codigo Android
         run: tar -xJf project.tar.xz
         working-directory: AMDEV/TOOLS/PYCONSOLE_ANDROID
-      - name: Build APK
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Compilar APK
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
         working-directory: AMDEV/TOOLS/PYCONSOLE_ANDROID
-      - uses: actions/upload-artifact@v4
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
         with:
           name: AMDEV-PyConsole-APK
           path: AMDEV/TOOLS/PYCONSOLE_ANDROID/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
