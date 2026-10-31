@@ -13,7 +13,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.8"
+APP_VERSION = "1.4.9"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -192,37 +192,40 @@ function draw(){
    }
  }
  if(quadPreview&&editMode==="agregar"){
-   const face=ff[quadPreview.face],idx=quadPreview.edge;
-   if(face&&idx<face.length){
-     const a=vv[face[idx]],b=vv[face[(idx+1)%face.length]];
-     const center3=[0,1,2].map(k=>face.reduce((sum,i)=>sum+vv[i][k],0)/face.length);
-     const mid=[0,1,2].map(k=>(a[k]+b[k])/2);
-     const edge=[0,1,2].map(k=>b[k]-a[k]);
-     const length=Math.hypot(...edge);
-     if(length>1e-8){
-       let outward=[0,1,2].map(k=>mid[k]-center3[k]);
-       const dot=outward.reduce((sum,v,k)=>sum+v*edge[k],0)/(length*length);
-       outward=outward.map((v,k)=>v-dot*edge[k]);
-       const mag=Math.hypot(...outward);
-       const opts=[["down",[0,-length,0]],["up",[0,length,0]]];
-       if(mag>1e-8)opts.push(["auto",outward.map(x=>x*length/mag)]);
-       quadPreview.options=[];
-       for(const [mode,shift] of opts){
-         if(Math.hypot(...[edge[1]*shift[2]-edge[2]*shift[1],
-           edge[2]*shift[0]-edge[0]*shift[2],edge[0]*shift[1]-edge[1]*shift[0]])<1e-7)continue;
+   const f=ff[quadPreview.face],j=quadPreview.edge;
+   quadPreview.options=[];
+   if(f&&j<f.length){
+     const a=vv[f[j]],b=vv[f[(j+1)%f.length]];
+     const e=b.map((v,k)=>v-a[k]),length=Math.hypot(...e);
+     if(length>1e-7){
+       // Axes in world space corresponding to the current screen view.
+       const right=[Math.cos(yaw),0,Math.sin(yaw)];
+       const up=[Math.sin(yaw)*Math.sin(pitch),Math.cos(pitch),-Math.cos(yaw)*Math.sin(pitch)];
+       const opts=[["left",right.map(v=>-v)],["right",right],
+                   ["up",up],["down",up.map(v=>-v)]];
+       for(const [mode,unit] of opts){
+         const proj=e.reduce((v,n,k)=>v+n*unit[k],0)/(length*length);
+         const perp=unit.map((v,k)=>v-proj*e[k]);
+         const norm=Math.hypot(...perp);if(norm<.08)continue;
+         const shift=perp.map(v=>v*length/norm);
          const na=a.map((v,k)=>v+shift[k]),nb=b.map((v,k)=>v+shift[k]);
-         if(mirror&&(na[0]>0.000001||nb[0]>0.000001))continue;
-         const polygon=[a,b,nb,na].map(window.projectVertex);
-         // Clickable translucent location, blink subtly at 2 Hz.
-         const alpha=.26+.18*(.5+.5*Math.sin(Date.now()/230));
-         ctx.beginPath();polygon.forEach((pt,i)=>i?ctx.lineTo(pt[0],pt[1]):ctx.moveTo(pt[0],pt[1]));
-         ctx.closePath();ctx.fillStyle="rgba(80,230,255,"+alpha+")";ctx.fill();
-         ctx.lineWidth=1.6;ctx.strokeStyle="#9ffff5";ctx.stroke();
-         const px=polygon.reduce((sum,v)=>sum+v[0],0)/4;
-         const py=polygon.reduce((sum,v)=>sum+v[1],0)/4;
-         ctx.fillStyle="#ffffff";ctx.font="bold 12px sans-serif";ctx.textAlign="center";
-         ctx.fillText(mode==="down"?"↓":mode==="up"?"↑":"↗",px,py);
-         quadPreview.options.push({mode,polygon});
+         if(mirror&&(na[0]>1e-6||nb[0]>1e-6))continue;
+         const poly=[a,b,nb,na].map(window.projectVertex);
+         const cx=poly.reduce((sum,v)=>sum+v[0],0)/4;
+         const cy=poly.reduce((sum,v)=>sum+v[1],0)/4;
+         // Degenerate on screen: do not expose an unclickable placement.
+         const area=Math.abs(poly.reduce((sum,v,i)=>{
+           const q=poly[(i+1)%4];return sum+v[0]*q[1]-q[0]*v[1]},0))/2;
+         if(area<45)continue;
+         const alpha=.19+.18*(.5+.5*Math.sin(Date.now()/220));
+         ctx.beginPath();poly.forEach((v,i)=>i?ctx.lineTo(v[0],v[1]):ctx.moveTo(v[0],v[1]));
+         ctx.closePath();ctx.fillStyle="rgba(93,230,255,"+alpha+")";
+         ctx.fill();ctx.strokeStyle="#88f5ff";ctx.lineWidth=2;ctx.stroke();
+         ctx.font="bold 13px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+         ctx.strokeStyle="#152438";ctx.lineWidth=3;
+         const symbol={up:"↑",down:"↓",left:"←",right:"→"}[mode];
+         ctx.strokeText(symbol,cx,cy);ctx.fillStyle="#fff";ctx.fillText(symbol,cx,cy);
+         quadPreview.options.push({mode,polygon:poly,x:cx,y:cy});
        }
      }
    }
@@ -239,9 +242,9 @@ cv.addEventListener('pointerup',e=>{if(!drag)return;const moved=drag.moved,add=d
  const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*cv.width/r.width,y=(e.clientY-r.top)*cv.height/r.height;
  const plus=edgeButtons.find(b=>Math.hypot(b.x-x,b.y-y)<8);
  if(quadPreview&&editMode==="agregar"&&!add){
-   const chosen=quadPreview.options?.find(opt=>inside(opt.polygon,x,y));
+   const chosen=[...(quadPreview.options||[])].reverse().find(opt=>inside(opt.polygon,x,y)||Math.hypot(opt.x-x,opt.y-y)<13);
    if(chosen){const f=quadPreview.face,e=quadPreview.edge;quadPreview=null;
-     bridge.extendEdgeChoice(f,e,chosen.mode);draw();return;}
+     bridge.extendEdgeChoice(f,e,chosen.mode,Math.cos(yaw),Math.sin(yaw),Math.sin(yaw)*Math.sin(pitch),Math.cos(pitch),-Math.cos(yaw)*Math.sin(pitch));draw();return;}
    quadPreview=null;draw();
  }
  if(plus&&bridge&&!add&&editMode==="agregar"){
@@ -357,18 +360,10 @@ class Bridge(QObject):
     def selectFace(self, index):
         self.editor.select_face(index)
 
-    @Slot(int, int, str)
-    def extendEdgeChoice(self, face_index, edge_index, mode):
-        if mode not in ("down", "up", "auto"):
-            return
-        previous=self.editor.add_direction.currentIndex()
-        idx=self.editor.add_direction.findData(mode)
-        if idx<0:return
-        self.editor.add_direction.setCurrentIndex(idx)
-        try:
-            self.editor.extend_edge(face_index, edge_index)
-        finally:
-            self.editor.add_direction.setCurrentIndex(previous)
+    @Slot(int, int, str, float, float, float, float, float)
+    def extendEdgeChoice(self, face_index, edge_index, mode, rx, rz, ux, uy, uz):
+        self.editor.set_preview_axes(rx, rz, ux, uy, uz)
+        self.editor.extend_edge(face_index, edge_index, mode)
 
     @Slot(int, int)
     def extendEdge(self, face_index, edge_index):
@@ -425,6 +420,7 @@ class Editor(QMainWindow):
         self.selected_faces = []
         self.selecting = False
         self.edit_mode = "normal"
+        self.preview_axes = {}
         self.undo_stack = []
         self.redo_stack = []
         self.view = QWebEngineView()
@@ -532,12 +528,6 @@ class Editor(QMainWindow):
         tools_layout.addWidget(title)
         modes = ExpandableSection("Modos de edición", True)
         tools_layout.addWidget(modes)
-        tools_layout.addWidget(QLabel("Dirección del +"))
-        self.add_direction = QComboBox()
-        self.add_direction.addItem("Abajo (-Y)", "down")
-        self.add_direction.addItem("Exterior de la cara", "auto")
-        self.add_direction.addItem("Arriba (+Y)", "up")
-        tools_layout.addWidget(self.add_direction)
         self.mode_group = QButtonGroup(self)
         self.mode_group.setExclusive(True)
         for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar"), ("girar", "Girar")]:
@@ -692,13 +682,27 @@ class Editor(QMainWindow):
         self.restore_history(state)
         self.status.setText("Rehacer: cambio restaurado.")
 
-    def extend_edge(self, face_index, edge_index):
+    def preview_direction(self, mode):
+        if mode not in ("up", "down", "left", "right"):
+            return None
+        # Camera orientation is provided by the WebChannel before confirmation.
+        return self.preview_axes.get(mode)
+
+    def set_preview_axes(self, right_x, right_z, up_x, up_y, up_z):
+        self.preview_axes = {
+            "right": [right_x, 0.0, right_z],
+            "left": [-right_x, 0.0, -right_z],
+            "up": [up_x, up_y, up_z],
+            "down": [-up_x, -up_y, -up_z]
+        }
+
+    def extend_edge(self, face_index, edge_index, mode="down"):
         """Add a quad to an open mesh edge, extending outwards within its face plane."""
         if not self.mesh or not (0 <= face_index < len(self.mesh["faces"])):
             return
         face = self.mesh["faces"][face_index]
         if len(self.selected_faces) > 1 and face_index in self.selected_faces:
-            return self.extend_selected_edges(face_index, edge_index)
+            return self.extend_selected_edges(face_index, edge_index, mode)
         if not (0 <= edge_index < len(face)):
             return
         a, b = face[edge_index], face[(edge_index + 1) % len(face)]
@@ -724,10 +728,15 @@ class Editor(QMainWindow):
             QMessageBox.warning(self, "Crear quad", "No se pudo determinar la direccion exterior.")
             return
         distance = edge_len2**0.5
-        mode = self.add_direction.currentData()
-        shift = ([0.0, -distance, 0.0] if mode == "down" else
-                 [0.0, distance, 0.0] if mode == "up" else
-                 [x*distance/norm for x in outward])
+        unit = self.preview_direction(mode)
+        if unit is None:
+            return
+        proj = sum(unit[k]*edge[k] for k in range(3))/edge_len2
+        perp = [unit[k]-proj*edge[k] for k in range(3)]
+        size = math.sqrt(sum(q*q for q in perp))
+        if size < 0.08:
+            return
+        shift = [q*distance/size for q in perp]
         if abs(sum(shift[k]*edge[k] for k in range(3))) / (distance*distance) > 0.999:
             QMessageBox.warning(self, "Crear quad", "Este borde es paralelo a la direccion elegida. Seleccione otro borde.")
             return
@@ -760,7 +769,7 @@ class Editor(QMainWindow):
         self.select_face(new_index)
         self.status.setText("Quad nuevo en borde libre. Guarde para conservar el cambio.")
 
-    def extend_selected_edges(self, clicked_face, clicked_edge):
+    def extend_selected_edges(self, clicked_face, clicked_edge, mode="down"):
         """Extend selected faces together using the clicked border direction."""
         faces = self.mesh["faces"]
         vertices = self.mesh["vertices"]
@@ -794,7 +803,8 @@ class Editor(QMainWindow):
         if initial is None:
             return
         direction = initial[2]
-        mode = self.add_direction.currentData()
+        unit = self.preview_direction(mode)
+        if unit is None:return
         chosen = []
         for fi in dict.fromkeys(self.selected_faces):
             candidates = []
@@ -809,9 +819,13 @@ class Editor(QMainWindow):
                     "Una cara seleccionada no tiene borde libre en esa direccion.")
                 return
             chosen.append((fi, max(candidates, key=lambda v: v[0])[1]))
-        offset = ([0.0, -initial[3], 0.0] if mode == "down" else
-                  [0.0, initial[3], 0.0] if mode == "up" else
-                  [x*initial[3] for x in direction])
+        edgevec = [vertices[initial[1]][k]-vertices[initial[0]][k] for k in range(3)]
+        length2 = sum(v*v for v in edgevec)
+        scalar = sum(unit[k]*edgevec[k] for k in range(3))/length2
+        perpendicular = [unit[k]-scalar*edgevec[k] for k in range(3)]
+        magnitude = math.sqrt(sum(v*v for v in perpendicular))
+        if magnitude<0.08:return
+        offset = [v*initial[3]/magnitude for v in perpendicular]
         for _, item in chosen:
             pa, pb = vertices[item[0]], vertices[item[1]]
             edge_vec = [pb[k]-pa[k] for k in range(3)]
