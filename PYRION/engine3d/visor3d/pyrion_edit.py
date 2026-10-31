@@ -12,7 +12,7 @@ from copy import deepcopy
 import importlib.util
 import subprocess
 
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 
 def ensure_pyside6():
     required = ["PySide6.QtCore", "PySide6.QtWidgets", "PySide6.QtWebEngineWidgets", "PySide6.QtWebChannel"]
@@ -450,6 +450,29 @@ class Editor(QMainWindow):
         self.mode_group.setExclusive(True)
         for mode, label in [("normal", "Normal"), ("agregar", "Agregar"), ("estirar", "Estirar")]:
             button = QRadioButton(label)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(38)
+            button.setStyleSheet("""
+                QRadioButton {
+                    background: #19243b; border: 1px solid #405273;
+                    border-radius: 8px; padding: 8px 10px;
+                    color: #aebbd5; font-weight: 600;
+                }
+                QRadioButton:hover {background: #283d60; color: white;}
+                QRadioButton:checked {
+                    background: #176d87; border: 2px solid #56e0fa;
+                    color: #ffffff; font-weight: bold;
+                }
+                QRadioButton::indicator {width: 13px; height: 13px;}
+                QRadioButton::indicator:unchecked {
+                    border: 2px solid #8899b5; border-radius: 7px;
+                    background: #151c2d;
+                }
+                QRadioButton::indicator:checked {
+                    border: 3px solid #e8fdff; border-radius: 7px;
+                    background: #24c7f0;
+                }
+            """)
             button.setChecked(mode == "normal")
             button.toggled.connect(lambda checked, m=mode: self.set_edit_mode(m) if checked else None)
             self.mode_group.addButton(button)
