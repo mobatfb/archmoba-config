@@ -72,8 +72,26 @@ def _make_model_mesh(model, scale):
         return SphereMesh(rings=int(p["rings"]), segments=int(p["segments"]),
                           radius=radius, face_colors=model.get("face_colors"))
     if primitive == "triangle_mesh":
-        mesh = TriangleMesh(model["vertices"], model["faces"], scale=scale,
-                            face_colors=model.get("face_colors"))
+        # PYRION Origami: quads editables, triangulados solo para renderizar.
+        source_faces = model["faces"]
+        source_colors = model.get("face_colors")
+        render_faces, render_colors = [], [] if source_colors is not None else None
+        if source_colors is not None and len(source_colors) != len(source_faces):
+            raise ValueError("face_colors no coincide con faces")
+        for pos, face in enumerate(source_faces):
+            if len(face) == 3:
+                render_faces.append(face)
+                if render_colors is not None:
+                    render_colors.append(source_colors[pos])
+            elif len(face) == 4:
+                render_faces.extend(([face[0], face[1], face[2]],
+                                     [face[0], face[2], face[3]]))
+                if render_colors is not None:
+                    render_colors.extend((source_colors[pos], source_colors[pos]))
+            else:
+                raise ValueError("Origami admite caras de 3 o 4 vertices")
+        mesh = TriangleMesh(model["vertices"], render_faces, scale=scale,
+                            face_colors=render_colors)
         mesh.double_sided = bool(model.get("render", {}).get("double_sided", False))
         mesh.flat_shading = bool(model.get("render", {}).get("flat_shading", getattr(mesh, "flat_shading", False)))
         return mesh
