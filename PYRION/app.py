@@ -900,13 +900,15 @@ def _make_model_mesh(model, scale):
                 render_faces.append(face)
                 if render_colors is not None:
                     render_colors.append(source_colors[pos])
-            elif len(face) == 4:
-                render_faces.extend(([face[0], face[1], face[2]],
-                                     [face[0], face[2], face[3]]))
+            elif 4 <= len(face) <= 128:
+                # Triangulacion en abanico de superficies planas convexas.
+                triangles = [[face[0], face[j], face[j + 1]]
+                             for j in range(1, len(face) - 1)]
+                render_faces.extend(triangles)
                 if render_colors is not None:
-                    render_colors.extend((source_colors[pos], source_colors[pos]))
+                    render_colors.extend([source_colors[pos]] * len(triangles))
             else:
-                raise ValueError("Origami admite caras de 3 o 4 vertices")
+                raise ValueError("Origami admite caras de 3 a 128 vertices")
         mesh = TriangleMesh(model["vertices"], render_faces, scale=scale,
                             face_colors=render_colors)
         mesh.double_sided = bool(model.get("render", {}).get("double_sided", False))
